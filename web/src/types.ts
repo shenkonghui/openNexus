@@ -272,9 +272,9 @@ export interface TaskSettings {
 }
 
 // 全局权限规则配置（白名单 / 询问名单 / 黑名单，对所有会话生效）。
-// YOLO 改为按任务开关，mode 仅兼容旧配置读写（设置页不再暴露）。
+// mode=yolo 为全局 YOLO（侧栏左下角开关）；会话级 yolo 仍可单独开启。
 // 规则按 agent 上报的工具调用标题匹配，支持 `*` 通配符（如 "Bash(git status *)"）。
-// 优先级：deny > allow > ask > (会话 yolo→allow | 询问)。
+// 优先级：deny > allow > ask > (全局/会话 yolo→allow | 询问)。
 export interface PermissionSettings {
   mode: 'normal' | 'yolo';
   allow: string[];

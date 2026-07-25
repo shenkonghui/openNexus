@@ -44,7 +44,7 @@ type SessionStore interface {
 	// FindMessageByID 按消息主键查询单条消息（用于撤销等按消息定位的场景）。
 	FindMessageByID(messageID uint) (*models.Message, error)
 	// DeleteMessagesFromSequence 删除指定会话中 sequence 大于等于 fromSeq 的消息（会话回滚，含目标）。
-	DeleteMessagesFromSequence(dbSessionID uint, fromSeq int) (int64, error)
+	DeleteMessagesFromSequence(sessionID string, fromSeq int) (int64, error)
 	ListCommands(sessionID string) ([]acp.AvailableCommand, error)
 	ListConfiguredCommandsForSession(sessionID string) ([]acplocal.SlashCommand, error)
 	ListConfigOptions(sessionID string) ([]acp.SessionConfigOption, error)

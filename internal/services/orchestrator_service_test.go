@@ -103,3 +103,66 @@ func TestExecuteTaskCarriesParentSession(t *testing.T) {
 		t.Fatalf("Source = %q, want orchestration", mock.lastCfg.Source)
 	}
 }
+
+func TestRecoverAll_MarksRunningAsInterrupt(t *testing.T) {
+	cwd := t.TempDir()
+	svc := NewOrchestratorService(&mockOrchExecutor{})
+	def := &models.OrchestrationDef{
+		MaxParallel: 1,
+		Tasks: []models.OrchestrationTask{
+			{ID: "a", Title: "A", Detail: "d", Status: models.OrchTaskStatusRunning},
+			{ID: "b", Title: "B", Detail: "d", Status: models.OrchTaskStatusQueued},
+			{ID: "c", Title: "C", Detail: "d", Status: models.OrchTaskStatusDone},
+		},
+	}
+	if err := svc.Save(cwd, def); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	svc.RecoverAll([]string{cwd})
+	got, err := svc.Load(cwd)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got.Tasks[0].Status != models.OrchTaskStatusInterrupt {
+		t.Errorf("running → interrupt, got %q", got.Tasks[0].Status)
+	}
+	if got.Tasks[1].Status != models.OrchTaskStatusInterrupt {
+		t.Errorf("queued → interrupt, got %q", got.Tasks[1].Status)
+	}
+	if got.Tasks[2].Status != models.OrchTaskStatusDone {
+		t.Errorf("done 应保持, got %q", got.Tasks[2].Status)
+	}
+}
+
+func TestStart_RestartsStaleRunningAfterRestart(t *testing.T) {
+	// 模拟服务重启：tasks.json 仍为 running，但内存无 taskCtx；全部启动应重新排队。
+	cwd := t.TempDir()
+	mock := &mockOrchExecutor{result: acp.SessionTaskResult{Success: true, SessionID: "s1", DBSessionID: 1}}
+	svc := NewOrchestratorService(mock)
+	if err := svc.InitGitRepo(cwd); err != nil {
+		t.Fatalf("InitGitRepo: %v", err)
+	}
+	def := &models.OrchestrationDef{
+		MaxParallel: 1,
+		Tasks: []models.OrchestrationTask{
+			{ID: "stale", Title: "S", Detail: "prompt", AgentType: "demo", Status: models.OrchTaskStatusRunning},
+		},
+	}
+	if err := svc.Save(cwd, def); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	if err := svc.Start(context.Background(), cwd, 1, 1, ""); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	// 等 runTask 结束
+	svc.mu.Lock()
+	run := svc.runs[cwd]
+	svc.mu.Unlock()
+	if run != nil {
+		run.wg.Wait()
+	}
+	got, _ := svc.Load(cwd)
+	if got.Tasks[0].Status != models.OrchTaskStatusDone {
+		t.Fatalf("残留 running 应被重新执行至 done，实际 %q err=%q", got.Tasks[0].Status, got.Tasks[0].Error)
+	}
+}

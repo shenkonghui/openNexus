@@ -213,6 +213,32 @@
   text-decoration: underline;
 }
 
+.taskPriority {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-weight: 600;
+  background: var(--bg-hover);
+  color: var(--text-muted);
+  flex-shrink: 0;
+  text-transform: uppercase;
+}
+
+.priority_p0 {
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+
+.priority_p1 {
+  background: var(--warning-bg);
+  color: var(--warning);
+}
+
+.priority_p2 {
+  background: var(--bg-hover);
+  color: var(--text-muted);
+}
+
 .taskStatus {
   font-size: 11px;
   padding: 2px 10px;

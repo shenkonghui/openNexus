@@ -167,8 +167,8 @@
     "timeoutReconnected": "响应超时，已自动重连",
     "interruptedPrompt": "上次任务因服务重启中断（共 {{count}} 个），点击重发",
     "resume": "重发",
-    "yoloOn": "YOLO 已开启",
-    "yoloOff": "开启 YOLO",
+    "yoloOn": "YOLO",
+    "yoloOff": "YOLO",
     "yoloHint": "本任务自动放行工具调用（全局黑名单仍生效）",
     "permission": {
       "title": "需要你的确认",
@@ -443,6 +443,10 @@
     "viewList": "列表",
     "titlePlaceholder": "任务标题（可选，缺省取 prompt 首行）",
     "promptPlaceholder": "输入 prompt：描述任务需求（作为发送给 agent 的指令）",
+    "priority": "优先级",
+    "priority_p0": "P0",
+    "priority_p1": "P1",
+    "priority_p2": "P2",
     "create": "创建",
     "cancel": "取消",
     "save": "保存",
@@ -697,7 +701,8 @@
   "sidebar": {
     "menuTab": "菜单",
     "filesTab": "文件",
-    "noWorkspace": "请先选择工作区"
+    "noWorkspace": "请先选择工作区",
+    "yoloHint": "全局 YOLO：未命中名单的工具调用自动放行（黑名单/询问名单仍生效）"
   },
   "fileBrowser": {
     "readFailed": "读取文件失败",

@@ -1,11 +1,15 @@
 import { apiFetch } from './client'
 
+export type OrchTaskPriority = 'p0' | 'p1' | 'p2'
+
 export interface OrchestrationTask {
   id: string
   title: string
   detail: string
   agent_type: string
   model_value?: string
+  /** 优先级：p0 / p1 / p2，缺省 p1 */
+  priority?: OrchTaskPriority | string
   session_id?: string
   db_session_id?: number
   status: string // pending|queued|running|done|failed|canceled|interrupt
@@ -43,7 +47,7 @@ export function saveOrchestration(workspaceId: number, def: OrchestrationDef): P
 // 新增/更新单个任务
 export function upsertOrchTask(
   workspaceId: number,
-  task: { id: string; title: string; detail: string; agent_type: string; model_value?: string; depends_on?: string[] },
+  task: { id: string; title: string; detail: string; agent_type: string; model_value?: string; priority?: string; depends_on?: string[] },
 ): Promise<{ data: OrchestrationTask }> {
   return apiFetch(`/orchestration/tasks${qs(workspaceId)}`, {
     method: 'POST',

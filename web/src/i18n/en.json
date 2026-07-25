@@ -167,8 +167,8 @@
     "timeoutReconnected": "Timed out — reconnected automatically",
     "interruptedPrompt": "{{count}} task(s) interrupted by server restart — click to resend",
     "resume": "Resend",
-    "yoloOn": "YOLO on",
-    "yoloOff": "Enable YOLO",
+    "yoloOn": "YOLO",
+    "yoloOff": "YOLO",
     "yoloHint": "Auto-approve tool calls for this task (global deny list still applies)",
     "permission": {
       "title": "Permission required",
@@ -443,6 +443,10 @@
     "viewList": "List",
     "titlePlaceholder": "Task title (optional, defaults to prompt first line)",
     "promptPlaceholder": "Enter prompt: describe the task (sent to the agent as instructions)",
+    "priority": "Priority",
+    "priority_p0": "P0",
+    "priority_p1": "P1",
+    "priority_p2": "P2",
     "create": "Create",
     "cancel": "Cancel",
     "save": "Save",
@@ -697,7 +701,8 @@
   "sidebar": {
     "menuTab": "Menu",
     "filesTab": "Files",
-    "noWorkspace": "Select a workspace first"
+    "noWorkspace": "Select a workspace first",
+    "yoloHint": "Global YOLO: auto-approve unmatched tool calls (deny/ask lists still apply)"
   },
   "fileBrowser": {
     "readFailed": "Failed to read file",

@@ -130,12 +130,13 @@ func (h *OrchestrationHandler) SetParentSession(c *gin.Context) {
 }
 
 type upsertTaskRequest struct {
-	ID        string   `json:"id" binding:"required"`
-	Title     string   `json:"title" binding:"required"`
-	Detail    string   `json:"detail" binding:"required"`
-	AgentType string   `json:"agent_type" binding:"required"`
-	ModelValue string  `json:"model_value"`
-	DependsOn []string `json:"depends_on"`
+	ID         string   `json:"id" binding:"required"`
+	Title      string   `json:"title" binding:"required"`
+	Detail     string   `json:"detail" binding:"required"`
+	AgentType  string   `json:"agent_type" binding:"required"`
+	ModelValue string   `json:"model_value"`
+	Priority   string   `json:"priority"`
+	DependsOn  []string `json:"depends_on"`
 }
 
 // UpsertTask POST /api/v1/orchestration/tasks?workspace_id=123 — 新增/更新单个任务。
@@ -155,6 +156,7 @@ func (h *OrchestrationHandler) UpsertTask(c *gin.Context) {
 		Detail:     req.Detail,
 		AgentType:  req.AgentType,
 		ModelValue: strings.TrimSpace(req.ModelValue),
+		Priority:   models.NormalizeOrchTaskPriority(req.Priority),
 		DependsOn:  req.DependsOn,
 	}
 	if task.ID == "" {

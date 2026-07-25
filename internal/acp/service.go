@@ -126,6 +126,10 @@ type Service struct {
 	// 同时兜底防 agent 卡死导致 goroutine 永久泄漏。SetPromptMaxDuration 注入；0=默认 30min。
 	promptMaxDuration time.Duration
 
+	// failedTaskAutoRetryOnce 运行中 agent 崩溃时是否自动重连并重发同一 prompt（仅一次）。
+	// 默认 true；由 SetFailedTaskAutoRetryOnce 注入。
+	failedTaskAutoRetryOnce bool
+
 	// activePermRules 当前生效的全局权限规则（白/询问/黑名单，全局下发到所有连接的 broker）。
 	// 规则来自 config.yaml 的 permissions 段：启动时由 ApplyPermissions 下发，
 	// 设置页保存后热更新。nil=无规则（未开会话 yolo 时全部询问）。
@@ -145,10 +149,11 @@ func (s *Service) SetTaskMetaTrigger(t TaskMetaTrigger) {
 }
 
 // NewService 创建新的 Service。
-func NewService(db *gorm.DB, wsConfig config.WorkspaceConfig, skillsConfig config.SkillsConfig, commandsConfig config.CommandsConfig, rulesConfig config.RulesConfig, subAgentsConfig config.SubAgentsConfig) *Service {
+// messagesDir 为会话消息 JSONL 目录（通常为 {data-dir}/messages）。
+func NewService(db *gorm.DB, messagesDir string, wsConfig config.WorkspaceConfig, skillsConfig config.SkillsConfig, commandsConfig config.CommandsConfig, rulesConfig config.RulesConfig, subAgentsConfig config.SubAgentsConfig) *Service {
 	return &Service{
 		sessions:            repository.NewSessionRepository(db),
-		messages:            repository.NewMessageRepository(db),
+		messages:            repository.NewMessageRepository(messagesDir),
 		workspaces:          repository.NewWorkspaceRepository(db),
 		backends:            make(map[string]Backend),
 		pool:                make(map[string]*Connection),
@@ -170,8 +175,9 @@ func NewService(db *gorm.DB, wsConfig config.WorkspaceConfig, skillsConfig confi
 		commandProjectDirs:  append([]string(nil), commandsConfig.ProjectDirs...),
 		ruleUserDirs:        append([]string(nil), rulesConfig.UserDirs...),
 		ruleProjectDirs:     append([]string(nil), rulesConfig.ProjectDirs...),
-		subAgentUserDirs:    append([]string(nil), subAgentsConfig.UserDirs...),
-		subAgentProjectDirs: append([]string(nil), subAgentsConfig.ProjectDirs...),
+		subAgentUserDirs:          append([]string(nil), subAgentsConfig.UserDirs...),
+		subAgentProjectDirs:       append([]string(nil), subAgentsConfig.ProjectDirs...),
+		failedTaskAutoRetryOnce:   true, // 默认开启；可由 SetFailedTaskAutoRetryOnce 覆盖
 	}
 }
 
@@ -284,6 +290,11 @@ func (s *Service) SetPromptMaxDuration(d time.Duration) {
 		// 0/负值=恢复默认（让 effectivePromptMaxDuration 返回 defaultPromptMaxDuration）
 		s.promptMaxDuration = 0
 	}
+}
+
+// SetFailedTaskAutoRetryOnce 注入失败任务自动重试开关（崩溃/断连时 ResumeSession 并重发，仅一次）。
+func (s *Service) SetFailedTaskAutoRetryOnce(enabled bool) {
+	s.failedTaskAutoRetryOnce = enabled
 }
 
 // effectivePromptMaxDuration 返回生效的 prompt 最大存活时间（未设置时取默认）。
@@ -1361,7 +1372,7 @@ func (s *Service) PromptWithExecution(ctx context.Context, sessionID, prompt str
 	}
 
 	// 创建广播器：当前 prompt 的所有消息经广播器分发，支持多客户端订阅（断点续传重连）。
-	startSeq := s.getNextSequence(session.ID)
+	startSeq := s.getNextSequence(session.SessionID)
 	bc := newMsgBroadcaster(startSeq)
 	s.registerBroadcaster(sessionID, bc)
 
@@ -1518,12 +1529,38 @@ func (s *Service) PromptWithExecution(ctx context.Context, sessionID, prompt str
 				thoughtBatch = nil
 			}
 
+			// tool_call_update 同样高频（shell/read 输出流式），逐条 Create 会拖死
+			// ACP 订阅 buffer。实时推前端；按 toolCallId 只保留最新一条延迟落库
+			//（前端 parseToolCalls 本就按 id 合并，历史只需终态）。
+			pendingToolUpdates := map[string]models.Message{}
+			var toolUpdateOrder []string
+			flushToolUpdates := func() {
+				if len(toolUpdateOrder) == 0 {
+					return
+				}
+				for _, id := range toolUpdateOrder {
+					m := pendingToolUpdates[id]
+					if err := s.messages.Create(&m); err != nil {
+						slog.Error("持久化 tool_call_update 失败", "session", sessionID, "sequence", m.Sequence, "err", err)
+					}
+					if task.ID != 0 {
+						_ = s.runningTasks.UpdateLastSeq(task.ID, m.Sequence)
+					}
+				}
+				pendingToolUpdates = map[string]models.Message{}
+				toolUpdateOrder = nil
+			}
+			flushPending := func() {
+				flushThoughts()
+				flushToolUpdates()
+			}
+
 			for {
 				select {
 				case u, ok := <-updates:
 					if !ok {
-						// 流关闭：先 flush 攒批的 thought，再判断是正常结束还是进程崩溃
-						flushThoughts()
+						// 流关闭：先 flush 攒批，再判断是正常结束还是进程崩溃
+						flushPending()
 						select {
 						case <-conn.Done():
 							return true // 进程崩溃
@@ -1537,9 +1574,28 @@ func (s *Service) PromptWithExecution(ctx context.Context, sessionID, prompt str
 					msg.ExecutionID = executionID
 					if msg.Kind == models.MessageKindAgentThoughtChunk {
 						// 实时流式（内存，快），攒批延迟落库（降频）
+						flushToolUpdates()
 						bc.broadcast(msg)
 						out <- msg
 						thoughtBatch = append(thoughtBatch, msg)
+					} else if msg.Kind == models.MessageKindToolCallUpdate {
+						flushThoughts()
+						bc.broadcast(msg)
+						select {
+						case out <- msg:
+						default:
+						}
+						id := ""
+						if u.ToolCallUpdate != nil {
+							id = string(u.ToolCallUpdate.ToolCallId)
+						}
+						if id == "" {
+							id = fmt.Sprintf("seq-%d", msg.Sequence)
+						}
+						if _, exists := pendingToolUpdates[id]; !exists {
+							toolUpdateOrder = append(toolUpdateOrder, id)
+						}
+						pendingToolUpdates[id] = msg
 					} else if msg.Kind == models.MessageKindUsageUpdate || msg.Kind == models.MessageKindSessionInfoUpdate {
 						// 用量/会话信息是高频心跳：只推前端，不落库、不阻塞 out。
 						// 逐条 Create + 阻塞 out 会拖慢本循环，导致 ACP 订阅 buffer 满并丢弃
@@ -1550,8 +1606,8 @@ func (s *Service) PromptWithExecution(ctx context.Context, sessionID, prompt str
 						default:
 						}
 					} else {
-						// 非 thought：先 flush 攒批的 thought，再同步落库本条
-						flushThoughts()
+						// 非高频类型：先 flush 攒批，再同步落库本条
+						flushPending()
 						persistMsg(msg)
 					}
 				case pn, ok := <-permCh:
@@ -1559,7 +1615,7 @@ func (s *Service) PromptWithExecution(ctx context.Context, sessionID, prompt str
 						continue
 					}
 					slog.Debug("agent 权限请求", "session", sessionID, "request_id", pn.RequestID)
-					flushThoughts()
+					flushPending()
 					seq++
 					msg := MapPermissionRequest(sessionID, session.ID, seq, pn)
 					msg.ExecutionID = executionID
@@ -1568,7 +1624,7 @@ func (s *Service) PromptWithExecution(ctx context.Context, sessionID, prompt str
 					if !ok {
 						continue
 					}
-					flushThoughts()
+					flushPending()
 					seq++
 					fileMsg := MapFileWrite(sessionID, session.ID, seq, fw)
 					fileMsg.ExecutionID = executionID
@@ -1582,8 +1638,13 @@ func (s *Service) PromptWithExecution(ctx context.Context, sessionID, prompt str
 			return // 正常结束
 		}
 
-		// 运行中崩溃：单次自动重连（重建 ACP 会话 + 注入历史），再重发同一 prompt。
-		// 单次重连，避免崩溃 prompt 无限循环烧 token。用 promptCtx（独立于 HTTP 请求）。
+		// 运行中崩溃：按配置决定是否单次自动重连重发（避免无限循环烧 token）。
+		if !s.failedTaskAutoRetryOnce {
+			slog.Warn("agent 进程运行中崩溃，未开启自动重试，标记为 interrupted",
+				"session", sessionID, "agent", session.AgentType)
+			finalStatus = models.RunningTaskStatusInterrupted
+			return
+		}
 		slog.Warn("agent 进程运行中崩溃，自动重连重发", "session", sessionID, "agent", session.AgentType)
 		if _, err := s.ResumeSession(promptCtx, sessionID); err != nil {
 			slog.Error("自动重连-恢复会话失败，标记为 interrupted", "session", sessionID, "err", err)
@@ -1661,8 +1722,8 @@ func (s *Service) SubscribeSession(sessionID string, lastSeq int) (missed []mode
 		return nil, nil, err
 	}
 
-	// 先从 DB 补齐 lastSeq 之后的遗漏消息
-	missed, dbErr := s.messages.FindByDBSessionIDAfter(session.ID, lastSeq)
+	// 先从文件补齐 lastSeq 之后的遗漏消息
+	missed, dbErr := s.messages.FindBySessionIDAfter(session.SessionID, lastSeq)
 	if dbErr != nil {
 		return nil, nil, dbErr
 	}
@@ -1741,7 +1802,7 @@ func (s *Service) DeleteSession(ctx context.Context, sessionID string) error {
 	s.detachAndReleaseConn(ctx, session)
 
 	// 先删消息再删会话，避免孤儿消息
-	if err := s.messages.DeleteByDBSessionID(session.ID); err != nil {
+	if err := s.messages.DeleteBySessionID(session.SessionID); err != nil {
 		return fmt.Errorf("删除会话消息: %w", err)
 	}
 	if err := s.sessions.Delete(session.ID); err != nil {
@@ -1825,7 +1886,7 @@ func (s *Service) ListExecutions(sessionID string) ([]repository.ExecutionAggreg
 	if err != nil {
 		return nil, err
 	}
-	return s.messages.AggregateExecutions(session.ID)
+	return s.messages.AggregateExecutions(session.SessionID)
 }
 
 // NextExecutionID 返回指定会话下一个可用的 execution_id（当前最大值 + 1）。
@@ -1834,7 +1895,7 @@ func (s *Service) NextExecutionID(sessionID string) (uint, error) {
 	if err != nil {
 		return 0, err
 	}
-	max, err := s.messages.MaxExecutionID(session.ID)
+	max, err := s.messages.MaxExecutionID(session.SessionID)
 	if err != nil {
 		return 0, err
 	}
@@ -1938,8 +1999,8 @@ func (s *Service) ResumeInterruptedTask(ctx context.Context, taskID uint) (<-cha
 }
 
 // getNextSequence 获取指定会话当前最大 sequence 值（无消息时返回 0）。
-func (s *Service) getNextSequence(dbSessionID uint) int {
-	max, err := s.messages.MaxSequence(dbSessionID)
+func (s *Service) getNextSequence(sessionID string) int {
+	max, err := s.messages.MaxSequence(sessionID)
 	if err != nil {
 		return 0
 	}
@@ -1956,7 +2017,7 @@ func (s *Service) ListMessages(sessionID string) ([]models.Message, error) {
 	if err != nil {
 		return nil, err
 	}
-	return s.messages.FindByDBSessionIDLastN(session.ID, defaultMessagePageSize)
+	return s.messages.FindBySessionIDLastN(session.SessionID, defaultMessagePageSize)
 }
 
 // defaultMessagePageSize 是 ListMessages 默认返回的消息上限。
@@ -1980,7 +2041,7 @@ func (s *Service) ListMessagesPaged(sessionID string, limit, offset int) ([]mode
 	if limit > maxMessagePageSize {
 		limit = maxMessagePageSize
 	}
-	return s.messages.FindByDBSessionIDPaged(session.ID, limit, offset)
+	return s.messages.FindBySessionIDPaged(session.SessionID, limit, offset)
 }
 
 // ListMessagesByKind 仅查询指定 kind 的消息，按 sequence 升序返回。
@@ -1990,7 +2051,7 @@ func (s *Service) ListMessagesByKind(sessionID string, kind string) ([]models.Me
 	if err != nil {
 		return nil, err
 	}
-	return s.messages.FindByKind(session.ID, kind)
+	return s.messages.FindByKind(session.SessionID, kind)
 }
 
 // FindMessageByID 按消息主键查询单条消息（用于撤销等按消息定位的场景）。
@@ -1999,8 +2060,8 @@ func (s *Service) FindMessageByID(messageID uint) (*models.Message, error) {
 }
 
 // DeleteMessagesFromSequence 删除指定会话中 sequence 大于等于 fromSeq 的消息（会话回滚，含目标）。
-func (s *Service) DeleteMessagesFromSequence(dbSessionID uint, fromSeq int) (int64, error) {
-	return s.messages.DeleteFromSequence(dbSessionID, fromSeq)
+func (s *Service) DeleteMessagesFromSequence(sessionID string, fromSeq int) (int64, error) {
+	return s.messages.DeleteFromSequence(sessionID, fromSeq)
 }
 
 // captureCommands 从 SessionUpdate 中提取 AvailableCommandsUpdate、ConfigOptionUpdate 和 CurrentModeUpdate 并缓存到会话。
@@ -2528,7 +2589,7 @@ func (s *Service) ResumeSession(ctx context.Context, sessionID string) (*models.
 	}
 
 	// 查询历史消息并注入上下文（只取最近 100 条，避免长会话全量加载 raw_json 撑爆内存）
-	history, _ := s.messages.FindByDBSessionIDLastN(session.ID, 100)
+	history, _ := s.messages.FindBySessionIDLastN(session.SessionID, 100)
 	contextText := formatHistory(history)
 	if contextText != "" {
 		// 异步注入历史上下文，不等结果
@@ -2652,8 +2713,8 @@ func (s *Service) ClearContext(ctx context.Context, sessionID string) (*models.S
 
 	// 追加一条 used=0 的 usage_update，使前端上下文占用立即归零（保留原窗口大小以维持展示）。
 	// 仅需最近一次 usage_update 的 size，无需全量加载历史。
-	lastUsage, _ := s.messages.FindLastByKind(session.ID, models.MessageKindUsageUpdate)
-	seq := s.getNextSequence(session.ID) + 1
+	lastUsage, _ := s.messages.FindLastByKind(session.SessionID, models.MessageKindUsageUpdate)
+	seq := s.getNextSequence(session.SessionID) + 1
 	resetUpdate := acp.SessionUpdate{
 		UsageUpdate: &acp.SessionUsageUpdate{
 			SessionUpdate: "usage_update",
@@ -2931,7 +2992,7 @@ func (s *Service) DeleteSessionWithMessages(session *models.Session) error {
 	s.debugUnregister(agentSessionID(session))
 	s.bindACPSessionYolo(agentSessionID(session), false)
 	s.detachAndReleaseConn(context.Background(), session)
-	if err := s.messages.DeleteByDBSessionID(session.ID); err != nil {
+	if err := s.messages.DeleteBySessionID(session.SessionID); err != nil {
 		return err
 	}
 	if err := s.sessions.Delete(session.ID); err != nil {

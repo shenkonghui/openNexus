@@ -102,6 +102,17 @@ type AgentsConfig struct {
 	// PromptMaxDuration 单轮 prompt 的最大存活时间，超时强制结束并标记 interrupted，
 	// 防 agent 卡死导致 goroutine 永久泄漏。0 或负值=默认 30min。
 	PromptMaxDuration time.Duration `yaml:"prompt_max_duration"`
+	// FailedTaskAutoRetryOnce 运行中 agent 崩溃/断连时，是否自动 ResumeSession（重建连接）
+	// 并重发同一 prompt，仅一次。nil=默认 true（与历史硬编码行为一致）；显式 false 可关闭。
+	FailedTaskAutoRetryOnce *bool `yaml:"failed_task_auto_retry_once"`
+}
+
+// FailedTaskAutoRetryOnceEnabled 返回失败任务是否自动重试一次；未配置时默认 true。
+func (a AgentsConfig) FailedTaskAutoRetryOnceEnabled() bool {
+	if a.FailedTaskAutoRetryOnce == nil {
+		return true
+	}
+	return *a.FailedTaskAutoRetryOnce
 }
 
 // SubAgentsConfig 配置 subagent 扫描目录（markdown 文件：frontmatter 含 name/description/model/tools，正文当 system_prompt）。

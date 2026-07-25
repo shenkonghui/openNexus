@@ -177,6 +177,21 @@ func TestValidate_DatabasePath_Default(t *testing.T) {
 	}
 }
 
+func TestAgentsConfig_FailedTaskAutoRetryOnceEnabled(t *testing.T) {
+	var unset AgentsConfig
+	if !unset.FailedTaskAutoRetryOnceEnabled() {
+		t.Error("未配置时期望默认 true")
+	}
+	off := false
+	if (AgentsConfig{FailedTaskAutoRetryOnce: &off}).FailedTaskAutoRetryOnceEnabled() {
+		t.Error("显式 false 时期望 false")
+	}
+	on := true
+	if !(AgentsConfig{FailedTaskAutoRetryOnce: &on}).FailedTaskAutoRetryOnceEnabled() {
+		t.Error("显式 true 时期望 true")
+	}
+}
+
 func TestResolveConfigPath_Env(t *testing.T) {
 	t.Setenv("CONFIG_PATH", "/tmp/custom-opennexus-config.yaml")
 	if got := ResolveConfigPath(); got != "/tmp/custom-opennexus-config.yaml" {

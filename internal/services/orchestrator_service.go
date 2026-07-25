@@ -8,6 +8,8 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -114,10 +116,12 @@ func (s *OrchestratorService) Load(cwd string) (*models.OrchestrationDef, error)
 	if def.Tasks == nil {
 		def.Tasks = []models.OrchestrationTask{}
 	}
-	// 兜底：任务缺省状态置为 pending；归一化常见别名（如 AI 手写 tasks.json 可能用 completed）
+	// 兜底：任务缺省状态置为 pending；归一化常见别名（如 AI 手写 tasks.json 可能用 completed）；
+	// 优先级缺省 p1。
 	for i := range def.Tasks {
 		t := &def.Tasks[i]
 		t.Status = models.NormalizeOrchTaskStatus(t.Status)
+		t.Priority = models.NormalizeOrchTaskPriority(t.Priority)
 	}
 	return &def, nil
 }
@@ -135,6 +139,9 @@ func (s *OrchestratorService) Save(cwd string, def *models.OrchestrationDef) err
 	}
 	if def.Tasks == nil {
 		def.Tasks = []models.OrchestrationTask{}
+	}
+	for i := range def.Tasks {
+		def.Tasks[i].Priority = models.NormalizeOrchTaskPriority(def.Tasks[i].Priority)
 	}
 	data, err := json.MarshalIndent(def, "", "  ")
 	if err != nil {
@@ -158,6 +165,7 @@ func (s *OrchestratorService) UpsertTask(cwd string, task models.OrchestrationTa
 	if task.Status == "" {
 		task.Status = models.OrchTaskStatusPending
 	}
+	incomingPri := strings.TrimSpace(task.Priority)
 	found := false
 	for i := range def.Tasks {
 		if def.Tasks[i].ID == task.ID {
@@ -173,12 +181,19 @@ func (s *OrchestratorService) UpsertTask(cwd string, task models.OrchestrationTa
 			if task.Branch == "" {
 				task.Branch = cur.Branch
 			}
+			// 未传 priority 时保留原值，避免更新其它字段时被重置为 p1
+			if incomingPri == "" {
+				task.Priority = cur.Priority
+			} else {
+				task.Priority = models.NormalizeOrchTaskPriority(incomingPri)
+			}
 			def.Tasks[i] = task
 			found = true
 			break
 		}
 	}
 	if !found {
+		task.Priority = models.NormalizeOrchTaskPriority(incomingPri)
 		def.Tasks = append(def.Tasks, task)
 	}
 	return s.Save(cwd, def)
@@ -295,10 +310,18 @@ func (s *OrchestratorService) Start(ctx context.Context, cwd string, workspaceID
 			continue
 		}
 		if models.IsOrchTaskRunning(t.Status) {
-			continue // 已在运行
+			// 仅跳过内存中确实在跑的任务；服务重启后 tasks.json 残留的
+			// running/queued 无 taskCtx，必须允许重新排队，否则「全部启动」会空转。
+			taskKey := cwd + ":" + t.ID
+			s.mu.Lock()
+			_, live := s.taskCtx[taskKey]
+			s.mu.Unlock()
+			if live {
+				continue
+			}
 		}
-		if t.Status == models.OrchTaskStatusDone {
-			continue // 已完成，不自动重启（除非显式单任务启动）
+		if t.Status == models.OrchTaskStatusDone && taskID == "" {
+			continue // 全部启动时跳过已完成；显式单任务启动可重跑
 		}
 		// 重置为 queued
 		t.Status = models.OrchTaskStatusQueued
@@ -308,6 +331,10 @@ func (s *OrchestratorService) Start(ctx context.Context, cwd string, workspaceID
 	if len(targets) == 0 {
 		return nil
 	}
+	// 高优先级先抢并发槽位（p0 > p1 > p2）
+	sort.SliceStable(targets, func(i, j int) bool {
+		return models.OrchTaskPriorityRank(targets[i].Priority) < models.OrchTaskPriorityRank(targets[j].Priority)
+	})
 	// 持久化 queued 状态
 	if err := s.Save(cwd, def); err != nil {
 		return fmt.Errorf("写入排队状态: %w", err)

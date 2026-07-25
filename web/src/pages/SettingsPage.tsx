@@ -106,7 +106,8 @@ export default function SettingsPage() {
   const [taskTitlePrompt, setTaskTitlePrompt] = useState('')
   const [taskSettingsSaving, setTaskSettingsSaving] = useState(false)
   const [taskSettingsSaved, setTaskSettingsSaved] = useState(false)
-  // 权限规则设置（白名单 / 黑名单 / 询问名单，全局；YOLO 按任务）
+  // 权限规则设置（白名单 / 黑名单 / 询问名单；mode 由侧栏全局 YOLO 开关控制，保存时保留）
+  const [permMode, setPermMode] = useState<'normal' | 'yolo'>('normal')
   const [permAllow, setPermAllow] = useState('')
   const [permAsk, setPermAsk] = useState('')
   const [permDeny, setPermDeny] = useState('')
@@ -228,8 +229,9 @@ export default function SettingsPage() {
       setTaskTags(ts.tags || [])
       setTaskTagPrompt(ts.tag_prompt || '')
       setTaskTitlePrompt(ts.title_prompt || '')
-      // 权限规则设置（YOLO 已改为按任务开关，此处只加载名单）
+      // 权限规则设置（保留全局 YOLO mode，避免保存名单时误关）
       const ps = permResp.data
+      setPermMode(ps.mode === 'yolo' ? 'yolo' : 'normal')
       setPermAllow((ps.allow || []).join('\n'))
       setPermAsk((ps.ask || []).join('\n'))
       setPermDeny((ps.deny || []).join('\n'))
@@ -406,12 +408,13 @@ export default function SettingsPage() {
     setPermSaving(true); setError(''); setPermSaved(false)
     try {
       const payload: PermissionSettings = {
-        mode: 'normal',
+        mode: permMode,
         allow: linesToList(permAllow),
         ask: linesToList(permAsk),
         deny: linesToList(permDeny),
       }
       const resp = await updatePermissionSettings(payload)
+      setPermMode(resp.data.mode === 'yolo' ? 'yolo' : 'normal')
       setPermAllow((resp.data.allow || []).join('\n'))
       setPermAsk((resp.data.ask || []).join('\n'))
       setPermDeny((resp.data.deny || []).join('\n'))

@@ -27,4 +27,27 @@ func TestOrchestrationDef_NumericTaskID(t *testing.T) {
 	if len(def.Tasks[0].DependsOn) != 2 || def.Tasks[0].DependsOn[0] != "3" || def.Tasks[0].DependsOn[1] != "t4" {
 		t.Errorf("task0 depends_on = %v, want [3 t4]", def.Tasks[0].DependsOn)
 	}
+	if got := def.Tasks[0].Priority; got != OrchTaskPriorityP2 {
+		t.Errorf("task0 priority = %q, want %q", got, OrchTaskPriorityP2)
+	}
+}
+
+func TestNormalizeOrchTaskPriority(t *testing.T) {
+	cases := []struct {
+		in, want string
+	}{
+		{"", OrchTaskPriorityP1},
+		{"p0", OrchTaskPriorityP0},
+		{"P0", OrchTaskPriorityP0},
+		{"0", OrchTaskPriorityP0},
+		{"p1", OrchTaskPriorityP1},
+		{"2", OrchTaskPriorityP2},
+		{"p2", OrchTaskPriorityP2},
+		{"x", OrchTaskPriorityP1},
+	}
+	for _, c := range cases {
+		if got := NormalizeOrchTaskPriority(c.in); got != c.want {
+			t.Errorf("NormalizeOrchTaskPriority(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
 }

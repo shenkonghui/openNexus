@@ -527,7 +527,7 @@ func (h *SessionFileHandler) RestoreToCheckpoint(c *gin.Context) {
 	}
 
 	// 2. 消息回滚：删除目标消息及其之后的所有消息
-	msgsDeleted, err := h.store.DeleteMessagesFromSequence(sess.ID, req.Sequence)
+	msgsDeleted, err := h.store.DeleteMessagesFromSequence(sess.SessionID, req.Sequence)
 	if err != nil {
 		allErrs = append(allErrs, "消息回滚失败: "+err.Error())
 	}

@@ -32,6 +32,13 @@ func (r *WorkspaceRepository) FindByUserID(userID uint) ([]models.Workspace, err
 	return workspaces, err
 }
 
+// ListCwds 返回全部工作区的 cwd（去重前的原始列表），供编排 RecoverAll 等启动恢复使用。
+func (r *WorkspaceRepository) ListCwds() ([]string, error) {
+	var cwds []string
+	err := r.db.Model(&models.Workspace{}).Where("cwd != ''").Pluck("cwd", &cwds).Error
+	return cwds, err
+}
+
 func (r *WorkspaceRepository) FindByUserIDAndCwd(userID uint, cwd string) (*models.Workspace, error) {
 	var ws models.Workspace
 	err := r.db.Where("user_id = ? AND cwd = ? AND mode = ?", userID, cwd, models.WorkspaceModePersistent).First(&ws).Error

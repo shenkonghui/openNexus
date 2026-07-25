@@ -2,6 +2,8 @@ package acp
 
 import (
 	"strings"
+
+	"opennexus/internal/config"
 )
 
 // Decision 表示全局权限规则对一个工具调用的裁决。
@@ -18,10 +20,10 @@ const (
 
 // PermissionRules 是生效中的全局权限规则（从 config.PermissionsConfig 构造）。
 // 规则按 agent 上报的 ToolCall.Title 匹配，支持 `*` 通配符，大小写不敏感。
-// 白/询问/黑名单全局生效；YOLO 由会话级开关传入 Decide，不再使用全局 Mode。
+// 白/询问/黑名单全局生效；YOLO = 全局 Mode=yolo 或会话级开关。
 // 优先级：deny > allow > ask > (yolo→allow | ask)。
 type PermissionRules struct {
-	Mode  string   // 保留兼容配置读写；裁决时忽略，改用 Decide 的 yolo 参数
+	Mode  string   // normal | yolo；yolo 时未命中名单自动放行
 	Allow []string // 白名单：命中→放行
 	Ask   []string // 询问名单：命中→强制询问
 	Deny  []string // 黑名单：命中→拒绝
@@ -85,14 +87,14 @@ func anyMatch(rules []string, title string) bool {
 	return false
 }
 
-// Decide 根据工具调用标题与会话 YOLO 开关返回裁决。
+// Decide 根据工具调用标题与 YOLO（全局 Mode 或会话开关）返回裁决。
 //   - title 为空：yolo → Allow；否则 Ask（无法匹配名单时的兜底）
 //   - deny 命中 → DecisionDeny
 //   - allow 命中 → DecisionAllow
 //   - ask 命中 → DecisionAsk
-//   - 会话 yolo → DecisionAllow；否则 DecisionAsk
+//   - 全局/会话 yolo → DecisionAllow；否则 DecisionAsk
 func (r PermissionRules) Decide(title string, yolo bool) Decision {
-	_ = r.Mode // 保留字段兼容配置；裁决只看会话 yolo
+	yolo = yolo || r.Mode == config.PermissionModeYolo
 	if strings.TrimSpace(title) == "" {
 		if yolo {
 			return DecisionAllow

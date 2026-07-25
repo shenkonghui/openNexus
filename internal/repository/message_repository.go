@@ -1,187 +1,425 @@
 package repository
 
 import (
-	"gorm.io/gorm"
+	"bufio"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
 
 	"opennexus/internal/models"
 )
 
-// MessageRepository 是消息持久化仓库，提供消息 CRUD 操作。
+const nextIDFile = "_next_id"
+
+// MessageRepository 是消息持久化仓库：按会话 UUID 追加写入 JSONL 文件。
+// 布局：{dir}/{sessionID}.jsonl，全局自增 id 存于 {dir}/_next_id。
 type MessageRepository struct {
-	db *gorm.DB
+	dir string
+	mu  sync.Mutex
 }
 
-// NewMessageRepository 创建新的 MessageRepository。
-func NewMessageRepository(db *gorm.DB) *MessageRepository {
-	return &MessageRepository{db: db}
+// NewMessageRepository 创建文件型 MessageRepository，dir 不存在时自动创建。
+func NewMessageRepository(dir string) *MessageRepository {
+	_ = os.MkdirAll(dir, 0o755)
+	return &MessageRepository{dir: dir}
 }
 
-// Create 写入单条消息。
+func (r *MessageRepository) filePath(sessionID string) string {
+	return filepath.Join(r.dir, sessionID+".jsonl")
+}
+
+// Create 追加写入单条消息，并分配全局自增 ID。
 func (r *MessageRepository) Create(m *models.Message) error {
-	return r.db.Create(m).Error
-}
-
-// FindByID 按消息主键查询单条消息。
-func (r *MessageRepository) FindByID(id uint) (*models.Message, error) {
-	var msg models.Message
-	err := r.db.First(&msg, id).Error
-	if err != nil {
-		return nil, err
+	if m.SessionID == "" {
+		return fmt.Errorf("session_id 不能为空")
 	}
-	return &msg, nil
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	id, err := r.allocIDLocked()
+	if err != nil {
+		return err
+	}
+	m.ID = id
+	if m.CreatedAt.IsZero() {
+		m.CreatedAt = time.Now()
+	}
+
+	line, err := json.Marshal(m)
+	if err != nil {
+		return err
+	}
+	f, err := os.OpenFile(r.filePath(m.SessionID), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	if _, err := f.Write(append(line, '\n')); err != nil {
+		return err
+	}
+	return nil
 }
 
 // CreateBatch 批量写入消息。
 func (r *MessageRepository) CreateBatch(messages []models.Message) error {
-	return r.db.Create(&messages).Error
+	for i := range messages {
+		if err := r.Create(&messages[i]); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
-// FindByDBSessionID 按数据库会话主键查询全部消息，按 sequence 升序排列。
-// 注意：无 LIMIT，对超长会话会一次性载入全部 raw_json 到内存。
-// 需要分页或限量时应优先使用 FindByDBSessionIDPaged / FindByDBSessionIDLastN。
-func (r *MessageRepository) FindByDBSessionID(dbSessionID uint) ([]models.Message, error) {
-	var messages []models.Message
-	err := r.db.Where("db_session_id = ?", dbSessionID).
-		Order("sequence ASC").
-		Find(&messages).Error
-	return messages, err
-}
+// FindByID 按消息主键查询；扫描全部 jsonl（本地体量可接受）。
+func (r *MessageRepository) FindByID(id uint) (*models.Message, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 
-// FindByDBSessionIDPaged 分页查询消息，按 sequence 升序。
-// limit<=0 时不分页（等价于全量加载）；offset 从 0 开始。
-func (r *MessageRepository) FindByDBSessionIDPaged(dbSessionID uint, limit, offset int) ([]models.Message, error) {
-	q := r.db.Where("db_session_id = ?", dbSessionID).Order("sequence ASC")
-	if limit > 0 {
-		q = q.Limit(limit)
-	}
-	if offset > 0 {
-		q = q.Offset(offset)
-	}
-	var messages []models.Message
-	return messages, q.Find(&messages).Error
-}
-
-// FindByDBSessionIDLastN 返回最近 n 条消息（按 sequence 降序取 n 条再反转为升序）。
-// n<=0 返回空切片，避免误用。用于注入历史上下文等仅需近期消息的场景。
-func (r *MessageRepository) FindByDBSessionIDLastN(dbSessionID uint, n int) ([]models.Message, error) {
-	if n <= 0 {
-		return []models.Message{}, nil
-	}
-	var desc []models.Message
-	if err := r.db.Where("db_session_id = ?", dbSessionID).
-		Order("sequence DESC").
-		Limit(n).
-		Find(&desc).Error; err != nil {
-		return nil, err
-	}
-	// 反转为升序，方便调用方按时间顺序消费
-	for i, j := 0, len(desc)-1; i < j; i, j = i+1, j-1 {
-		desc[i], desc[j] = desc[j], desc[i]
-	}
-	return desc, nil
-}
-
-// FindByKind 查询指定会话中给定 kind 的全部消息，按 sequence 升序。
-// 用于文件变更等只关心特定 kind 的场景，避免加载无关消息。
-func (r *MessageRepository) FindByKind(dbSessionID uint, kind string) ([]models.Message, error) {
-	var messages []models.Message
-	err := r.db.Where("db_session_id = ? AND kind = ?", dbSessionID, kind).
-		Order("sequence ASC").
-		Find(&messages).Error
-	return messages, err
-}
-
-// FindLastByKind 返回指定会话中给定 kind 的最新一条消息（sequence 最大）。
-// 无匹配时返回 nil, nil。
-func (r *MessageRepository) FindLastByKind(dbSessionID uint, kind string) (*models.Message, error) {
-	var msg models.Message
-	err := r.db.Where("db_session_id = ? AND kind = ?", dbSessionID, kind).
-		Order("sequence DESC").
-		First(&msg).Error
+	entries, err := os.ReadDir(r.dir)
 	if err != nil {
-		if err == gorm.ErrRecordNotFound {
-			return nil, nil
+		if os.IsNotExist(err) {
+			return nil, fmt.Errorf("message not found")
 		}
 		return nil, err
 	}
-	return &msg, nil
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") {
+			continue
+		}
+		msgs, err := r.readFileLocked(filepath.Join(r.dir, e.Name()))
+		if err != nil {
+			return nil, err
+		}
+		for i := range msgs {
+			if msgs[i].ID == id {
+				m := msgs[i]
+				return &m, nil
+			}
+		}
+	}
+	return nil, fmt.Errorf("message not found")
 }
 
-// FindByDBSessionIDAfter 查询指定会话中 sequence 大于 afterSeq 的消息，按 sequence 升序排列。
-// 用于 SSE 断点续传：客户端携带 Last-Event-ID 重连时，补齐遗漏的消息。
-func (r *MessageRepository) FindByDBSessionIDAfter(dbSessionID uint, afterSeq int) ([]models.Message, error) {
-	var messages []models.Message
-	err := r.db.Where("db_session_id = ? AND sequence > ?", dbSessionID, afterSeq).
-		Order("sequence ASC").
-		Find(&messages).Error
-	return messages, err
+// FindBySessionID 查询会话全部消息，按 sequence 升序。
+func (r *MessageRepository) FindBySessionID(sessionID string) ([]models.Message, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.readSessionLocked(sessionID)
 }
 
-// DeleteByDBSessionID 删除指定会话的全部消息。
-func (r *MessageRepository) DeleteByDBSessionID(dbSessionID uint) error {
-	return r.db.Where("db_session_id = ?", dbSessionID).
-		Delete(&models.Message{}).Error
+// FindBySessionIDPaged 分页查询，按 sequence 升序。limit<=0 时不分页。
+func (r *MessageRepository) FindBySessionIDPaged(sessionID string, limit, offset int) ([]models.Message, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	msgs, err := r.readSessionLocked(sessionID)
+	if err != nil {
+		return nil, err
+	}
+	if offset > len(msgs) {
+		return []models.Message{}, nil
+	}
+	msgs = msgs[offset:]
+	if limit > 0 && limit < len(msgs) {
+		msgs = msgs[:limit]
+	}
+	return msgs, nil
 }
 
-// DeleteFromSequence 删除指定会话中 sequence 大于等于 fromSeq 的全部消息（用于会话回滚，含目标消息）。
-func (r *MessageRepository) DeleteFromSequence(dbSessionID uint, fromSeq int) (int64, error) {
-	result := r.db.Where("db_session_id = ? AND sequence >= ?", dbSessionID, fromSeq).
-		Delete(&models.Message{})
-	return result.RowsAffected, result.Error
+// FindBySessionIDLastN 返回最近 n 条（升序）。n<=0 返回空切片。
+func (r *MessageRepository) FindBySessionIDLastN(sessionID string, n int) ([]models.Message, error) {
+	if n <= 0 {
+		return []models.Message{}, nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	msgs, err := r.readSessionLocked(sessionID)
+	if err != nil {
+		return nil, err
+	}
+	if n >= len(msgs) {
+		return msgs, nil
+	}
+	return msgs[len(msgs)-n:], nil
 }
 
-// MaxSequence 查询指定会话当前最大 sequence 值，无消息时返回 0。
-func (r *MessageRepository) MaxSequence(dbSessionID uint) (int, error) {
-	var result *int
-	err := r.db.Model(&models.Message{}).
-		Where("db_session_id = ?", dbSessionID).
-		Select("MAX(sequence)").
-		Scan(&result).Error
+// FindByKind 查询指定 kind 的消息，按 sequence 升序。
+func (r *MessageRepository) FindByKind(sessionID, kind string) ([]models.Message, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	msgs, err := r.readSessionLocked(sessionID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]models.Message, 0)
+	for _, m := range msgs {
+		if m.Kind == kind {
+			out = append(out, m)
+		}
+	}
+	return out, nil
+}
+
+// FindLastByKind 返回指定 kind 的最新一条；无匹配时返回 nil, nil。
+func (r *MessageRepository) FindLastByKind(sessionID, kind string) (*models.Message, error) {
+	msgs, err := r.FindByKind(sessionID, kind)
+	if err != nil {
+		return nil, err
+	}
+	if len(msgs) == 0 {
+		return nil, nil
+	}
+	m := msgs[len(msgs)-1]
+	return &m, nil
+}
+
+// FindBySessionIDAfter 返回 sequence > afterSeq 的消息，按 sequence 升序。
+func (r *MessageRepository) FindBySessionIDAfter(sessionID string, afterSeq int) ([]models.Message, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	msgs, err := r.readSessionLocked(sessionID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]models.Message, 0)
+	for _, m := range msgs {
+		if m.Sequence > afterSeq {
+			out = append(out, m)
+		}
+	}
+	return out, nil
+}
+
+// DeleteBySessionID 删除指定会话的消息文件。
+func (r *MessageRepository) DeleteBySessionID(sessionID string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	err := os.Remove(r.filePath(sessionID))
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
+}
+
+// DeleteFromSequence 删除 sequence >= fromSeq 的消息并重写文件。
+func (r *MessageRepository) DeleteFromSequence(sessionID string, fromSeq int) (int64, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	msgs, err := r.readSessionLocked(sessionID)
 	if err != nil {
 		return 0, err
 	}
-	if result == nil {
-		return 0, nil
+	kept := make([]models.Message, 0, len(msgs))
+	var deleted int64
+	for _, m := range msgs {
+		if m.Sequence >= fromSeq {
+			deleted++
+			continue
+		}
+		kept = append(kept, m)
 	}
-	return *result, nil
+	if err := r.writeAllLocked(sessionID, kept); err != nil {
+		return 0, err
+	}
+	return deleted, nil
+}
+
+// MaxSequence 返回当前最大 sequence，无消息时返回 0。
+func (r *MessageRepository) MaxSequence(sessionID string) (int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	msgs, err := r.readSessionLocked(sessionID)
+	if err != nil {
+		return 0, err
+	}
+	max := 0
+	for _, m := range msgs {
+		if m.Sequence > max {
+			max = m.Sequence
+		}
+	}
+	return max, nil
 }
 
 // ExecutionAggregate 是按 execution_id 聚合的执行块统计。
-// StartedAt/FinishedAt 用 string 接收，因为 SQLite 的 MIN/MAX 聚合返回字符串而非 time.Time。
 type ExecutionAggregate struct {
-	ExecutionID  uint   `gorm:"column:execution_id" json:"execution_id"`
-	StartedAt    string `gorm:"column:started_at" json:"started_at"`
-	FinishedAt   string `gorm:"column:finished_at" json:"finished_at"`
-	MessageCount int    `gorm:"column:message_count" json:"message_count"`
-	Status       string `json:"status"` // 来自 TaskExecution 表，运行时合并
-	Error        string `json:"error"`  // 来自 TaskExecution 表
+	ExecutionID  uint   `json:"execution_id"`
+	StartedAt    string `json:"started_at"`
+	FinishedAt   string `json:"finished_at"`
+	MessageCount int    `json:"message_count"`
+	Status       string `json:"status"`
+	Error        string `json:"error"`
 }
 
-// AggregateExecutions 按 execution_id 聚合指定会话的执行块，按 started_at 降序（最新优先）。
-// 仅统计 execution_id 非空的消息。
-func (r *MessageRepository) AggregateExecutions(dbSessionID uint) ([]ExecutionAggregate, error) {
-	var list []ExecutionAggregate
-	err := r.db.Model(&models.Message{}).
-		Select("execution_id, MIN(created_at) AS started_at, MAX(created_at) AS finished_at, COUNT(*) AS message_count").
-		Where("db_session_id = ? AND execution_id IS NOT NULL", dbSessionID).
-		Group("execution_id").
-		Order("started_at DESC").
-		Scan(&list).Error
-	return list, err
+// AggregateExecutions 按 execution_id 聚合，按 started_at 降序。
+func (r *MessageRepository) AggregateExecutions(sessionID string) ([]ExecutionAggregate, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	msgs, err := r.readSessionLocked(sessionID)
+	if err != nil {
+		return nil, err
+	}
+	type agg struct {
+		id    uint
+		start time.Time
+		end   time.Time
+		count int
+	}
+	byID := map[uint]*agg{}
+	order := make([]uint, 0)
+	for _, m := range msgs {
+		if m.ExecutionID == nil {
+			continue
+		}
+		id := *m.ExecutionID
+		a, ok := byID[id]
+		if !ok {
+			a = &agg{id: id, start: m.CreatedAt, end: m.CreatedAt}
+			byID[id] = a
+			order = append(order, id)
+		}
+		a.count++
+		if m.CreatedAt.Before(a.start) {
+			a.start = m.CreatedAt
+		}
+		if m.CreatedAt.After(a.end) {
+			a.end = m.CreatedAt
+		}
+	}
+	sort.Slice(order, func(i, j int) bool {
+		return byID[order[i]].start.After(byID[order[j]].start)
+	})
+	out := make([]ExecutionAggregate, 0, len(order))
+	for _, id := range order {
+		a := byID[id]
+		out = append(out, ExecutionAggregate{
+			ExecutionID:  a.id,
+			StartedAt:    a.start.Format("2006-01-02 15:04:05.999999999-07:00"),
+			FinishedAt:   a.end.Format("2006-01-02 15:04:05.999999999-07:00"),
+			MessageCount: a.count,
+		})
+	}
+	return out, nil
 }
 
-// MaxExecutionID 返回指定会话当前最大 execution_id，无定时执行时返回 0。
-func (r *MessageRepository) MaxExecutionID(dbSessionID uint) (uint, error) {
-	var result *uint
-	err := r.db.Model(&models.Message{}).
-		Where("db_session_id = ? AND execution_id IS NOT NULL", dbSessionID).
-		Select("MAX(execution_id)").
-		Scan(&result).Error
+// MaxExecutionID 返回最大 execution_id，无则 0。
+func (r *MessageRepository) MaxExecutionID(sessionID string) (uint, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	msgs, err := r.readSessionLocked(sessionID)
 	if err != nil {
 		return 0, err
 	}
-	if result == nil {
-		return 0, nil
+	var max uint
+	for _, m := range msgs {
+		if m.ExecutionID != nil && *m.ExecutionID > max {
+			max = *m.ExecutionID
+		}
 	}
-	return *result, nil
+	return max, nil
+}
+
+func (r *MessageRepository) allocIDLocked() (uint, error) {
+	path := filepath.Join(r.dir, nextIDFile)
+	var cur uint
+	data, err := os.ReadFile(path)
+	if err == nil {
+		n, _ := strconv.ParseUint(strings.TrimSpace(string(data)), 10, 64)
+		cur = uint(n)
+	} else if !os.IsNotExist(err) {
+		return 0, err
+	}
+	cur++
+	if err := os.WriteFile(path, []byte(strconv.FormatUint(uint64(cur), 10)), 0o644); err != nil {
+		return 0, err
+	}
+	return cur, nil
+}
+
+func (r *MessageRepository) readSessionLocked(sessionID string) ([]models.Message, error) {
+	return r.readFileLocked(r.filePath(sessionID))
+}
+
+func (r *MessageRepository) readFileLocked(path string) ([]models.Message, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return []models.Message{}, nil
+		}
+		return nil, err
+	}
+	defer f.Close()
+
+	var msgs []models.Message
+	sc := bufio.NewScanner(f)
+	// tool_call_update 的 raw_json 可能很大
+	sc.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" {
+			continue
+		}
+		var m models.Message
+		if err := json.Unmarshal([]byte(line), &m); err != nil {
+			return nil, fmt.Errorf("解析消息行失败: %w", err)
+		}
+		msgs = append(msgs, m)
+	}
+	if err := sc.Err(); err != nil {
+		return nil, err
+	}
+	sort.SliceStable(msgs, func(i, j int) bool {
+		return msgs[i].Sequence < msgs[j].Sequence
+	})
+	return msgs, nil
+}
+
+func (r *MessageRepository) writeAllLocked(sessionID string, msgs []models.Message) error {
+	path := r.filePath(sessionID)
+	if len(msgs) == 0 {
+		err := os.Remove(path)
+		if err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		return nil
+	}
+	tmp := path + ".tmp"
+	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	w := bufio.NewWriter(f)
+	for i := range msgs {
+		line, err := json.Marshal(&msgs[i])
+		if err != nil {
+			f.Close()
+			_ = os.Remove(tmp)
+			return err
+		}
+		if _, err := w.Write(line); err != nil {
+			f.Close()
+			_ = os.Remove(tmp)
+			return err
+		}
+		if err := w.WriteByte('\n'); err != nil {
+			f.Close()
+			_ = os.Remove(tmp)
+			return err
+		}
+	}
+	if err := w.Flush(); err != nil {
+		f.Close()
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return os.Rename(tmp, path)
 }

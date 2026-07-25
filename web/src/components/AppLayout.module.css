@@ -130,6 +130,68 @@
   text-align: center;
 }
 
+/* 左下角全局 YOLO 拨动开关 */
+.yoloBar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-sidebar);
+}
+
+.yoloLabel {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  user-select: none;
+}
+
+.yoloLabelOn {
+  color: var(--warning, #d97706);
+}
+
+.yoloSwitch {
+  position: relative;
+  width: 36px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  border-radius: 10px;
+  background: var(--bg-hover, rgba(0, 0, 0, 0.08));
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.18s;
+}
+
+.yoloSwitch:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+.yoloSwitchOn {
+  background: var(--warning, #d97706);
+}
+
+.yoloKnob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+  transition: transform 0.18s;
+}
+
+.yoloSwitchOn .yoloKnob {
+  transform: translateX(16px);
+}
+
 /* 右侧主内容区：页面内容与文件编辑器共享 */
 .main {
   flex: 1;

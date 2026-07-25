@@ -6,9 +6,13 @@ import (
 	"opennexus/internal/models"
 )
 
+func newTestMessageRepo(t *testing.T) *MessageRepository {
+	t.Helper()
+	return NewMessageRepository(t.TempDir())
+}
+
 func TestMessageRepo_Create(t *testing.T) {
-	db := setupTestDB(t)
-	repo := NewMessageRepository(db)
+	repo := newTestMessageRepo(t)
 
 	m := &models.Message{
 		SessionID:   "acp-create-1",
@@ -28,8 +32,7 @@ func TestMessageRepo_Create(t *testing.T) {
 }
 
 func TestMessageRepo_CreateBatch(t *testing.T) {
-	db := setupTestDB(t)
-	repo := NewMessageRepository(db)
+	repo := newTestMessageRepo(t)
 
 	msgs := []models.Message{
 		{SessionID: "batch-1", DBSessionID: 20, Role: models.MessageRoleUser, Kind: models.MessageKindUserMessageChunk, Content: "q", RawJSON: "{}", Sequence: 1},
@@ -40,27 +43,25 @@ func TestMessageRepo_CreateBatch(t *testing.T) {
 		t.Fatalf("CreateBatch 返回错误: %v", err)
 	}
 
-	got, err := repo.FindByDBSessionID(20)
+	got, err := repo.FindBySessionID("batch-1")
 	if err != nil {
-		t.Fatalf("FindByDBSessionID 返回错误: %v", err)
+		t.Fatalf("FindBySessionID 返回错误: %v", err)
 	}
 	if len(got) != 3 {
 		t.Errorf("期望 3 条消息，实际 %d", len(got))
 	}
 }
 
-func TestMessageRepo_FindByDBSessionID_OrderedBySequence(t *testing.T) {
-	db := setupTestDB(t)
-	repo := NewMessageRepository(db)
+func TestMessageRepo_FindBySessionID_OrderedBySequence(t *testing.T) {
+	repo := newTestMessageRepo(t)
 
-	// 故意乱序插入
 	_ = repo.Create(&models.Message{SessionID: "order-1", DBSessionID: 30, Role: models.MessageRoleAssistant, Kind: models.MessageKindAgentMessageChunk, Content: "third", RawJSON: "{}", Sequence: 3})
 	_ = repo.Create(&models.Message{SessionID: "order-1", DBSessionID: 30, Role: models.MessageRoleUser, Kind: models.MessageKindUserMessageChunk, Content: "first", RawJSON: "{}", Sequence: 1})
 	_ = repo.Create(&models.Message{SessionID: "order-1", DBSessionID: 30, Role: models.MessageRoleAssistant, Kind: models.MessageKindAgentMessageChunk, Content: "second", RawJSON: "{}", Sequence: 2})
 
-	got, err := repo.FindByDBSessionID(30)
+	got, err := repo.FindBySessionID("order-1")
 	if err != nil {
-		t.Fatalf("FindByDBSessionID 返回错误: %v", err)
+		t.Fatalf("FindBySessionID 返回错误: %v", err)
 	}
 	if len(got) != 3 {
 		t.Fatalf("期望 3 条消息，实际 %d", len(got))
@@ -70,11 +71,10 @@ func TestMessageRepo_FindByDBSessionID_OrderedBySequence(t *testing.T) {
 	}
 }
 
-func TestMessageRepo_FindByDBSessionID_Empty(t *testing.T) {
-	db := setupTestDB(t)
-	repo := NewMessageRepository(db)
+func TestMessageRepo_FindBySessionID_Empty(t *testing.T) {
+	repo := newTestMessageRepo(t)
 
-	got, err := repo.FindByDBSessionID(999)
+	got, err := repo.FindBySessionID("missing")
 	if err != nil {
 		t.Fatalf("空结果不应返回错误: %v", err)
 	}
@@ -83,28 +83,26 @@ func TestMessageRepo_FindByDBSessionID_Empty(t *testing.T) {
 	}
 }
 
-func TestMessageRepo_DeleteByDBSessionID(t *testing.T) {
-	db := setupTestDB(t)
-	repo := NewMessageRepository(db)
+func TestMessageRepo_DeleteBySessionID(t *testing.T) {
+	repo := newTestMessageRepo(t)
 
 	_ = repo.Create(&models.Message{SessionID: "del-1", DBSessionID: 40, Role: models.MessageRoleUser, Kind: models.MessageKindUserMessageChunk, Content: "x", RawJSON: "{}", Sequence: 1})
 	_ = repo.Create(&models.Message{SessionID: "del-1", DBSessionID: 40, Role: models.MessageRoleAssistant, Kind: models.MessageKindAgentMessageChunk, Content: "y", RawJSON: "{}", Sequence: 2})
 
-	if err := repo.DeleteByDBSessionID(40); err != nil {
-		t.Fatalf("DeleteByDBSessionID 返回错误: %v", err)
+	if err := repo.DeleteBySessionID("del-1"); err != nil {
+		t.Fatalf("DeleteBySessionID 返回错误: %v", err)
 	}
 
-	got, _ := repo.FindByDBSessionID(40)
+	got, _ := repo.FindBySessionID("del-1")
 	if len(got) != 0 {
 		t.Errorf("期望删除后 0 条消息，实际 %d", len(got))
 	}
 }
 
 func TestMessageRepo_MaxSequence_Empty(t *testing.T) {
-	db := setupTestDB(t)
-	repo := NewMessageRepository(db)
+	repo := newTestMessageRepo(t)
 
-	max, err := repo.MaxSequence(50)
+	max, err := repo.MaxSequence("empty")
 	if err != nil {
 		t.Fatalf("MaxSequence 返回错误: %v", err)
 	}
@@ -114,19 +112,74 @@ func TestMessageRepo_MaxSequence_Empty(t *testing.T) {
 }
 
 func TestMessageRepo_MaxSequence(t *testing.T) {
-	db := setupTestDB(t)
-	repo := NewMessageRepository(db)
+	repo := newTestMessageRepo(t)
 
 	_ = repo.Create(&models.Message{SessionID: "max-1", DBSessionID: 60, Role: models.MessageRoleUser, Kind: models.MessageKindUserMessageChunk, Content: "a", RawJSON: "{}", Sequence: 5})
 	_ = repo.Create(&models.Message{SessionID: "max-1", DBSessionID: 60, Role: models.MessageRoleAssistant, Kind: models.MessageKindAgentMessageChunk, Content: "b", RawJSON: "{}", Sequence: 12})
 	_ = repo.Create(&models.Message{SessionID: "max-1", DBSessionID: 60, Role: models.MessageRoleAssistant, Kind: models.MessageKindAgentMessageChunk, Content: "c", RawJSON: "{}", Sequence: 8})
 
-	max, err := repo.MaxSequence(60)
+	max, err := repo.MaxSequence("max-1")
 	if err != nil {
 		t.Fatalf("MaxSequence 返回错误: %v", err)
 	}
 	if max != 12 {
 		t.Errorf("期望 max=12，实际 %d", max)
+	}
+}
+
+func TestMessageRepo_FindByID(t *testing.T) {
+	repo := newTestMessageRepo(t)
+	m := &models.Message{
+		SessionID: "id-1", DBSessionID: 1, Role: models.MessageRoleUser,
+		Kind: models.MessageKindUserMessageChunk, Content: "hi", RawJSON: "{}", Sequence: 1,
+	}
+	if err := repo.Create(m); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	got, err := repo.FindByID(m.ID)
+	if err != nil {
+		t.Fatalf("FindByID: %v", err)
+	}
+	if got.Content != "hi" {
+		t.Errorf("Content = %q", got.Content)
+	}
+}
+
+func TestMessageRepo_DeleteFromSequence(t *testing.T) {
+	repo := newTestMessageRepo(t)
+	for seq := 1; seq <= 5; seq++ {
+		_ = repo.Create(&models.Message{
+			SessionID: "trunc-1", DBSessionID: 1, Role: models.MessageRoleAssistant,
+			Kind: models.MessageKindAgentMessageChunk, Content: "m", RawJSON: "{}", Sequence: seq,
+		})
+	}
+	n, err := repo.DeleteFromSequence("trunc-1", 3)
+	if err != nil {
+		t.Fatalf("DeleteFromSequence: %v", err)
+	}
+	if n != 3 {
+		t.Errorf("期望删除 3 条，实际 %d", n)
+	}
+	got, _ := repo.FindBySessionID("trunc-1")
+	if len(got) != 2 || got[1].Sequence != 2 {
+		t.Errorf("期望保留 seq 1,2，实际 %+v", got)
+	}
+}
+
+func TestMessageRepo_FindBySessionIDAfter(t *testing.T) {
+	repo := newTestMessageRepo(t)
+	for seq := 1; seq <= 4; seq++ {
+		_ = repo.Create(&models.Message{
+			SessionID: "after-1", DBSessionID: 1, Role: models.MessageRoleAssistant,
+			Kind: models.MessageKindAgentMessageChunk, Content: "m", RawJSON: "{}", Sequence: seq,
+		})
+	}
+	got, err := repo.FindBySessionIDAfter("after-1", 2)
+	if err != nil {
+		t.Fatalf("FindBySessionIDAfter: %v", err)
+	}
+	if len(got) != 2 || got[0].Sequence != 3 || got[1].Sequence != 4 {
+		t.Errorf("期望 [3,4]，实际 %+v", got)
 	}
 }
 
@@ -145,67 +198,58 @@ func seedPagingMessages(t *testing.T, repo *MessageRepository) {
 	}
 }
 
-func TestMessageRepo_FindByDBSessionIDLastN(t *testing.T) {
-	db := setupTestDB(t)
-	repo := NewMessageRepository(db)
+func TestMessageRepo_FindBySessionIDLastN(t *testing.T) {
+	repo := newTestMessageRepo(t)
 	seedPagingMessages(t, repo)
 
-	got, err := repo.FindByDBSessionIDLastN(70, 3)
+	got, err := repo.FindBySessionIDLastN("pg-1", 3)
 	if err != nil {
-		t.Fatalf("FindByDBSessionIDLastN 返回错误: %v", err)
+		t.Fatalf("FindBySessionIDLastN 返回错误: %v", err)
 	}
 	if len(got) != 3 {
 		t.Fatalf("期望 3 条，实际 %d", len(got))
 	}
-	// 必须升序，且为最近 3 条（seq 3,4,5）
 	if got[0].Sequence != 3 || got[2].Sequence != 5 {
 		t.Errorf("期望升序 [3,4,5]，实际 %d,%d,%d", got[0].Sequence, got[1].Sequence, got[2].Sequence)
 	}
 
-	// n 超过总数时返回全部
-	all, _ := repo.FindByDBSessionIDLastN(70, 100)
+	all, _ := repo.FindBySessionIDLastN("pg-1", 100)
 	if len(all) != 5 {
 		t.Errorf("n>total 时期望 5 条，实际 %d", len(all))
 	}
 
-	// n<=0 返回空切片
-	zero, _ := repo.FindByDBSessionIDLastN(70, 0)
+	zero, _ := repo.FindBySessionIDLastN("pg-1", 0)
 	if len(zero) != 0 {
 		t.Errorf("n<=0 时期望空，实际 %d", len(zero))
 	}
 }
 
-func TestMessageRepo_FindByDBSessionIDPaged(t *testing.T) {
-	db := setupTestDB(t)
-	repo := NewMessageRepository(db)
+func TestMessageRepo_FindBySessionIDPaged(t *testing.T) {
+	repo := newTestMessageRepo(t)
 	seedPagingMessages(t, repo)
 
-	// 第一页：limit=2, offset=0 → seq 1,2
-	page1, err := repo.FindByDBSessionIDPaged(70, 2, 0)
+	page1, err := repo.FindBySessionIDPaged("pg-1", 2, 0)
 	if err != nil {
-		t.Fatalf("FindByDBSessionIDPaged page1 返回错误: %v", err)
+		t.Fatalf("FindBySessionIDPaged page1 返回错误: %v", err)
 	}
 	if len(page1) != 2 || page1[0].Sequence != 1 || page1[1].Sequence != 2 {
 		t.Errorf("page1 错误: %+v", page1)
 	}
-	// 第二页：offset=2 → seq 3,4
-	page2, _ := repo.FindByDBSessionIDPaged(70, 2, 2)
+	page2, _ := repo.FindBySessionIDPaged("pg-1", 2, 2)
 	if len(page2) != 2 || page2[0].Sequence != 3 || page2[1].Sequence != 4 {
 		t.Errorf("page2 错误: %+v", page2)
 	}
-	// limit<=0 不分页（全量）
-	all, _ := repo.FindByDBSessionIDPaged(70, 0, 0)
+	all, _ := repo.FindBySessionIDPaged("pg-1", 0, 0)
 	if len(all) != 5 {
 		t.Errorf("limit<=0 期望全量 5 条，实际 %d", len(all))
 	}
 }
 
 func TestMessageRepo_FindByKind(t *testing.T) {
-	db := setupTestDB(t)
-	repo := NewMessageRepository(db)
+	repo := newTestMessageRepo(t)
 	seedPagingMessages(t, repo)
 
-	got, err := repo.FindByKind(70, models.MessageKindUsageUpdate)
+	got, err := repo.FindByKind("pg-1", models.MessageKindUsageUpdate)
 	if err != nil {
 		t.Fatalf("FindByKind 返回错误: %v", err)
 	}
@@ -218,17 +262,15 @@ func TestMessageRepo_FindByKind(t *testing.T) {
 }
 
 func TestMessageRepo_FindLastByKind(t *testing.T) {
-	db := setupTestDB(t)
-	repo := NewMessageRepository(db)
+	repo := newTestMessageRepo(t)
 	seedPagingMessages(t, repo)
 
-	// 再插一条更新的 usage_update（seq=6）使"最后一条"非唯一
 	_ = repo.Create(&models.Message{
 		SessionID: "pg-1", DBSessionID: 70, Role: models.MessageRoleAssistant,
 		Kind: models.MessageKindUsageUpdate, Content: "u2", RawJSON: `{"seq":6}`, Sequence: 6,
 	})
 
-	got, err := repo.FindLastByKind(70, models.MessageKindUsageUpdate)
+	got, err := repo.FindLastByKind("pg-1", models.MessageKindUsageUpdate)
 	if err != nil {
 		t.Fatalf("FindLastByKind 返回错误: %v", err)
 	}
@@ -239,8 +281,7 @@ func TestMessageRepo_FindLastByKind(t *testing.T) {
 		t.Errorf("期望最后一条 seq=6，实际 %d", got.Sequence)
 	}
 
-	// 不存在的 kind 返回 nil, nil
-	none, err := repo.FindLastByKind(70, "nonexistent-kind")
+	none, err := repo.FindLastByKind("pg-1", "nonexistent-kind")
 	if err != nil {
 		t.Fatalf("不存在的 kind 不应返回错误: %v", err)
 	}
@@ -249,7 +290,6 @@ func TestMessageRepo_FindLastByKind(t *testing.T) {
 	}
 }
 
-// itoa 是避免引入 strconv 仅用于测试的轻量实现。
 func itoa(i int) string {
 	if i == 0 {
 		return "0"

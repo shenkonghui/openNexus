@@ -51,6 +51,13 @@ func TestPermissionRules_YoloAllowsUnmatched(t *testing.T) {
 	}
 }
 
+func TestPermissionRules_GlobalModeYoloAllowsUnmatched(t *testing.T) {
+	r := PermissionRules{Mode: config.PermissionModeYolo}
+	if got := r.Decide("Bash(anything)", false); got != DecisionAllow {
+		t.Errorf("全局 mode=yolo 未命中应放行，期望 Allow，实际 %d", got)
+	}
+}
+
 func TestPermissionRules_NormalAsksUnmatched(t *testing.T) {
 	r := PermissionRules{}
 	if got := r.Decide("Bash(anything)", false); got != DecisionAsk {

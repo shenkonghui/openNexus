@@ -154,7 +154,11 @@ func main() {
 	authSvc.SeedAdminUser()
 
 	// P1: ACP 服务
-	acpSvc := acp.NewService(db, cfg.Agents.Workspace, cfg.Agents.Skills, cfg.Agents.Commands, cfg.Agents.Rules, cfg.Agents.SubAgents)
+	messagesDir := filepath.Join(filepath.Dir(cfg.Database.Path), "messages")
+	if cfg.Database.Path == ":memory:" {
+		messagesDir = filepath.Join(os.TempDir(), "opennexus-messages")
+	}
+	acpSvc := acp.NewService(db, messagesDir, cfg.Agents.Workspace, cfg.Agents.Skills, cfg.Agents.Commands, cfg.Agents.Rules, cfg.Agents.SubAgents)
 	acpSvc.SetDebugConfig(cfg.Debug)
 	// 注入 acp_connections 心跳表仓库：主 server 写入连接 PID/活动时间/心跳，
 	// 供独立 watchdog 进程读取判定空闲与主程序存活。
@@ -163,6 +167,8 @@ func main() {
 	// 注入单轮 prompt 最大存活时间：prompt 的 ctx 与 HTTP/SSE 请求解耦，
 	// 此超时兜底防 agent 卡死导致 goroutine 永久泄漏（超时标记 interrupted）。
 	acpSvc.SetPromptMaxDuration(cfg.Agents.PromptMaxDuration)
+	// 失败任务自动重试一次：agent 运行中崩溃时 ResumeSession（断连则重连）并重发 prompt。
+	acpSvc.SetFailedTaskAutoRetryOnce(cfg.Agents.FailedTaskAutoRetryOnceEnabled())
 	// 全局权限规则（yolo/白名单/黑名单）来自 config.yaml 的 permissions 段。
 	// 启动时立即下发到 service（须在 PreconnectAllAsync 前，使新连接建连即拿到规则）。
 	acpSvc.ApplyPermissions(cfg.Permissions.Mode, cfg.Permissions.Allow, cfg.Permissions.Ask, cfg.Permissions.Deny)
@@ -235,6 +241,13 @@ func main() {
 	// 任务编排：基于工作区 cwd 下的 tasks.json 定义任务，按并发上限调度，
 	// 每个任务用 git worktree 隔离工作目录，复用 RunSessionTask 创建持久会话执行。
 	orchestratorSvc := services.NewOrchestratorService(agentRouter)
+	// 服务重启后将各工作区 tasks.json 中残留的 running/queued 标为 interrupt，
+	// 否则「全部启动」会因误判仍在运行而跳过这些任务。
+	if cwds, err := repository.NewWorkspaceRepository(db).ListCwds(); err != nil {
+		log.Printf("编排任务恢复：列举工作区 cwd 失败: %v", err)
+	} else {
+		orchestratorSvc.RecoverAll(cwds)
+	}
 	orchH := handlers.NewOrchestrationHandler(orchestratorSvc, agentRouter)
 
 	noteRepo := repository.NewNoteRepository(db)

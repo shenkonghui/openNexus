@@ -152,7 +152,7 @@ func (c *Connection) NewSession(ctx context.Context, cwd string, additionalDirec
 // 不影响其他订阅者（如断点续传重连的监听者）。
 func (c *Connection) Prompt(ctx context.Context, sessionID, prompt string) (<-chan acp.SessionUpdate, error) {
 	sid := acp.SessionId(sessionID)
-	sub := c.client.Subscribe(sid, 1024)
+	sub := c.client.Subscribe(sid, 4096)
 	slog.Debug("ACP prompt", "session", sessionID, "chars", len(prompt), "preview", logging.Preview(prompt, 120))
 
 	go func() {

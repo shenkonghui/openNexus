@@ -368,11 +368,11 @@ func (r *Router) FindMessageByID(messageID uint) (*models.Message, error) {
 }
 
 // DeleteMessagesFromSequence 删除指定会话中 sequence 大于等于 fromSeq 的消息。
-func (r *Router) DeleteMessagesFromSequence(dbSessionID uint, fromSeq int) (int64, error) {
+func (r *Router) DeleteMessagesFromSequence(sessionID string, fromSeq int) (int64, error) {
 	if r.service == nil {
 		return 0, errors.New("service 未配置")
 	}
-	return r.service.DeleteMessagesFromSequence(dbSessionID, fromSeq)
+	return r.service.DeleteMessagesFromSequence(sessionID, fromSeq)
 }
 
 func (r *Router) GetWorkspaceCwd(workspaceID uint) (string, error) {

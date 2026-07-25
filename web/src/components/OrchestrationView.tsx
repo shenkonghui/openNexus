@@ -4,7 +4,7 @@ import { useTranslation } from 'react-i18next'
 import {
   getOrchestration, getOrchStatus, getOrchGitStatus, initOrchGitRepo,
   upsertOrchTask, deleteOrchTask, startOrchestration, stopOrchestration, saveOrchestration,
-  type OrchestrationDef, type OrchestrationTask,
+  type OrchestrationDef, type OrchestrationTask, type OrchTaskPriority,
 } from '../api/orchestration'
 import { sessionUrl, newTaskUrl } from '../utils/routes'
 import type { Agent } from '../types'
@@ -58,6 +58,7 @@ export default function OrchestrationView({ workspaceId, cwd, agents, restoreSes
   const [showNewForm, setShowNewForm] = useState(false)
   const [newTitle, setNewTitle] = useState('')
   const [newPrompt, setNewPrompt] = useState('')
+  const [newPriority, setNewPriority] = useState<OrchTaskPriority>('p1')
   const [newAgent, setNewAgent] = useState('')
   // JSON 查看/编辑模式
   const [jsonMode, setJsonMode] = useState(false)
@@ -132,10 +133,11 @@ export default function OrchestrationView({ workspaceId, cwd, agents, restoreSes
     const agentType = (newAgent || agents[0]?.type || '').trim()
     setBusy(true)
     try {
-      await upsertOrchTask(workspaceId, { id: genTaskId(), title, detail: prompt, agent_type: agentType })
+      await upsertOrchTask(workspaceId, { id: genTaskId(), title, detail: prompt, agent_type: agentType, priority: newPriority })
       setShowNewForm(false)
       setNewTitle('')
       setNewPrompt('')
+      setNewPriority('p1')
       await reloadDef()
     } catch (e) {
       onError(String((e as Error)?.message || e))
@@ -148,6 +150,7 @@ export default function OrchestrationView({ workspaceId, cwd, agents, restoreSes
     setShowNewForm(false)
     setNewTitle('')
     setNewPrompt('')
+    setNewPriority('p1')
   }
 
   // 手动启动单个任务。
@@ -364,6 +367,16 @@ export default function OrchestrationView({ workspaceId, cwd, agents, restoreSes
                     placeholder={t('orchestration.promptPlaceholder')}
                     autoFocus
                   />
+                  <select
+                    className={styles.formSelect}
+                    value={newPriority}
+                    onChange={(e) => setNewPriority(e.target.value as OrchTaskPriority)}
+                    aria-label={t('orchestration.priority')}
+                  >
+                    <option value="p0">{t('orchestration.priority_p0')}</option>
+                    <option value="p1">{t('orchestration.priority_p1')}</option>
+                    <option value="p2">{t('orchestration.priority_p2')}</option>
+                  </select>
                   <div className={styles.formActions}>
                     <button type="button" className={styles.formCancel} onClick={cancelNewForm} disabled={busy}>
                       {t('orchestration.cancel')}
@@ -399,6 +412,9 @@ export default function OrchestrationView({ workspaceId, cwd, agents, restoreSes
                         >{task.title}</span>
                       </span>
                       <span className={styles.taskHeaderRight}>
+                        <span className={`${styles.taskPriority} ${styles[`priority_${task.priority || 'p1'}`] || ''}`}>
+                          {t(`orchestration.priority_${task.priority || 'p1'}`)}
+                        </span>
                         <span className={`${styles.taskStatus} ${styles[`status_${task.status}`] || ''}`}>
                           {t(`orchestration.status_${task.status}`)}
                         </span>

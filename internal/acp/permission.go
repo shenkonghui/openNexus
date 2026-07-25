@@ -118,8 +118,8 @@ func (b *permissionBroker) request(ctx context.Context, params acp.RequestPermis
 		return autoApprovePermission(params), nil
 	}
 
-	// 全局名单 + 会话 YOLO：在入队 UI 之前裁决，
-	// 命中 allow / 会话 yolo→自动放行，命中 deny→自动拒绝，命中 ask 或未命中→继续走 UI 询问。
+	// 全局名单 + 全局/会话 YOLO：在入队 UI 之前裁决，
+	// 命中 allow / yolo→自动放行，命中 deny→自动拒绝，命中 ask 或未命中→继续走 UI 询问。
 	yolo := b.isYolo(params.SessionId)
 	if rules := b.rules.Load(); rules != nil {
 		switch rules.Decide(toolCallTitle(params), yolo) {

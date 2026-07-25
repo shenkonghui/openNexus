@@ -89,7 +89,7 @@ func newServer(prefsRepo *repository.UserAgentPrefsRepository, wsResolver Worksp
 	addTool("create_orchestration_task", func() {
 		mcp.AddTool(srv, &mcp.Tool{
 			Name:        "create_orchestration_task",
-			Description: "在当前工作区的任务编排（tasks.json）中新增一个编排任务。任务默认 status=pending，可由编排调度器启动（基于 git worktree 隔离执行）。这是管理编排任务的首选方式（结构化、自带校验），优先于手写 tasks.json。",
+			Description: "在当前工作区的任务编排（tasks.json）中新增一个编排任务。任务默认 status=pending、priority=p1，可由编排调度器启动（基于 git worktree 隔离执行）。这是管理编排任务的首选方式（结构化、自带校验），优先于手写 tasks.json。",
 		}, func(ctx context.Context, _ *mcp.CallToolRequest, in createOrchTaskIn) (*mcp.CallToolResult, createOrchTaskOut, error) {
 			return handleCreateOrchTask(ctx, prefsRepo, wsResolver, orchCreator, in)
 		})
@@ -98,7 +98,7 @@ func newServer(prefsRepo *repository.UserAgentPrefsRepository, wsResolver Worksp
 	addTool("update_orchestration_task", func() {
 		mcp.AddTool(srv, &mcp.Tool{
 			Name:        "update_orchestration_task",
-			Description: "更新编排任务的可编辑字段（title/detail/agent_type/model_value/depends_on）。按 task_id 匹配；运行时字段（status/session_id/worktree 等）保持不变。",
+			Description: "更新编排任务的可编辑字段（title/detail/agent_type/model_value/priority/depends_on）。按 task_id 匹配；运行时字段（status/session_id/worktree 等）保持不变。",
 		}, func(ctx context.Context, _ *mcp.CallToolRequest, in updateOrchTaskIn) (*mcp.CallToolResult, updateOrchTaskOut, error) {
 			return handleUpdateOrchTask(ctx, prefsRepo, wsResolver, orchCreator, in)
 		})
@@ -143,7 +143,7 @@ func newServer(prefsRepo *repository.UserAgentPrefsRepository, wsResolver Worksp
 	addTool("list_orchestration_tasks", func() {
 		mcp.AddTool(srv, &mcp.Tool{
 			Name:        "list_orchestration_tasks",
-			Description: "列出当前工作区编排的所有任务（含 id/title/status/agent_type/branch/cwd 等运行时状态），用于了解现状后再决定增删改或调度。",
+			Description: "列出当前工作区编排的所有任务（含 id/title/status/priority/agent_type/branch/cwd 等运行时状态），用于了解现状后再决定增删改或调度。",
 		}, func(ctx context.Context, _ *mcp.CallToolRequest, in listOrchTasksIn) (*mcp.CallToolResult, listOrchTasksOut, error) {
 			return handleListOrchTasks(ctx, wsResolver, orchCreator, in)
 		})
@@ -211,6 +211,7 @@ type createOrchTaskIn struct {
 	Detail      string   `json:"detail" jsonschema:"任务详情，即发给 agent 的 prompt"`
 	AgentType   string   `json:"agent_type,omitempty" jsonschema:"执行任务的 agent 类型，留空则继承用户最近使用的 agent"`
 	ModelValue  string   `json:"model_value,omitempty" jsonschema:"模型值，留空则用 agent 默认"`
+	Priority    string   `json:"priority,omitempty" jsonschema:"优先级，取值 p0、p1、p2，缺省为 p1"`
 	DependsOn   []string `json:"depends_on,omitempty" jsonschema:"依赖的其他任务 id 数组"`
 	WorkspaceID uint     `json:"workspace_id,omitempty" jsonschema:"工作区 ID，留空则使用默认工作区"`
 }
@@ -254,6 +255,7 @@ func handleCreateOrchTask(ctx context.Context, prefsRepo *repository.UserAgentPr
 		Detail:     detail,
 		AgentType:  agentType,
 		ModelValue: strings.TrimSpace(in.ModelValue),
+		Priority:   models.NormalizeOrchTaskPriority(in.Priority),
 		Status:     models.OrchTaskStatusPending,
 		DependsOn:  in.DependsOn,
 	}
@@ -272,6 +274,7 @@ type updateOrchTaskIn struct {
 	Detail      string   `json:"detail,omitempty" jsonschema:"新任务详情(prompt)，留空则不修改"`
 	AgentType   string   `json:"agent_type,omitempty" jsonschema:"新 agent 类型，留空则不修改"`
 	ModelValue  string   `json:"model_value,omitempty" jsonschema:"新模型值，留空则不修改"`
+	Priority    string   `json:"priority,omitempty" jsonschema:"新优先级，取值 p0、p1、p2，留空则不修改"`
 	DependsOn   []string `json:"depends_on,omitempty" jsonschema:"新依赖任务 id 数组"`
 	WorkspaceID uint     `json:"workspace_id,omitempty" jsonschema:"工作区 ID"`
 }
@@ -325,6 +328,9 @@ func handleUpdateOrchTask(ctx context.Context, prefsRepo *repository.UserAgentPr
 	}
 	if in.ModelValue != "" {
 		t.ModelValue = strings.TrimSpace(in.ModelValue)
+	}
+	if strings.TrimSpace(in.Priority) != "" {
+		t.Priority = models.NormalizeOrchTaskPriority(in.Priority)
 	}
 	if in.DependsOn != nil {
 		t.DependsOn = in.DependsOn
@@ -459,6 +465,7 @@ type orchTaskSummary struct {
 	ID         string   `json:"id"`
 	Title      string   `json:"title"`
 	Status     string   `json:"status"`
+	Priority   string   `json:"priority,omitempty"`
 	AgentType  string   `json:"agent_type"`
 	ModelValue string   `json:"model_value,omitempty"`
 	Branch     string   `json:"branch,omitempty"`
@@ -487,7 +494,7 @@ func handleListOrchTasks(ctx context.Context, wsResolver WorkspaceResolver, orch
 	tasks := make([]orchTaskSummary, 0, len(def.Tasks))
 	for _, t := range def.Tasks {
 		tasks = append(tasks, orchTaskSummary{
-			ID: t.ID, Title: t.Title, Status: t.Status, AgentType: t.AgentType,
+			ID: t.ID, Title: t.Title, Status: t.Status, Priority: t.Priority, AgentType: t.AgentType,
 			ModelValue: t.ModelValue, Branch: t.Branch, Cwd: t.WorktreePath,
 			DependsOn: t.DependsOn, Error: t.Error,
 		})

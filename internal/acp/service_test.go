@@ -26,7 +26,6 @@ func setupACPTestDB(t *testing.T) *gorm.DB {
 	db.Exec("DELETE FROM users")
 	db.Exec("DELETE FROM refresh_tokens")
 	db.Exec("DELETE FROM sessions")
-	db.Exec("DELETE FROM messages")
 	db.Exec("DELETE FROM workspaces")
 	db.Exec("DELETE FROM running_tasks")
 	return db
@@ -49,7 +48,15 @@ func newTestService(t *testing.T) *Service {
 		TempDirPrefix: "test-",
 	}
 	skills, commands, rules, subAgents := testDiscoveryConfig(t)
-	return NewService(db, wsCfg, skills, commands, rules, subAgents)
+	return NewService(db, t.TempDir(), wsCfg, skills, commands, rules, subAgents)
+}
+
+func newTestServiceWithDB(t *testing.T, db *gorm.DB) (*Service, string) {
+	t.Helper()
+	msgDir := t.TempDir()
+	skills, commands, rules, subAgents := testDiscoveryConfig(t)
+	svc := NewService(db, msgDir, config.WorkspaceConfig{DefaultMode: "external"}, skills, commands, rules, subAgents)
+	return svc, msgDir
 }
 
 func TestService_RegisterBackend(t *testing.T) {
@@ -123,7 +130,7 @@ func TestService_RecoverActiveSessions(t *testing.T) {
 	})
 
 	skills, commands, rules, subAgents := testDiscoveryConfig(t)
-	svc := NewService(db, config.WorkspaceConfig{DefaultMode: "external"}, skills, commands, rules, subAgents)
+	svc := NewService(db, t.TempDir(), config.WorkspaceConfig{DefaultMode: "external"}, skills, commands, rules, subAgents)
 	svc.RecoverActiveSessions()
 
 	// 有中断任务的会话 → error
@@ -176,12 +183,12 @@ func TestService_ListMessages(t *testing.T) {
 	}
 	_ = repo.Create(sess)
 
-	msgRepo := repository.NewMessageRepository(db)
+	skills, commands, rules, subAgents := testDiscoveryConfig(t)
+	msgDir := t.TempDir()
+	msgRepo := repository.NewMessageRepository(msgDir)
 	_ = msgRepo.Create(&models.Message{SessionID: "msg-list-1", DBSessionID: sess.ID, Role: models.MessageRoleUser, Kind: models.MessageKindUserMessageChunk, Content: "问题", RawJSON: "{}", Sequence: 1})
 	_ = msgRepo.Create(&models.Message{SessionID: "msg-list-1", DBSessionID: sess.ID, Role: models.MessageRoleAssistant, Kind: models.MessageKindAgentMessageChunk, Content: "回答", RawJSON: "{}", Sequence: 2})
-
-	skills, commands, rules, subAgents := testDiscoveryConfig(t)
-	svc := NewService(db, config.WorkspaceConfig{DefaultMode: "external"}, skills, commands, rules, subAgents)
+	svc := NewService(db, msgDir, config.WorkspaceConfig{DefaultMode: "external"}, skills, commands, rules, subAgents)
 	msgs, err := svc.ListMessages("msg-list-1")
 	if err != nil {
 		t.Fatalf("ListMessages 返回错误: %v", err)
@@ -206,7 +213,9 @@ func TestService_ListMessages_ReturnsLastN(t *testing.T) {
 		Status: models.SessionStatusActive, WorkspaceMode: "",
 	}
 	_ = repo.Create(sess)
-	msgRepo := repository.NewMessageRepository(db)
+	skills, commands, rules, subAgents := testDiscoveryConfig(t)
+	msgDir := t.TempDir()
+	msgRepo := repository.NewMessageRepository(msgDir)
 	n := defaultMessagePageSize + 50
 	for i := 1; i <= n; i++ {
 		_ = msgRepo.Create(&models.Message{
@@ -215,8 +224,7 @@ func TestService_ListMessages_ReturnsLastN(t *testing.T) {
 			Content: fmt.Sprintf("m%d", i), RawJSON: "{}", Sequence: i,
 		})
 	}
-	skills, commands, rules, subAgents := testDiscoveryConfig(t)
-	svc := NewService(db, config.WorkspaceConfig{DefaultMode: "external"}, skills, commands, rules, subAgents)
+	svc := NewService(db, msgDir, config.WorkspaceConfig{DefaultMode: "external"}, skills, commands, rules, subAgents)
 	msgs, err := svc.ListMessages("msg-last-n")
 	if err != nil {
 		t.Fatalf("ListMessages 返回错误: %v", err)
@@ -248,7 +256,7 @@ func TestService_ListMessages_Empty(t *testing.T) {
 	})
 
 	skills, commands, rules, subAgents := testDiscoveryConfig(t)
-	svc := NewService(db, config.WorkspaceConfig{DefaultMode: "external"}, skills, commands, rules, subAgents)
+	svc := NewService(db, t.TempDir(), config.WorkspaceConfig{DefaultMode: "external"}, skills, commands, rules, subAgents)
 	msgs, err := svc.ListMessages("empty-msg-1")
 	if err != nil {
 		t.Fatalf("ListMessages 返回错误: %v", err)
@@ -268,7 +276,7 @@ func TestService_ResumeSession_Closed_NoBackend(t *testing.T) {
 	})
 
 	skills, commands, rules, subAgents := testDiscoveryConfig(t)
-	svc := NewService(db, config.WorkspaceConfig{DefaultMode: "external"}, skills, commands, rules, subAgents)
+	svc := NewService(db, t.TempDir(), config.WorkspaceConfig{DefaultMode: "external"}, skills, commands, rules, subAgents)
 	_, err := svc.ResumeSession(context.Background(), "closed-resume-1")
 	if err == nil {
 		t.Error("期望后端未注册时重开返回错误")
@@ -294,7 +302,7 @@ func TestService_ResumeSession_PersistentCwdNotExists(t *testing.T) {
 	})
 
 	skills, commands, rules, subAgents := testDiscoveryConfig(t)
-	svc := NewService(db, config.WorkspaceConfig{DefaultMode: "external"}, skills, commands, rules, subAgents)
+	svc := NewService(db, t.TempDir(), config.WorkspaceConfig{DefaultMode: "external"}, skills, commands, rules, subAgents)
 	_, err := svc.ResumeSession(context.Background(), "closed-resume-3")
 	if err == nil {
 		t.Error("persistent 工作目录不存在时期望返回错误")
@@ -320,7 +328,7 @@ func TestService_ResumeSession_CwdNotExists(t *testing.T) {
 	})
 
 	skills, commands, rules, subAgents := testDiscoveryConfig(t)
-	svc := NewService(db, config.WorkspaceConfig{DefaultMode: "external"}, skills, commands, rules, subAgents)
+	svc := NewService(db, t.TempDir(), config.WorkspaceConfig{DefaultMode: "external"}, skills, commands, rules, subAgents)
 	_, err := svc.ResumeSession(context.Background(), "closed-resume-2")
 	if err == nil {
 		t.Error("期望后端未注册时重开返回错误")
@@ -340,7 +348,8 @@ func TestService_ResumeSession_SessionNotFound(t *testing.T) {
 func TestService_DeleteSession_RemovesSessionAndMessages(t *testing.T) {
 	db := setupACPTestDB(t)
 	repo := repository.NewSessionRepository(db)
-	msgRepo := repository.NewMessageRepository(db)
+	msgDir := t.TempDir()
+	msgRepo := repository.NewMessageRepository(msgDir)
 	wsRepo := repository.NewWorkspaceRepository(db)
 	tempDir := filepath.Join(t.TempDir(), "keep-after-delete")
 	if err := os.MkdirAll(tempDir, 0o755); err != nil {
@@ -369,14 +378,14 @@ func TestService_DeleteSession_RemovesSessionAndMessages(t *testing.T) {
 	}
 
 	skills, commands, rules, subAgents := testDiscoveryConfig(t)
-	svc := NewService(db, config.WorkspaceConfig{DefaultMode: "external"}, skills, commands, rules, subAgents)
+	svc := NewService(db, msgDir, config.WorkspaceConfig{DefaultMode: "external"}, skills, commands, rules, subAgents)
 	if err := svc.DeleteSession(context.Background(), "delete-1"); err != nil {
 		t.Fatalf("DeleteSession 错误: %v", err)
 	}
 	if _, err := repo.FindByID(sess.ID); err == nil {
 		t.Error("期望会话记录已被删除")
 	}
-	msgs, _ := msgRepo.FindByDBSessionID(sess.ID)
+	msgs, _ := msgRepo.FindBySessionID("delete-1")
 	if len(msgs) != 0 {
 		t.Errorf("期望消息已删除，实际 %d 条", len(msgs))
 	}
@@ -412,7 +421,7 @@ func TestService_DeleteSession_KeepsPersistentWorkspace(t *testing.T) {
 		t.Fatalf("创建会话失败: %v", err)
 	}
 	skills, commands, rules, subAgents := testDiscoveryConfig(t)
-	svc := NewService(db, config.WorkspaceConfig{DefaultMode: "external"}, skills, commands, rules, subAgents)
+	svc := NewService(db, t.TempDir(), config.WorkspaceConfig{DefaultMode: "external"}, skills, commands, rules, subAgents)
 	if err := svc.DeleteSession(context.Background(), "delete-persist"); err != nil {
 		t.Fatalf("DeleteSession 错误: %v", err)
 	}
@@ -449,7 +458,7 @@ func TestService_DeleteSessionWithMessages_ReleasesRouteAndCaches(t *testing.T) 
 	}
 
 	skills, commands, rules, subAgents := testDiscoveryConfig(t)
-	svc := NewService(db, config.WorkspaceConfig{DefaultMode: "external"}, skills, commands, rules, subAgents)
+	svc := NewService(db, t.TempDir(), config.WorkspaceConfig{DefaultMode: "external"}, skills, commands, rules, subAgents)
 
 	// 模拟该会话已建立路由与缓存（与 detachSession 清理的字段一一对应）
 	poolKey := connectionKey(sess.AgentType, dir)
@@ -476,7 +485,7 @@ func TestService_DeleteSessionWithMessages_ReleasesRouteAndCaches(t *testing.T) 
 	}
 
 	// 消息与会话记录也应被删除
-	msgs, _ := svc.messages.FindByDBSessionID(sess.ID)
+	msgs, _ := svc.messages.FindBySessionID(sess.SessionID)
 	if len(msgs) != 0 {
 		t.Errorf("期望消息已删除，实际 %d 条", len(msgs))
 	}
@@ -520,7 +529,7 @@ func TestMsgBroadcaster_FanOut(t *testing.T) {
 func TestService_RecoverActiveSessions_InterruptsRunningTasks(t *testing.T) {
 	db := setupACPTestDB(t)
 	skills, commands, rules, subAgents := testDiscoveryConfig(t)
-	svc := NewService(db, config.WorkspaceConfig{DefaultMode: "external"}, skills, commands, rules, subAgents)
+	svc := NewService(db, t.TempDir(), config.WorkspaceConfig{DefaultMode: "external"}, skills, commands, rules, subAgents)
 
 	// 插入一个 running 状态的 running_task
 	taskRepo := repository.NewRunningTaskRepository(db)
@@ -588,6 +597,17 @@ func TestRunningTaskRepository_CRUD(t *testing.T) {
 	interrupted2, _ := repo.FindInterruptedByDBSessionID(10)
 	if len(interrupted2) != 0 {
 		t.Errorf("标记 done 后期望 0 个 interrupted，实际 %d", len(interrupted2))
+	}
+}
+
+func TestService_SetFailedTaskAutoRetryOnce(t *testing.T) {
+	svc := newTestService(t)
+	if !svc.failedTaskAutoRetryOnce {
+		t.Error("NewService 默认应开启失败自动重试")
+	}
+	svc.SetFailedTaskAutoRetryOnce(false)
+	if svc.failedTaskAutoRetryOnce {
+		t.Error("SetFailedTaskAutoRetryOnce(false) 后应为关闭")
 	}
 }
 

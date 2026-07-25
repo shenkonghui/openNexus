@@ -205,6 +205,16 @@ func (f *fakeSessionStore) UpdateTitle(dbSessionID uint, title string) error {
 	return errors.New("session not found")
 }
 
+func (f *fakeSessionStore) SetSessionYolo(dbSessionID uint, yolo bool) (*models.Session, error) {
+	for i := range f.sessions {
+		if f.sessions[i].ID == dbSessionID {
+			f.sessions[i].Yolo = yolo
+			return f.sessions[i], nil
+		}
+	}
+	return nil, errors.New("session not found")
+}
+
 func (f *fakeSessionStore) Prompt(_ context.Context, _, _ string) (<-chan models.Message, error) {
 	if f.promptErr != nil {
 		return nil, f.promptErr
@@ -240,7 +250,7 @@ func (f *fakeSessionStore) ResumeInterruptedTask(_ context.Context, _ uint) (<-c
 }
 
 // DeleteMessagesFromSequence 是会话回滚用的 stub，测试中不涉及真实消息删除。
-func (f *fakeSessionStore) DeleteMessagesFromSequence(_ uint, _ int) (int64, error) {
+func (f *fakeSessionStore) DeleteMessagesFromSequence(_ string, _ int) (int64, error) {
 	return 0, nil
 }
 
@@ -633,7 +643,10 @@ func (s *commandsFakeStore) SetConfigOption(_ context.Context, _, _, _ string) e
 }
 func (s *commandsFakeStore) SetSessionMode(_ context.Context, _, _ string) error { return nil }
 func (s *commandsFakeStore) RespondPermission(_, _, _ string, _ bool) error      { return nil }
-func (s *commandsFakeStore) UpdateTitle(_ uint, _ string) error                  { return nil }
+func (s *commandsFakeStore) UpdateTitle(_ uint, _ string) error { return nil }
+func (s *commandsFakeStore) SetSessionYolo(id uint, yolo bool) (*models.Session, error) {
+	return &models.Session{ID: id, Yolo: yolo}, nil
+}
 func (s *commandsFakeStore) Prompt(context.Context, string, string) (<-chan models.Message, error) {
 	return nil, nil
 }
@@ -647,7 +660,7 @@ func (s *commandsFakeStore) ListRunningDBSessionIDs(uint) ([]uint, error)       
 func (s *commandsFakeStore) ResumeInterruptedTask(context.Context, uint) (<-chan models.Message, error) {
 	return nil, nil
 }
-func (s *commandsFakeStore) DeleteMessagesFromSequence(uint, int) (int64, error) { return 0, nil }
+func (s *commandsFakeStore) DeleteMessagesFromSequence(string, int) (int64, error) { return 0, nil }
 func (s *commandsFakeStore) FindMessageByID(uint) (*models.Message, error)       { return nil, nil }
 
 func TestSessionHandler_Prompt_Empty(t *testing.T) {

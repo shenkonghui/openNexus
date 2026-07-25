@@ -1,4 +1,4 @@
-import { useState, useEffect, createContext, useContext, type ReactNode, type ComponentProps, type MouseEvent as ReactMouseEvent } from 'react'
+import { useState, useEffect, useRef, createContext, useContext, type ReactNode, type ComponentProps, type MouseEvent as ReactMouseEvent } from 'react'
 import { Link } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { PanelLeftOpen, PanelLeftClose, Menu, FolderTree } from 'lucide-react'
@@ -7,6 +7,8 @@ import FileExplorer from './FileExplorer'
 import WorkspaceFileEditor from './WorkspaceFileEditor'
 import StartupWarmup from './StartupWarmup'
 import { getWorkspace } from '../api/workspaces'
+import { getPermissionSettings, updatePermissionSettings } from '../api/permissions'
+import type { PermissionSettings } from '../types'
 import { useFileViewer } from '../context/FileViewerContext'
 import { newTaskUrl } from '../utils/routes'
 import NexusLogoIcon from './NexusLogoIcon'
@@ -36,12 +38,16 @@ function loadWidth(): number {
 }
 
 function loadView(): 'menu' | 'files' {
-  try { return localStorage.getItem(VIEW_KEY) === 'files' ? 'files' : 'menu' } catch { return 'menu' }
+  try {
+    const v = localStorage.getItem(VIEW_KEY)
+    if (v === 'menu' || v === 'files') return v
+  } catch { /* ignore */ }
+  return 'files'
 }
 
-/** 按任务模式给出侧栏默认视图：编码 → 文件，其余 → 菜单 */
-function preferredView(taskMode?: string): 'menu' | 'files' {
-  return taskMode === 'coding' ? 'files' : 'menu'
+/** 切换任务时侧栏默认视图：一律优先文件（手动点 Tab 仍可覆盖） */
+function preferredView(_taskMode?: string): 'menu' | 'files' {
+  return 'files'
 }
 
 interface SidebarContextValue {
@@ -73,7 +79,7 @@ export function SidebarToggleButton() {
 interface AppLayoutProps {
   // 透传给 SessionSidebar 的 props（onCollapse 由本组件自动注入，不可外部覆盖）
   sidebarProps: Omit<ComponentProps<typeof SessionSidebar>, 'onCollapse'>
-  /** 当前任务模式：变化时自动切换侧栏默认视图（编码→文件，其余→菜单）；手动点 Tab 仍可覆盖 */
+  /** 当前任务模式：变化时自动切到文件视图；手动点 Tab 仍可覆盖 */
   taskMode?: string
   children: ReactNode
 }
@@ -93,20 +99,68 @@ export default function AppLayout({ sidebarProps, taskMode, children }: AppLayou
   // 当前工作区 cwd，作为文件浏览器的根目录
   const [cwd, setCwd] = useState('')
   const workspaceId = sidebarProps.workspaceId
+  // 全局 YOLO（permissions.mode），侧栏左下角拨动开关
+  const [globalYolo, setGlobalYolo] = useState(false)
+  const [yoloBusy, setYoloBusy] = useState(false)
+  const permRef = useRef<PermissionSettings>({ mode: 'normal', allow: [], ask: [], deny: [] })
 
   // 仅当不存在内嵌文件面板（如编码模式 files 面板）时，才用主区域覆盖层显示文件
   const showOverlay = !!openFilePath && !hasEmbedded
+
+  // 加载全局 YOLO 状态
+  useEffect(() => {
+    let alive = true
+    getPermissionSettings()
+      .then((r) => {
+        if (!alive) return
+        permRef.current = {
+          mode: r.data.mode === 'yolo' ? 'yolo' : 'normal',
+          allow: r.data.allow || [],
+          ask: r.data.ask || [],
+          deny: r.data.deny || [],
+        }
+        setGlobalYolo(permRef.current.mode === 'yolo')
+      })
+      .catch(() => {})
+    return () => { alive = false }
+  }, [])
+
+  async function handleToggleGlobalYolo() {
+    if (yoloBusy) return
+    const next = !globalYolo
+    setYoloBusy(true)
+    setGlobalYolo(next) // 乐观更新
+    try {
+      const payload: PermissionSettings = {
+        ...permRef.current,
+        mode: next ? 'yolo' : 'normal',
+      }
+      const resp = await updatePermissionSettings(payload)
+      permRef.current = {
+        mode: resp.data.mode === 'yolo' ? 'yolo' : 'normal',
+        allow: resp.data.allow || [],
+        ask: resp.data.ask || [],
+        deny: resp.data.deny || [],
+      }
+      setGlobalYolo(permRef.current.mode === 'yolo')
+    } catch {
+      setGlobalYolo(!next) // 回滚
+    } finally {
+      setYoloBusy(false)
+    }
+  }
 
   // 持久化整体折叠状态，使各页面切换后保持一致
   useEffect(() => {
     try { localStorage.setItem(STORAGE_KEY, collapsed ? '1' : '0') } catch { /* ignore */ }
   }, [collapsed])
 
-  // 任务模式变化时自动切到对应默认视图；手动点 Tab 可临时覆盖，直到下次模式变化
+  // 任务模式或当前会话变化时自动切到文件视图；手动点 Tab 可临时覆盖
+  const currentSessionId = sidebarProps.currentId
   useEffect(() => {
-    if (taskMode == null) return
+    if (taskMode == null && currentSessionId == null) return
     setView(preferredView(taskMode))
-  }, [taskMode])
+  }, [taskMode, currentSessionId])
 
   // 持久化侧边栏视图（菜单/文件）
   useEffect(() => {
@@ -216,6 +270,21 @@ export default function AppLayout({ sidebarProps, taskMode, children }: AppLayou
                   <div className={styles.filesEmpty}>{t('sidebar.noWorkspace')}</div>
                 )}
               </div>
+            </div>
+            {/* 左下角全局 YOLO 拨动开关 */}
+            <div className={styles.yoloBar}>
+              <span className={`${styles.yoloLabel} ${globalYolo ? styles.yoloLabelOn : ''}`}>YOLO</span>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={globalYolo}
+                className={`${styles.yoloSwitch} ${globalYolo ? styles.yoloSwitchOn : ''}`}
+                onClick={handleToggleGlobalYolo}
+                disabled={yoloBusy}
+                title={t('sidebar.yoloHint')}
+              >
+                <span className={styles.yoloKnob} />
+              </button>
             </div>
           </div>
         )}

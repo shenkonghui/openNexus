@@ -17,6 +17,38 @@ const (
 	OrchTaskStatusInterrupt = "interrupt" // 服务重启时标记的中断态
 )
 
+// 编排任务优先级：p0 最高，p2 最低；缺省 p1。
+const (
+	OrchTaskPriorityP0 = "p0"
+	OrchTaskPriorityP1 = "p1"
+	OrchTaskPriorityP2 = "p2"
+)
+
+// NormalizeOrchTaskPriority 将优先级归一为 p0/p1/p2。
+// 兼容空值、大小写、数字字面量（0/1/2）与 P0/P1/P2；无法识别时回退 p1。
+func NormalizeOrchTaskPriority(priority string) string {
+	switch strings.ToLower(strings.TrimSpace(priority)) {
+	case OrchTaskPriorityP0, "0":
+		return OrchTaskPriorityP0
+	case OrchTaskPriorityP2, "2":
+		return OrchTaskPriorityP2
+	default:
+		return OrchTaskPriorityP1
+	}
+}
+
+// OrchTaskPriorityRank 返回调度排序权重（越小越优先）。
+func OrchTaskPriorityRank(priority string) int {
+	switch NormalizeOrchTaskPriority(priority) {
+	case OrchTaskPriorityP0:
+		return 0
+	case OrchTaskPriorityP2:
+		return 2
+	default:
+		return 1
+	}
+}
+
 // IsOrchTaskRunning 报告该状态是否属于"占用执行资源"的活跃态。
 func IsOrchTaskRunning(status string) bool {
 	switch status {
@@ -52,6 +84,8 @@ type OrchestrationTask struct {
 	Detail     string `json:"detail"`
 	AgentType  string `json:"agent_type"`
 	ModelValue string `json:"model_value,omitempty"`
+	// Priority 任务优先级：p0 / p1 / p2，缺省 p1。
+	Priority string `json:"priority,omitempty"`
 
 	// 运行时字段——执行后写回 tasks.json
 	SessionID    string     `json:"session_id,omitempty"`    // 落库的稳定 session UUID
@@ -84,12 +118,13 @@ func jsonScalarToString(raw json.RawMessage) (string, error) {
 	return s, nil
 }
 
-// UnmarshalJSON 兼容 AI 手写 tasks.json 时把 id / depends_on 元素写成数字（而非字符串）的情况，
+// UnmarshalJSON 兼容 AI 手写 tasks.json 时把 id / depends_on / priority 写成数字（而非字符串）的情况，
 // 将数字字面量原样转成字符串，避免「cannot unmarshal number into Go struct field ... of type string」。
 func (t *OrchestrationTask) UnmarshalJSON(data []byte) error {
 	type alias OrchestrationTask
 	aux := &struct {
 		ID        json.RawMessage   `json:"id"`
+		Priority  json.RawMessage   `json:"priority"`
 		DependsOn []json.RawMessage `json:"depends_on"`
 		*alias
 	}{alias: (*alias)(t)}
@@ -101,6 +136,13 @@ func (t *OrchestrationTask) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	t.ID = id
+	if len(aux.Priority) > 0 {
+		pri, err := jsonScalarToString(aux.Priority)
+		if err != nil {
+			return err
+		}
+		t.Priority = NormalizeOrchTaskPriority(pri)
+	}
 	if aux.DependsOn != nil {
 		t.DependsOn = make([]string, 0, len(aux.DependsOn))
 		for _, raw := range aux.DependsOn {
