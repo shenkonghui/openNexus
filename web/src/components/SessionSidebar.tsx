@@ -33,10 +33,11 @@ function loadCollapsed(): { favorites: boolean; manual: boolean; scheduled: bool
     const raw = localStorage.getItem(STORAGE_KEY)
     if (raw) {
       const parsed = JSON.parse(raw)
-      return { favorites: false, manual: false, scheduled: false, orchestration: true, footer: false, ...parsed }
+      // footer 每次进入都收起，把纵向空间留给任务列表；其余分组仍记忆折叠状态
+      return { favorites: false, manual: false, scheduled: false, orchestration: true, ...parsed, footer: true }
     }
   } catch { /* ignore */ }
-  return { favorites: false, manual: false, scheduled: false, orchestration: true, footer: false }
+  return { favorites: false, manual: false, scheduled: false, orchestration: true, footer: true }
 }
 
 function loadFavorites(): number[] {
@@ -86,6 +87,8 @@ export default function SessionSidebar({ sessions, workspaceId, currentId, onDel
   const { t } = useTranslation()
   const [editingId, setEditingId] = useState<number | null>(null)
   const [showLogs, setShowLogs] = useState(false)
+  // Agent 连接状态默认折叠，点 footer 按钮展开
+  const [showAgentStatus, setShowAgentStatus] = useState(false)
   const [editTitle, setEditTitle] = useState('')
   const location = useLocation()
   const navigate = useNavigate()
@@ -168,7 +171,12 @@ export default function SessionSidebar({ sessions, workspaceId, currentId, onDel
     .sort((a, b) => (a.last_run_at! < b.last_run_at! ? 1 : -1))[0]
 
   function toggleGroup(group: 'favorites' | 'manual' | 'scheduled' | 'orchestration' | 'footer') {
-    setCollapsed((prev) => ({ ...prev, [group]: !prev[group] }))
+    setCollapsed((prev) => {
+      const nextCollapsed = !prev[group]
+      // 收起 footer 时一并隐藏 Agent 状态，避免只剩状态条
+      if (group === 'footer' && nextCollapsed) setShowAgentStatus(false)
+      return { ...prev, [group]: nextCollapsed }
+    })
   }
 
   function toggleFavorite(id: number, e: React.MouseEvent) {
@@ -472,7 +480,7 @@ export default function SessionSidebar({ sessions, workspaceId, currentId, onDel
 
       </div>
 
-      {agentStatuses.length > 0 && (
+      {showAgentStatus && agentStatuses.length > 0 && (
         <div className={styles.agentStatus}>
           {agentStatuses.map((s) => {
             const statusLabel = s.status === 'connected' ? t('status.connected') : s.status === 'connecting' ? t('status.connecting') : t('status.disconnected')
@@ -515,6 +523,14 @@ export default function SessionSidebar({ sessions, workspaceId, currentId, onDel
                 onClick={() => setShowLogs((v) => !v)}
               >
                 <ScrollText size={15} />
+              </button>
+              <button
+                type="button"
+                className={`${styles.footerIcon} ${showAgentStatus ? styles.footerIconActive : ''}`}
+                title={t('status.agentStatus')}
+                onClick={() => setShowAgentStatus((v) => !v)}
+              >
+                <Zap size={15} />
               </button>
             </>
           )}

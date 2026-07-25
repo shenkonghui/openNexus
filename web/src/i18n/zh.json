@@ -531,7 +531,8 @@
     "error": "错误",
     "connected": "已连接",
     "connecting": "连接中",
-    "disconnected": "已断开"
+    "disconnected": "已断开",
+    "agentStatus": "Agent 连接状态"
   },
   "file": {
     "title": "文件",

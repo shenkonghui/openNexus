@@ -452,12 +452,6 @@ export default function OrchestrationView({ workspaceId, cwd, agents, restoreSes
                         </span>
                       </span>
                     </div>
-                    <div className={styles.taskMeta}>
-                      <span className={styles.metaItem}>{task.id}</span>
-                      {task.agent_type && <span className={styles.metaItem}>· {task.agent_type}</span>}
-                      {task.branch && <span className={styles.metaItem}>· 🌿 {task.branch}</span>}
-                      {task.model_value && <span className={styles.metaItem}>· 🤖 {task.model_value}</span>}
-                    </div>
                     {isOpen && (
                       <div className={styles.taskBody}>
                         <div className={styles.taskDetail}>{task.detail}</div>

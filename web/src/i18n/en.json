@@ -531,7 +531,8 @@
     "error": "Error",
     "connected": "Connected",
     "connecting": "Connecting",
-    "disconnected": "Disconnected"
+    "disconnected": "Disconnected",
+    "agentStatus": "Agent connection status"
   },
   "file": {
     "title": "File",

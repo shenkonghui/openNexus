@@ -45,9 +45,9 @@ function loadView(): 'menu' | 'files' {
   return 'files'
 }
 
-/** 切换任务时侧栏默认视图：一律优先文件（手动点 Tab 仍可覆盖） */
-function preferredView(_taskMode?: string): 'menu' | 'files' {
-  return 'files'
+/** 切换任务时侧栏默认视图：编排 → 菜单，其余 → 文件（手动点 Tab 仍可覆盖） */
+function preferredView(taskMode?: string): 'menu' | 'files' {
+  return taskMode === 'orchestration' ? 'menu' : 'files'
 }
 
 interface SidebarContextValue {
@@ -79,7 +79,7 @@ export function SidebarToggleButton() {
 interface AppLayoutProps {
   // 透传给 SessionSidebar 的 props（onCollapse 由本组件自动注入，不可外部覆盖）
   sidebarProps: Omit<ComponentProps<typeof SessionSidebar>, 'onCollapse'>
-  /** 当前任务模式：变化时自动切到文件视图；手动点 Tab 仍可覆盖 */
+  /** 当前任务模式：变化时自动切默认视图（编排→菜单，其余→文件）；手动点 Tab 仍可覆盖 */
   taskMode?: string
   children: ReactNode
 }
@@ -155,7 +155,7 @@ export default function AppLayout({ sidebarProps, taskMode, children }: AppLayou
     try { localStorage.setItem(STORAGE_KEY, collapsed ? '1' : '0') } catch { /* ignore */ }
   }, [collapsed])
 
-  // 任务模式或当前会话变化时自动切到文件视图；手动点 Tab 可临时覆盖
+  // 任务模式或当前会话变化时自动切默认视图；手动点 Tab 可临时覆盖
   const currentSessionId = sidebarProps.currentId
   useEffect(() => {
     if (taskMode == null && currentSessionId == null) return

@@ -1,6 +1,10 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
-import { createSession, updateSessionTitle, setConfigOption, listSkills, respondPermission, getSession, listMessages } from '../api/sessions'
+import {
+  createSession, updateSessionTitle, setConfigOption, setSessionMode,
+  listSkills, listModes, listCommands, listConfigOptions,
+  respondPermission, getSession, listMessages,
+} from '../api/sessions'
 import { setOrchParentSession, getOrchestration } from '../api/orchestration'
 import { probeAgentConfigs, listAgentCommands, listAgentModes } from '../api/agents'
 import { streamPrompt, isTimeoutError } from '../api/sse'
@@ -64,10 +68,12 @@ export default function OrchestrationChatPanel({
   const [conv, setConv] = useState<ConvState>('idle')
   const [error, setError] = useState('')
 
-  // 配置（复刻新建任务页的 probeConfigs：agent/模式/模型）
+  // 配置：无会话时用 probeConfigs；有会话时用 configOptions（会话级模型/模式等）
   const [selectedAgent, setSelectedAgent] = useState(defaultAgentType || agents[0]?.type || '')
   const [selectedModel, setSelectedModel] = useState('')
   const [probeConfigs, setProbeConfigs] = useState<ConfigOption[]>([])
+  const [configOptions, setConfigOptions] = useState<ConfigOption[]>([])
+  const [currentModeId, setCurrentModeId] = useState('')
   const [probing, setProbing] = useState(false)
   const [commands, setCommands] = useState<AgentCommand[]>([])
   const [modes, setModes] = useState<SessionMode[]>([])
@@ -143,9 +149,9 @@ export default function OrchestrationChatPanel({
     setPendingPermission(next)
   }, [session, pendingPermission])
 
-  // ===== agent 选中后探测配置/命令/模式/技能（复刻 ChatPage 新建页）=====
+  // ===== 无会话：按 agent 探测配置/命令/模式（复刻 ChatPage 新建页）=====
   useEffect(() => {
-    if (!selectedAgent || session) { setProbeConfigs([]); return }
+    if (!selectedAgent || session) return
     let alive = true
     setProbing(true)
     probeAgentConfigs(selectedAgent)
@@ -162,14 +168,35 @@ export default function OrchestrationChatPanel({
   }, [selectedAgent, session])
 
   useEffect(() => {
-    if (!selectedAgent || session) { setCommands([]); setModes([]); return }
+    if (!selectedAgent || session) return
     listAgentCommands(selectedAgent).then((r) => setCommands(r.data.commands || [])).catch(() => setCommands([]))
     listAgentModes(selectedAgent).then((r) => setModes(r.data.modes || [])).catch(() => setModes([]))
   }, [selectedAgent, session])
 
+  // ===== 有会话：拉取会话级 config/modes/commands/skills（否则配置栏只剩只读 Agent）=====
   useEffect(() => {
-    if (!session) { setSkills([]); return }
-    listSkills(session.id).then((r) => setSkills(r.data.skills || [])).catch(() => setSkills([]))
+    if (!session) {
+      setConfigOptions([])
+      setSkills([])
+      return
+    }
+    let alive = true
+    listConfigOptions(session.id).then((r) => {
+      if (!alive) return
+      const opts = r.data.config_options || []
+      setConfigOptions(opts)
+      const modelOpt = opts.find((o) => o.category === 'model')
+      if (modelOpt) setSelectedModel(modelOpt.current_value || '')
+    }).catch(() => { if (alive) setConfigOptions([]) })
+    listModes(session.id).then((r) => {
+      if (!alive) return
+      const modeList = r.data.modes || []
+      setModes(modeList)
+      if (modeList.length > 0) setCurrentModeId((prev) => prev || modeList[0].id)
+    }).catch(() => { if (alive) setModes([]) })
+    listCommands(session.id).then((r) => { if (alive) setCommands(r.data.commands || []) }).catch(() => { if (alive) setCommands([]) })
+    listSkills(session.id).then((r) => { if (alive) setSkills(r.data.skills || []) }).catch(() => { if (alive) setSkills([]) })
+    return () => { alive = false }
   }, [session])
 
   // 卸载清理
@@ -304,18 +331,29 @@ export default function OrchestrationChatPanel({
     commands,
     modes,
     skills,
-    currentModeId: probeConfigs.find((o) => o.category === 'mode')?.current_value || '',
+    currentModeId: session
+      ? currentModeId
+      : (probeConfigs.find((o) => o.category === 'mode')?.current_value || ''),
     onSetMode: (modeId: string) => {
+      if (session) {
+        setCurrentModeId(modeId)
+        setSessionMode(session.id, modeId).catch(() => {})
+        return
+      }
       setProbeConfigs((prev) => prev.map((o) => (o.category === 'mode' ? { ...o, current_value: modeId } : o)))
     },
-    configOptions: session ? [] : probeConfigs,
+    configOptions: session ? configOptions : probeConfigs,
     onSetConfigOption: (configId: string, value: string) => {
-      const opt = probeConfigs.find((o) => o.id === configId)
+      const opts = session ? configOptions : probeConfigs
+      const opt = opts.find((o) => o.id === configId)
+      if (session) {
+        setConfigOptions((prev) => prev.map((o) => (o.id === configId ? { ...o, current_value: value } : o)))
+        if (opt?.category === 'model') setSelectedModel(value)
+        setConfigOption(session.id, configId, value).catch(() => {})
+        return
+      }
       setProbeConfigs((prev) => prev.map((o) => (o.id === configId ? { ...o, current_value: value } : o)))
       if (opt?.category === 'model') setSelectedModel(value)
-      if (session) {
-        setConfigOption(session.id, configId, value).catch(() => {})
-      }
     },
     agents: agents.map((a) => ({ type: a.type, display_name: a.display_name })),
     selectedAgent,
