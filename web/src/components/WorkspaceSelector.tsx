@@ -11,9 +11,11 @@ interface Props {
   onChange: (id: number) => void
   onRefresh?: () => void
   onError?: (message: string) => void
+  /** sidebar：侧边栏底部形态，无边框占满宽度、下拉向上弹出 */
+  variant?: 'header' | 'sidebar'
 }
 
-export default function WorkspaceSelector({ value, onChange, onRefresh, onError }: Props) {
+export default function WorkspaceSelector({ value, onChange, onRefresh, onError, variant = 'header' }: Props) {
   const { t } = useTranslation()
   const [workspaces, setWorkspaces] = useState<(Workspace & { session_count?: number })[]>([])
   const [open, setOpen] = useState(false)
@@ -109,15 +111,15 @@ export default function WorkspaceSelector({ value, onChange, onRefresh, onError 
   }
 
   return (
-    <div className={styles.container} ref={ref}>
-      <button type="button" className={styles.trigger} onClick={() => setOpen((v) => !v)} title={t('workspace.title')}>
+    <div className={`${styles.container} ${variant === 'sidebar' ? styles.containerSidebar : ''}`} ref={ref}>
+      <button type="button" className={`${styles.trigger} ${variant === 'sidebar' ? styles.triggerSidebar : ''}`} onClick={() => setOpen((v) => !v)} title={t('workspace.title')}>
         <span className={styles.icon}>{current?.mode === 'temporary' ? <Clock size={14} /> : <Folder size={14} />}</span>
         <span className={styles.label}>{displayName(current?.name || t('workspace.default'))}</span>
         <span className={styles.arrow}>{open ? <ChevronUp size={12} /> : <ChevronDown size={12} />}</span>
       </button>
 
       {open && (
-        <div className={styles.dropdown}>
+        <div className={`${styles.dropdown} ${variant === 'sidebar' ? styles.dropdownUp : ''}`}>
           {workspaces.length === 0 ? (
             <div className={styles.item}><span className={styles.itemName}>{t('workspace.empty')}</span></div>
           ) : workspaces.map((ws) => (

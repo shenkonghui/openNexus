@@ -6,7 +6,6 @@ import { useCurrentWorkspace } from '../hooks/useCurrentWorkspace'
 import { listNotes, listNoteTags, createNote, updateNote, deleteNote, exportNotes, importNotes, classifyNoteNow } from '../api/notes'
 import type { Note } from '../types'
 import AppLayout, { SidebarToggleButton } from '../components/AppLayout'
-import UserMenu from '../components/UserMenu'
 import ErrorBanner from '../components/ErrorBanner'
 import LoadingSpinner from '../components/LoadingSpinner'
 import MarkdownContent from '../components/MarkdownContent'
@@ -286,7 +285,6 @@ export default function NotesPage() {
               style={{ display: 'none' }}
               onChange={(e) => handleImportFiles(e.target.files)}
             />
-            <UserMenu />
           </div>
         </header>
         {error && <ErrorBanner message={error} onClose={() => setError('')} />}

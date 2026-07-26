@@ -2,6 +2,12 @@
   position: relative;
 }
 
+/* 侧边栏 footer 变体：占满左侧剩余宽度 */
+.containerSidebar {
+  flex: 1;
+  min-width: 0;
+}
+
 .trigger {
   display: flex;
   align-items: center;
@@ -17,6 +23,24 @@
 .trigger:hover {
   background: var(--bg-hover);
   border-color: var(--border-strong);
+}
+
+/* 侧边栏 footer 触发器：无边框、靠左、名称加粗（参照桌面端底栏风格） */
+.triggerSidebar {
+  width: 100%;
+  border: none;
+  border-radius: 6px;
+  padding: 4px 6px;
+  gap: 8px;
+}
+
+.triggerSidebar:hover {
+  background: var(--bg-hover);
+  border-color: transparent;
+}
+
+.triggerSidebar .username {
+  font-weight: 600;
 }
 
 .avatar {
@@ -57,6 +81,14 @@
   box-shadow: var(--shadow-md);
   z-index: 100;
   overflow: hidden;
+}
+
+/* 向上弹出（侧边栏底部使用） */
+.dropdownUp {
+  top: auto;
+  bottom: calc(100% + 4px);
+  right: auto;
+  left: 0;
 }
 
 .menuItem {

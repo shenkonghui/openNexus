@@ -16,13 +16,14 @@ import (
 	"opennexus/internal/services"
 )
 
-func Setup(authSvc *services.AuthService, jwtSvc *services.JWTService, agentRouter *agent.Router, agentCfgH *handlers.AgentConfigHandler, registryH *handlers.RegistryHandler, schedTaskH *handlers.ScheduledTaskHandler, noteH *handlers.NoteHandler, taskSettingsH *handlers.TaskSettingsHandler, agentPrefsH *handlers.AgentPrefsHandler, configH *handlers.ConfigHandler, mcpH *handlers.MCPHandler, logH *handlers.LogHandler, debugH *handlers.DebugHandler, subAgentH *handlers.SubAgentHandler, orchH *handlers.OrchestrationHandler, permSettingsH *handlers.PermissionSettingsHandler, skillsCfg config.SkillsConfig, commandsCfg config.CommandsConfig, rulesCfg config.RulesConfig, subAgentsCfg config.SubAgentsConfig, mode, webDist string, autoLogin bool) *gin.Engine {
+func Setup(authSvc *services.AuthService, jwtSvc *services.JWTService, agentRouter *agent.Router, agentCfgH *handlers.AgentConfigHandler, registryH *handlers.RegistryHandler, schedTaskH *handlers.ScheduledTaskHandler, noteH *handlers.NoteHandler, taskSettingsH *handlers.TaskSettingsHandler, agentPrefsH *handlers.AgentPrefsHandler, configH *handlers.ConfigHandler, mcpH *handlers.MCPHandler, logH *handlers.LogHandler, debugH *handlers.DebugHandler, subAgentH *handlers.SubAgentHandler, orchH *handlers.OrchestrationHandler, permSettingsH *handlers.PermissionSettingsHandler, orchSvc *services.OrchestratorService, skillsCfg config.SkillsConfig, commandsCfg config.CommandsConfig, rulesCfg config.RulesConfig, subAgentsCfg config.SubAgentsConfig, mode, webDist string, autoLogin bool) *gin.Engine {
 	gin.SetMode(mode)
 	r := gin.New()
 	r.Use(gin.Recovery())
 
 	authHandler := handlers.NewAuthHandler(authSvc, autoLogin)
 	fsHandler := handlers.NewFileSystemHandler(skillsCfg, commandsCfg, rulesCfg, subAgentsCfg)
+	browserH := handlers.NewBrowserHandler()
 	// 把 FileSystemHandler 注入 ConfigHandler，使软重载能同时刷新两处扫描目录副本。
 	if configH != nil {
 		configH.SetFileSystemHandler(fsHandler)
@@ -72,9 +73,15 @@ func Setup(authSvc *services.AuthService, jwtSvc *services.JWTService, agentRout
 			}
 
 			sessionH := handlers.NewSessionHandler(agentRouter)
+			// 注入编排服务：新建会话首次发送 prompt 时同步登记到 tasks.json，
+			// 使"新建对话"与编排任务在 tasks.json 中统一可见。
+			if orchSvc != nil {
+				sessionH.SetTaskRegistrar(orchSvc)
+			}
 			protected.POST("/sessions", sessionH.Create)
 			protected.GET("/sessions", sessionH.List)
 			protected.GET("/sessions/running", sessionH.RunningSessions)
+			protected.GET("/sessions/latest", sessionH.LatestByWorkspace)
 			protected.GET("/sessions/:id", sessionH.Get)
 			protected.PUT("/sessions/:id/title", sessionH.UpdateTitle)
 			protected.PUT("/sessions/:id/yolo", sessionH.UpdateYolo)
@@ -135,6 +142,14 @@ func Setup(authSvc *services.AuthService, jwtSvc *services.JWTService, agentRout
 					configG.GET("/mcp", mcpH.GetMCPConfig)
 					configG.PUT("/mcp", mcpH.UpdateMCPConfig)
 					configG.GET("/mcp/status", mcpH.GetMCPStatus)
+					// MCP 聚合网关：状态查询与开关
+					configG.GET("/mcp/gateway", mcpH.GetGatewayStatus)
+					configG.POST("/mcp/gateway", mcpH.SetGatewayEnabled)
+					// 网关上游管理：禁用/启用/自定义 server
+					configG.POST("/mcp/gateway/upstreams/:name/disable", mcpH.DisableUpstream)
+					configG.POST("/mcp/gateway/upstreams/:name/enable", mcpH.EnableUpstream)
+					configG.POST("/mcp/gateway/custom-servers", mcpH.AddCustomServer)
+					configG.DELETE("/mcp/gateway/custom-servers/:name", mcpH.RemoveCustomServer)
 				}
 			}
 
@@ -153,6 +168,9 @@ func Setup(authSvc *services.AuthService, jwtSvc *services.JWTService, agentRout
 			protected.POST("/filesystem/create", fsHandler.CreateEntry)
 			protected.DELETE("/filesystem/entry", fsHandler.DeleteEntry)
 
+			// 内置浏览器：抓取网页并提取正文，供任务对话框引用
+			protected.GET("/browser/fetch", browserH.Fetch)
+
 			// 定时任务
 			sched := protected.Group("/scheduled-tasks")
 			{
@@ -165,7 +183,7 @@ func Setup(authSvc *services.AuthService, jwtSvc *services.JWTService, agentRout
 				sched.GET("/:id/executions", schedTaskH.Executions)
 			}
 
-			// 任务编排（基于 tasks.json + git worktree 隔离）
+			// 任务管理（基于 tasks.json + git worktree 隔离）
 			if orchH != nil {
 				orch := protected.Group("/orchestration")
 				{
@@ -177,7 +195,6 @@ func Setup(authSvc *services.AuthService, jwtSvc *services.JWTService, agentRout
 					orch.POST("/start", orchH.Start)
 					orch.POST("/stop", orchH.Stop)
 					orch.PUT("/max-parallel", orchH.SetMaxParallel)
-					orch.PUT("/parent-session", orchH.SetParentSession)
 					orch.POST("/tasks", orchH.UpsertTask)
 					orch.DELETE("/tasks/:task_id", orchH.DeleteTask)
 				}
@@ -218,7 +235,7 @@ func Setup(authSvc *services.AuthService, jwtSvc *services.JWTService, agentRout
 			protected.GET("/agent-prefs", agentPrefsH.Get)
 			protected.PATCH("/agent-prefs", agentPrefsH.Patch)
 
-			// Subagent 定义管理（主 agent 通过 opennexus-subagent MCP 调起）
+			// 内置 MCP 条目同步（token 生成后由前端触发）
 			if subAgentH != nil {
 				subAgentH.RegisterRoutes(protected)
 			}

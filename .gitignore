@@ -30,9 +30,14 @@ electron/out/
 config.yaml.bak
 
 # build artifacts (binaries)
-opennexus
-server
-registry.json
+# 锚定到根目录：否则 server 会匹配 cmd/server/、registry.json 会匹配 internal/acp/registry.json
+/opennexus
+/server
+/registry.json
+/gateway
+
+# ACP 报文实验产物（探针脚本与抓包数据）
+.acp-experiment/
 
 # git worktrees
 .worktrees/

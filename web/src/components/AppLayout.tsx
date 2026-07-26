@@ -1,11 +1,12 @@
 import { useState, useEffect, useRef, createContext, useContext, type ReactNode, type ComponentProps, type MouseEvent as ReactMouseEvent } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { PanelLeftOpen, PanelLeftClose, Menu, FolderTree } from 'lucide-react'
 import SessionSidebar from './SessionSidebar'
 import FileExplorer from './FileExplorer'
 import WorkspaceFileEditor from './WorkspaceFileEditor'
 import StartupWarmup from './StartupWarmup'
+import SettingsDialog, { parseSettingsTab } from './SettingsDialog'
 import { getWorkspace } from '../api/workspaces'
 import { getPermissionSettings, updatePermissionSettings } from '../api/permissions'
 import type { PermissionSettings } from '../types'
@@ -18,8 +19,6 @@ import styles from './AppLayout.module.css'
 const STORAGE_KEY = 'opennexus.sidebar.hidden'
 // 侧边栏宽度（可拖拽调整）
 const WIDTH_KEY = 'opennexus.sidebar.width'
-// 侧边栏视图：菜单 / 文件浏览器
-const VIEW_KEY = 'opennexus.sidebar.view'
 const DEFAULT_WIDTH = 240
 const MIN_WIDTH = 180
 const MAX_WIDTH = 520
@@ -35,19 +34,6 @@ function loadWidth(): number {
     if (!isNaN(n) && n >= MIN_WIDTH && n <= MAX_WIDTH) return n
   } catch { /* ignore */ }
   return DEFAULT_WIDTH
-}
-
-function loadView(): 'menu' | 'files' {
-  try {
-    const v = localStorage.getItem(VIEW_KEY)
-    if (v === 'menu' || v === 'files') return v
-  } catch { /* ignore */ }
-  return 'files'
-}
-
-/** 切换任务时侧栏默认视图：编排 → 菜单，其余 → 文件（手动点 Tab 仍可覆盖） */
-function preferredView(taskMode?: string): 'menu' | 'files' {
-  return taskMode === 'orchestration' ? 'menu' : 'files'
 }
 
 interface SidebarContextValue {
@@ -79,8 +65,6 @@ export function SidebarToggleButton() {
 interface AppLayoutProps {
   // 透传给 SessionSidebar 的 props（onCollapse 由本组件自动注入，不可外部覆盖）
   sidebarProps: Omit<ComponentProps<typeof SessionSidebar>, 'onCollapse'>
-  /** 当前任务模式：变化时自动切默认视图（编排→菜单，其余→文件）；手动点 Tab 仍可覆盖 */
-  taskMode?: string
   children: ReactNode
 }
 
@@ -88,17 +72,28 @@ interface AppLayoutProps {
  * 全局共享布局：统一渲染左侧侧边栏、管理折叠/展开状态与 ⌘B 快捷键。
  * 各页面通过 sidebarProps 透传数据/回调，children 即右侧主内容区。
  */
-export default function AppLayout({ sidebarProps, taskMode, children }: AppLayoutProps) {
+export default function AppLayout({ sidebarProps, children }: AppLayoutProps) {
   const { t } = useTranslation()
   const { openFilePath, openFile, closeFile, hasEmbedded } = useFileViewer()
   const [collapsed, setCollapsed] = useState(loadHidden)
   const [width, setWidth] = useState(loadWidth)
-  const [view, setView] = useState<'menu' | 'files'>(() =>
-    taskMode != null ? preferredView(taskMode) : loadView(),
-  )
+  // 侧栏视图永远以「菜单」为默认，手动切到文件仅在本次会话内有效（不持久化）
+  const [view, setView] = useState<'menu' | 'files'>('menu')
   // 当前工作区 cwd，作为文件浏览器的根目录
   const [cwd, setCwd] = useState('')
   const workspaceId = sidebarProps.workspaceId
+  // 设置弹窗：由 URL 参数 ?settings=1&settingsTab=xxx 控制，任何页面可打开且支持深链/后退关闭
+  const [searchParams, setSearchParams] = useSearchParams()
+  const settingsOpen = searchParams.has('settings')
+  const settingsTab = parseSettingsTab(searchParams.get('settingsTab'))
+
+  function closeSettings() {
+    const next = new URLSearchParams(searchParams)
+    next.delete('settings')
+    next.delete('settingsTab')
+    setSearchParams(next, { replace: true })
+  }
+
   // 全局 YOLO（permissions.mode），侧栏左下角拨动开关
   const [globalYolo, setGlobalYolo] = useState(false)
   const [yoloBusy, setYoloBusy] = useState(false)
@@ -154,18 +149,6 @@ export default function AppLayout({ sidebarProps, taskMode, children }: AppLayou
   useEffect(() => {
     try { localStorage.setItem(STORAGE_KEY, collapsed ? '1' : '0') } catch { /* ignore */ }
   }, [collapsed])
-
-  // 任务模式或当前会话变化时自动切默认视图；手动点 Tab 可临时覆盖
-  const currentSessionId = sidebarProps.currentId
-  useEffect(() => {
-    if (taskMode == null && currentSessionId == null) return
-    setView(preferredView(taskMode))
-  }, [taskMode, currentSessionId])
-
-  // 持久化侧边栏视图（菜单/文件）
-  useEffect(() => {
-    try { localStorage.setItem(VIEW_KEY, view) } catch { /* ignore */ }
-  }, [view])
 
   // 获取当前工作区 cwd，作为文件浏览器根目录；切换工作区时关闭已打开文件
   useEffect(() => {
@@ -302,6 +285,7 @@ export default function AppLayout({ sidebarProps, taskMode, children }: AppLayou
           )}
         </div>
       </div>
+      {settingsOpen && <SettingsDialog key={settingsTab} initialTab={settingsTab} onClose={closeSettings} />}
     </SidebarContext.Provider>
   )
 }

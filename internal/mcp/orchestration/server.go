@@ -1,17 +1,17 @@
-// Package orchestrationmcp 提供 opennexus-orchestration MCP server，让主 agent 通过 MCP 工具
+// Package orchestrationmcp 提供 opennexus-task MCP server，让主 agent 通过 MCP 工具
 // 管理工作区下的任务编排（tasks.json）：新增/更新/删除任务、启停任务、调整并发上限、列出现状。
 //
 // 编排任务持久化于工作区 cwd 下的 tasks.json，由调度器读取并基于 git worktree 隔离执行每个任务。
 // 本 server 从原 opennexus-subagent 抽离而来，作为独立 MCP server 对外暴露。
 //
 // 暴露 7 个工具：
-//   - create_orchestration_task：新增编排任务
-//   - update_orchestration_task：更新编排任务可编辑字段
-//   - delete_orchestration_task：删除编排任务
-//   - start_orchestration_task： 启动编排任务
-//   - stop_orchestration_task：  停止编排任务
-//   - set_orchestration_max_parallel：设置并发上限
-//   - list_orchestration_tasks： 列出编排任务现状
+//   - create_task：新增编排任务
+//   - update_task：更新编排任务可编辑字段
+//   - delete_task：删除编排任务
+//   - start_task： 启动编排任务
+//   - stop_task：  停止编排任务
+//   - set_max_parallel：设置并发上限
+//   - list_tasks： 列出编排任务现状
 //
 // 鉴权复用 opennexus-notes 的 Bearer token 体系（用户级共享一个 token）。
 package orchestrationmcp
@@ -68,14 +68,14 @@ func Handler(settings *repository.NoteSettingsRepository, prefsRepo *repository.
 }
 
 func newServer(prefsRepo *repository.UserAgentPrefsRepository, wsResolver WorkspaceResolver, orchCreator OrchestratorTaskCreator) *mcp.Server {
-	srv := mcp.NewServer(&mcp.Implementation{Name: "opennexus-orchestration", Version: "1.0.0"}, nil)
+	srv := mcp.NewServer(&mcp.Implementation{Name: "opennexus-task", Version: "1.0.0"}, nil)
 
 	// addToolSafe 注册单个工具，并 recover mcp.AddTool 的 panic。
 	//
 	// go-sdk 的 mcp.AddTool 在输入结构体 jsonschema tag 非法时会 panic（例如
 	// tag 形如 "x=1" 命中 "tag must not begin with 'WORD='" 规则）。若不兜底，
 	// 该 panic 会沿 StreamableHTTPHandler 冒泡成 HTTP 500，导致 MCP 客户端判定
-	// 整个 opennexus-orchestration server 连接失败、全部工具不可见。
+	// 整个 opennexus-task server 连接失败、全部工具不可见。
 	// 这里按工具粒度 recover：仅跳过出问题的那一个工具，server 仍可正常列出其余工具。
 	addTool := func(name string, register func()) {
 		defer func() {
@@ -86,63 +86,63 @@ func newServer(prefsRepo *repository.UserAgentPrefsRepository, wsResolver Worksp
 		register()
 	}
 
-	addTool("create_orchestration_task", func() {
+	addTool("create_task", func() {
 		mcp.AddTool(srv, &mcp.Tool{
-			Name:        "create_orchestration_task",
+			Name:        "create_task",
 			Description: "在当前工作区的任务编排（tasks.json）中新增一个编排任务。任务默认 status=pending、priority=p1，可由编排调度器启动（基于 git worktree 隔离执行）。这是管理编排任务的首选方式（结构化、自带校验），优先于手写 tasks.json。",
 		}, func(ctx context.Context, _ *mcp.CallToolRequest, in createOrchTaskIn) (*mcp.CallToolResult, createOrchTaskOut, error) {
 			return handleCreateOrchTask(ctx, prefsRepo, wsResolver, orchCreator, in)
 		})
 	})
 
-	addTool("update_orchestration_task", func() {
+	addTool("update_task", func() {
 		mcp.AddTool(srv, &mcp.Tool{
-			Name:        "update_orchestration_task",
+			Name:        "update_task",
 			Description: "更新编排任务的可编辑字段（title/detail/agent_type/model_value/priority/depends_on）。按 task_id 匹配；运行时字段（status/session_id/worktree 等）保持不变。",
 		}, func(ctx context.Context, _ *mcp.CallToolRequest, in updateOrchTaskIn) (*mcp.CallToolResult, updateOrchTaskOut, error) {
 			return handleUpdateOrchTask(ctx, prefsRepo, wsResolver, orchCreator, in)
 		})
 	})
 
-	addTool("delete_orchestration_task", func() {
+	addTool("delete_task", func() {
 		mcp.AddTool(srv, &mcp.Tool{
-			Name:        "delete_orchestration_task",
+			Name:        "delete_task",
 			Description: "按 task_id 删除编排任务。若任务正在运行会先停止并清理其 worktree。",
 		}, func(ctx context.Context, _ *mcp.CallToolRequest, in deleteOrchTaskIn) (*mcp.CallToolResult, deleteOrchTaskOut, error) {
 			return handleDeleteOrchTask(ctx, wsResolver, orchCreator, in)
 		})
 	})
 
-	addTool("start_orchestration_task", func() {
+	addTool("start_task", func() {
 		mcp.AddTool(srv, &mcp.Tool{
-			Name:        "start_orchestration_task",
+			Name:        "start_task",
 			Description: "启动编排任务。task_id 留空则启动全部待执行（pending/failed/canceled/interrupt）任务，否则仅启动指定任务。任务在其专属 git worktree 内执行。",
 		}, func(ctx context.Context, _ *mcp.CallToolRequest, in startOrchTaskIn) (*mcp.CallToolResult, startOrchTaskOut, error) {
 			return handleStartOrchTask(ctx, wsResolver, orchCreator, in)
 		})
 	})
 
-	addTool("stop_orchestration_task", func() {
+	addTool("stop_task", func() {
 		mcp.AddTool(srv, &mcp.Tool{
-			Name:        "stop_orchestration_task",
+			Name:        "stop_task",
 			Description: "停止编排任务。task_id 留空则停止全部运行中/排队中任务，否则仅停止指定任务。",
 		}, func(ctx context.Context, _ *mcp.CallToolRequest, in stopOrchTaskIn) (*mcp.CallToolResult, stopOrchTaskOut, error) {
 			return handleStopOrchTask(ctx, wsResolver, orchCreator, in)
 		})
 	})
 
-	addTool("set_orchestration_max_parallel", func() {
+	addTool("set_max_parallel", func() {
 		mcp.AddTool(srv, &mcp.Tool{
-			Name:        "set_orchestration_max_parallel",
+			Name:        "set_max_parallel",
 			Description: "设置编排并发上限 max_parallel（范围为 1~16，值为 1 时串行执行）。影响后续任务的并发调度。",
 		}, func(ctx context.Context, _ *mcp.CallToolRequest, in setOrchMaxParallelIn) (*mcp.CallToolResult, setOrchMaxParallelOut, error) {
 			return handleSetOrchMaxParallel(ctx, wsResolver, orchCreator, in)
 		})
 	})
 
-	addTool("list_orchestration_tasks", func() {
+	addTool("list_tasks", func() {
 		mcp.AddTool(srv, &mcp.Tool{
-			Name:        "list_orchestration_tasks",
+			Name:        "list_tasks",
 			Description: "列出当前工作区编排的所有任务（含 id/title/status/priority/agent_type/branch/cwd 等运行时状态），用于了解现状后再决定增删改或调度。",
 		}, func(ctx context.Context, _ *mcp.CallToolRequest, in listOrchTasksIn) (*mcp.CallToolResult, listOrchTasksOut, error) {
 			return handleListOrchTasks(ctx, wsResolver, orchCreator, in)
@@ -204,7 +204,7 @@ func resolveOrchCwd(ctx context.Context, wsResolver WorkspaceResolver, workspace
 	return uid, ws.ID, ws.Cwd, nil
 }
 
-// ====== create_orchestration_task ======
+// ====== create_task ======
 
 type createOrchTaskIn struct {
 	Title       string   `json:"title" jsonschema:"任务标题"`
@@ -266,7 +266,7 @@ func handleCreateOrchTask(ctx context.Context, prefsRepo *repository.UserAgentPr
 	return nil, createOrchTaskOut{TaskID: taskID, Title: title}, nil
 }
 
-// ====== update_orchestration_task ======
+// ====== update_task ======
 
 type updateOrchTaskIn struct {
 	TaskID      string   `json:"task_id" jsonschema:"要更新的任务 id"`
@@ -342,7 +342,7 @@ func handleUpdateOrchTask(ctx context.Context, prefsRepo *repository.UserAgentPr
 	return nil, updateOrchTaskOut{TaskID: taskID, Updated: true}, nil
 }
 
-// ====== delete_orchestration_task ======
+// ====== delete_task ======
 
 type deleteOrchTaskIn struct {
 	TaskID      string `json:"task_id" jsonschema:"要删除的任务 id"`
@@ -372,7 +372,7 @@ func handleDeleteOrchTask(ctx context.Context, wsResolver WorkspaceResolver, orc
 	return nil, deleteOrchTaskOut{TaskID: taskID, Deleted: true}, nil
 }
 
-// ====== start_orchestration_task ======
+// ====== start_task ======
 
 type startOrchTaskIn struct {
 	TaskID      string `json:"task_id,omitempty" jsonschema:"要启动的任务 id，留空则启动全部待执行任务"`
@@ -399,7 +399,7 @@ func handleStartOrchTask(ctx context.Context, wsResolver WorkspaceResolver, orch
 	return nil, startOrchTaskOut{Started: true, TaskID: taskID}, nil
 }
 
-// ====== stop_orchestration_task ======
+// ====== stop_task ======
 
 type stopOrchTaskIn struct {
 	TaskID      string `json:"task_id,omitempty" jsonschema:"要停止的任务 id，留空则停止全部运行中任务"`
@@ -426,7 +426,7 @@ func handleStopOrchTask(ctx context.Context, wsResolver WorkspaceResolver, orchC
 	return nil, stopOrchTaskOut{Stopped: true, TaskID: taskID}, nil
 }
 
-// ====== set_orchestration_max_parallel ======
+// ====== set_max_parallel ======
 
 type setOrchMaxParallelIn struct {
 	MaxParallel int  `json:"max_parallel" jsonschema:"并发上限，范围 1~16，值为 1 时串行执行"`
@@ -454,7 +454,7 @@ func handleSetOrchMaxParallel(ctx context.Context, wsResolver WorkspaceResolver,
 	return nil, setOrchMaxParallelOut{MaxParallel: in.MaxParallel}, nil
 }
 
-// ====== list_orchestration_tasks ======
+// ====== list_tasks ======
 
 type listOrchTasksIn struct {
 	WorkspaceID uint `json:"workspace_id,omitempty" jsonschema:"工作区 ID"`
@@ -501,4 +501,3 @@ func handleListOrchTasks(ctx context.Context, wsResolver WorkspaceResolver, orch
 	}
 	return nil, listOrchTasksOut{MaxParallel: def.MaxParallel, Tasks: tasks}, nil
 }
-

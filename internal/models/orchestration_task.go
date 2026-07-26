@@ -160,9 +160,6 @@ func (t *OrchestrationTask) UnmarshalJSON(data []byte) error {
 type OrchestrationDef struct {
 	MaxParallel int                 `json:"max_parallel"` // 并发上限，<=0 视为串行(=1)
 	Tasks       []OrchestrationTask `json:"tasks"`
-	// ParentSessionID 是编排管理会话的 DB 主键。编排任务执行时创建的会话作为其子会话
-	// （通过 Session.ParentSessionID 关联），形成上下级关系。由前端在创建编排管理会话后登记。
-	ParentSessionID *uint `json:"parent_session_id,omitempty"`
 }
 
 // DefaultMaxParallel 是新建编排时的默认并发上限。

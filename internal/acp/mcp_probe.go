@@ -148,6 +148,12 @@ func probeTimeout(typ string) time.Duration {
 	}
 }
 
+// BuildMCPTransport 按 entry 的 type 构造对应的 go-sdk Transport，供包外复用（如 MCP 聚合网关）。
+// 与探测共用同一套构造逻辑，保证网关连上游的行为与设置页"测试连接"完全一致。
+func BuildMCPTransport(e MCPServerEntry) (mcp.Transport, error) {
+	return buildTransport(e)
+}
+
 // buildTransport 按 entry 的 type 构造对应的 go-sdk Transport。
 func buildTransport(e MCPServerEntry) (mcp.Transport, error) {
 	switch e.Type {

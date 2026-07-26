@@ -13,26 +13,23 @@ import (
 	"opennexus/internal/repository"
 )
 
-// SubAgentMCPName 是 subagent MCP server 在 mcp.json 中的条目名。
-const SubAgentMCPName = "opennexus-subagent"
+// legacyMCPNames 列出已下线的内置 MCP server 条目名，同步时从 mcp.json 清理残留。
+// opennexus-subagent 已删除（run_subagent 与原生 subagent 重叠，会话类工具并入编排体系）。
+var legacyMCPNames = []string{"opennexus-subagent"}
 
-// OrchestrationMCPName 是 orchestration MCP server 在 mcp.json 中的条目名。
-// 编排工具已从 opennexus-subagent 抽离为独立 server，需单独同步。
-const OrchestrationMCPName = "opennexus-orchestration"
+// OrchestrationMCPName 是 task MCP server 在 mcp.json 中的条目名。
+// 注：server 名为 opennexus-task（去 orchestration 概念），HTTP 路由仍为 /mcp/orchestration。
+const OrchestrationMCPName = "opennexus-task"
 
 // builtinMCPServers 列出需要同步到 mcp.json 的内置 MCP server 及其挂载路径。
 var builtinMCPServers = []struct {
 	Name string
 	Path string
 }{
-	{SubAgentMCPName, "/mcp/subagent"},
 	{OrchestrationMCPName, "/mcp/orchestration"},
 }
 
-// SubAgentHandler 负责 subagent MCP 条目的同步自愈。
-//
-// subagent 的定义本身来自 markdown 文件（由 acp.ScanSubAgents 扫描，见 Service.ListSubAgents），
-// 此处仅保留"把 opennexus-subagent 条目写入全局 mcp.json"的逻辑，让主 agent 会话能发现该 MCP server。
+// SubAgentHandler 负责内置 MCP 条目的同步自愈。
 type SubAgentHandler struct {
 	settingsRepo  *repository.NoteSettingsRepository
 	mcpConfigPath string
@@ -68,8 +65,8 @@ func (h *SubAgentHandler) currentUserID(c *gin.Context) (uint, bool) {
 
 // ====== MCP 配置同步 ======
 
-// SyncMCPServer 手动同步 opennexus-subagent 条目到 mcp.json（按当前用户 token）。
-// 该接口在 token 生成后由前端调用，确保 agent 会话能发现 subagent MCP server。
+// SyncMCPServer 手动同步内置 MCP 条目到 mcp.json（按当前用户 token）。
+// 该接口在 token 生成后由前端调用，确保 agent 会话能发现内置 MCP server。
 func (h *SubAgentHandler) SyncMCPServer(c *gin.Context) {
 	uid, ok := h.currentUserID(c)
 	if !ok {
@@ -88,12 +85,13 @@ func (h *SubAgentHandler) SyncMCPServer(c *gin.Context) {
 	Success(c, http.StatusOK, gin.H{"synced": true})
 }
 
-// syncSubagentMCPServer 把内置 MCP server（subagent + orchestration）条目写入全局 mcp.json。
+// syncSubagentMCPServer 把内置 MCP server 条目写入全局 mcp.json，并清理已下线条目的残留。
 // 写入失败返回 error（启动自愈场景调用方决定是否仅记日志）。
 func (h *SubAgentHandler) syncSubagentMCPServer(token string) error {
 	if h.mcpConfigPath == "" || h.publicBaseURL == "" || token == "" {
 		return errors.New("mcp 配置缺失：mcpConfigPath / publicBaseURL / token 任一为空")
 	}
+	h.removeLegacyMCPEntries()
 	for _, s := range builtinMCPServers {
 		entry := acp.MCPServerEntry{
 			Type:    acp.MCPTypeHTTP,
@@ -121,6 +119,7 @@ func (h *SubAgentHandler) SyncAllSubagentMCP() {
 	if len(list) == 0 {
 		return
 	}
+	h.removeLegacyMCPEntries()
 	token := strings.TrimSpace(list[0].McpToken)
 	for _, s := range builtinMCPServers {
 		want := acp.MCPServerEntry{
@@ -137,6 +136,21 @@ func (h *SubAgentHandler) SyncAllSubagentMCP() {
 			continue
 		}
 		log.Printf("已更新内置 MCP (%s) 到 %s", s.Name, h.mcpConfigPath)
+	}
+}
+
+// removeLegacyMCPEntries 从 mcp.json 清理已下线内置 MCP server 的残留条目，
+// 避免 agent 会话反复尝试连接已不存在的 endpoint。
+func (h *SubAgentHandler) removeLegacyMCPEntries() {
+	for _, name := range legacyMCPNames {
+		if h.findMCPEntry(name) == nil {
+			continue
+		}
+		if err := acp.RemoveMCPServerEntry(h.mcpConfigPath, name); err != nil {
+			log.Printf("清理已下线 MCP 条目 %s 失败: %v", name, err)
+			continue
+		}
+		log.Printf("已从 %s 清理下线的 MCP 条目: %s", h.mcpConfigPath, name)
 	}
 }
 

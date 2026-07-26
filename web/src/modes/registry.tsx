@@ -34,15 +34,8 @@ export const MODES: ModeDef[] = [
     layout: split('row', [
       // 左：AI 对话
       leaf('chat', 1),
-      // 右列：上文件、下标签组（终端/改动/调试，默认终端）
-      split(
-        'col',
-        [
-          leaf('files', 1.2),
-          tabs(['terminal', 'changes', 'debug'], 1, 'terminal'),
-        ],
-        1.3,
-      ),
+      // 右：合并为单一标签组
+      tabs(['files', 'terminal', 'changes', 'debug', 'browser'], 1.3, 'terminal'),
     ]),
   },
   {

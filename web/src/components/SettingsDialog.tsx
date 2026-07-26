@@ -1,8 +1,7 @@
-import { useState, useEffect } from 'react'
-import { useNavigate, useSearchParams, Link } from 'react-router-dom'
+import { useState, useEffect, type ReactNode } from 'react'
+import { Link } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
-import { useRequireAuth } from '../hooks/useRequireAuth'
-import { useCurrentWorkspace } from '../hooks/useCurrentWorkspace'
+import { X, SlidersHorizontal, Bot, Wrench, StickyNote, ListTodo, Shield, Monitor } from 'lucide-react'
 import { listAgentConfigs, updateAgentConfig, deleteAgentConfig, refreshRegistry, getRegistryDefault, updateAgentFromRegistry } from '../api/agentConfigs'
 import type { RegistryRefreshResult } from '../api/agentConfigs'
 import { listAgents, getAgentModels, probeAgentConfigs, clearAgentProbeCache } from '../api/agents'
@@ -12,21 +11,18 @@ import { getPermissionSettings, updatePermissionSettings } from '../api/permissi
 import { reloadProgram } from '../api/config'
 import { getAgentPrefs, patchAgentPrefs } from '../api/agentPrefs'
 import type { AgentConfig, Agent, ModelOption, ConfigOption, TaskSettings, PermissionSettings } from '../types'
-import { tasksUrl } from '../utils/routes'
 import { translateTag } from '../utils/tag'
 import { translatePrompt } from '../utils/defaultPrompts'
-import AppLayout, { SidebarToggleButton } from '../components/AppLayout'
-import EditAgentDialog, { type AgentFormPayload } from '../components/EditAgentDialog'
-import ConfigEditor from '../components/ConfigEditor'
-import UserMenu from '../components/UserMenu'
-import ErrorBanner from '../components/ErrorBanner'
-import LoadingSpinner from '../components/LoadingSpinner'
+import EditAgentDialog, { type AgentFormPayload } from './EditAgentDialog'
+import ConfigEditor from './ConfigEditor'
+import ErrorBanner from './ErrorBanner'
+import LoadingSpinner from './LoadingSpinner'
 import i18n from '../i18n'
-import styles from './SettingsPage.module.css'
+import styles from './SettingsDialog.module.css'
 
-type SettingsTab = 'language' | 'agent' | 'classify' | 'config' | 'task' | 'permission' | 'system'
+export type SettingsTab = 'language' | 'agent' | 'classify' | 'config' | 'task' | 'permission' | 'system'
 
-function parseSettingsTab(raw: string | null): SettingsTab {
+export function parseSettingsTab(raw: string | null): SettingsTab {
   if (raw === 'agent' || raw === 'classify' || raw === 'config' || raw === 'task' || raw === 'permission' || raw === 'system') return raw
   return 'language'
 }
@@ -57,20 +53,18 @@ function buildNoteMcpConfig(endpoint: string, token: string): string {
   }, null, 2)
 }
 
-export default function SettingsPage() {
-  const { t } = useTranslation()
-  const { user, loading: authLoading } = useRequireAuth()
-  const navigate = useNavigate()
-  const [searchParams, setSearchParams] = useSearchParams()
-  const tab = parseSettingsTab(searchParams.get('tab'))
+interface Props {
+  initialTab?: SettingsTab
+  onClose: () => void
+}
 
-  function setTab(next: SettingsTab) {
-    if (next === 'language') {
-      setSearchParams({})
-    } else {
-      setSearchParams({ tab: next })
-    }
-  }
+/**
+ * 全局设置弹窗：左侧分组图标导航 + 右侧内容区（参照桌面端设置弹窗风格）。
+ * 由 AppLayout 根据 URL 参数挂载，任何带侧边栏的页面都可打开。
+ */
+export default function SettingsDialog({ initialTab = 'language', onClose }: Props) {
+  const { t } = useTranslation()
+  const [tab, setTab] = useState<SettingsTab>(initialTab)
 
   const [configs, setConfigs] = useState<AgentConfig[]>([])
   const [configSearch, setConfigSearch] = useState('')
@@ -79,7 +73,6 @@ export default function SettingsPage() {
   const [updatingAgentId, setUpdatingAgentId] = useState<number | null>(null)
   const [agentUpdateMsg, setAgentUpdateMsg] = useState('')
   const [agents, setAgents] = useState<Agent[]>([])
-  const { workspaceId, sessions } = useCurrentWorkspace(!!user)
   const [defaultAgent, setDefaultAgent] = useState('')
   // 默认 agent 的默认模型（存入 agent-prefs 的 prefs[agent].model，新建任务时自动应用）
   const [defaultModel, setDefaultModel] = useState('')
@@ -122,7 +115,16 @@ export default function SettingsPage() {
   const noteMcpEndpoint = `${window.location.origin}/mcp/notes`
   const noteMcpConfig = noteMcpToken ? buildNoteMcpConfig(noteMcpEndpoint, noteMcpToken) : ''
 
-  useEffect(() => { if (user) loadData() }, [user])
+  useEffect(() => { loadData() }, [])
+
+  // Esc 关闭弹窗（编辑子弹窗打开时优先让子弹窗处理）
+  useEffect(() => {
+    function handleKey(e: KeyboardEvent) {
+      if (e.key === 'Escape' && !editingConfig) onClose()
+    }
+    document.addEventListener('keydown', handleKey)
+    return () => document.removeEventListener('keydown', handleKey)
+  }, [editingConfig, onClose])
 
   useEffect(() => {
     if (tab !== 'classify' || !noteAgent) {
@@ -532,72 +534,70 @@ export default function SettingsPage() {
     localStorage.setItem('opennexus-lang', lang)
   }
 
-  if (authLoading) return <LoadingSpinner text={t('common.loading')} />
-  if (!user) return null
+  // 左侧导航：分组 + 图标，视觉参照桌面端设置弹窗
+  const navGroups: { label: string; items: { key: SettingsTab; icon: ReactNode; label: string }[] }[] = [
+    {
+      label: t('settings.groupGeneral'),
+      items: [
+        { key: 'language', icon: <SlidersHorizontal size={15} />, label: t('settings.tabLanguage') },
+        { key: 'system', icon: <Monitor size={15} />, label: t('settings.tabSystem') },
+      ],
+    },
+    {
+      label: t('settings.groupAgent'),
+      items: [
+        { key: 'agent', icon: <Bot size={15} />, label: t('settings.tabAgent') },
+        { key: 'config', icon: <Wrench size={15} />, label: t('settings.tabConfig') },
+        { key: 'permission', icon: <Shield size={15} />, label: t('settings.tabPermission') },
+      ],
+    },
+    {
+      label: t('settings.groupAutomation'),
+      items: [
+        { key: 'task', icon: <ListTodo size={15} />, label: t('settings.tabTask') },
+        { key: 'classify', icon: <StickyNote size={15} />, label: t('settings.tabClassify') },
+      ],
+    },
+  ]
+
+  const activeLabel = navGroups.flatMap((g) => g.items).find((i) => i.key === tab)?.label || t('settings.title')
 
   return (
-    <AppLayout sidebarProps={{ sessions, workspaceId }}>
-      <div className={styles.main}>
-        <div className={styles.header}>
-          <div className={styles.headerLeft}>
-            <SidebarToggleButton />
-            <h1 className={styles.title}>{t('settings.title')}</h1>
+    <div className={styles.overlay} onMouseDown={(e) => { if (e.target === e.currentTarget) onClose() }}>
+      <div className={styles.dialog} role="dialog" aria-modal="true" aria-label={t('settings.title')}>
+        <nav className={styles.nav}>
+          <div className={styles.navGroups}>
+            {navGroups.map((group) => (
+              <div key={group.label} className={styles.navGroup}>
+                <div className={styles.navGroupLabel}>{group.label}</div>
+                {group.items.map((item) => (
+                  <button
+                    key={item.key}
+                    type="button"
+                    className={`${styles.navItem} ${tab === item.key ? styles.navItemActive : ''}`}
+                    onClick={() => setTab(item.key)}
+                  >
+                    <span className={styles.navIcon}>{item.icon}</span>
+                    {item.label}
+                  </button>
+                ))}
+              </div>
+            ))}
           </div>
-          <UserMenu />
-        </div>
-        {error && <ErrorBanner message={error} onClose={() => setError('')} />}
-        {loading ? <LoadingSpinner /> : (
-          <div className={styles.body}>
-            <nav className={styles.settingsNav}>
-              <button
-                type="button"
-                className={`${styles.navItem} ${tab === 'language' ? styles.navItemActive : ''}`}
-                onClick={() => setTab('language')}
-              >
-                {t('settings.tabLanguage')}
-              </button>
-              <button
-                type="button"
-                className={`${styles.navItem} ${tab === 'agent' ? styles.navItemActive : ''}`}
-                onClick={() => setTab('agent')}
-              >
-                {t('settings.tabAgent')}
-              </button>
-              <button
-                type="button"
-                className={`${styles.navItem} ${tab === 'classify' ? styles.navItemActive : ''}`}
-                onClick={() => setTab('classify')}
-              >
-                {t('settings.tabClassify')}
-              </button>
-              <button
-                type="button"
-                className={`${styles.navItem} ${tab === 'config' ? styles.navItemActive : ''}`}
-                onClick={() => setTab('config')}
-              >
-                {t('settings.tabConfig')}
-              </button>
-              <button
-                type="button"
-                className={`${styles.navItem} ${tab === 'task' ? styles.navItemActive : ''}`}
-                onClick={() => setTab('task')}
-              >
-                {t('settings.tabTask')}
-              </button>
-              <button
-                type="button"
-                className={`${styles.navItem} ${tab === 'permission' ? styles.navItemActive : ''}`}
-                onClick={() => setTab('permission')}
-              >
-                {t('settings.tabPermission')}
-              </button>
-              <button type="button"
-                className={`${styles.navItem} ${tab === 'system' ? styles.navItemActive : ''}`}
-                onClick={() => setTab('system')}
-              >
-                {t('settings.tabSystem')}
-              </button>
-            </nav>
+          <div className={styles.navFooter}>
+            <div className={styles.appName}>openNexus</div>
+          </div>
+        </nav>
+
+        <div className={styles.contentWrap}>
+          <div className={styles.contentHeader}>
+            <h2 className={styles.contentTitle}>{activeLabel}</h2>
+            <button type="button" className={styles.closeBtn} onClick={onClose} title={t('common.close')}>
+              <X size={18} />
+            </button>
+          </div>
+          {error && <ErrorBanner message={error} onClose={() => setError('')} />}
+          {loading ? <LoadingSpinner /> : (
             <div className={styles.content}>
               {tab === 'language' && (
                 <>
@@ -833,7 +833,7 @@ export default function SettingsPage() {
                       {noteSettingsSaving ? t('notes.saving') : t('common.save')}
                     </button>
                     {noteClassifySessionId > 0 && (
-                      <Link className={styles.classifyTaskLink} to={`/sessions/${noteClassifySessionId}`}>
+                      <Link className={styles.classifyTaskLink} to={`/sessions/${noteClassifySessionId}`} onClick={onClose}>
                         {t('settings.viewClassifyTask')}
                       </Link>
                     )}
@@ -1076,11 +1076,9 @@ export default function SettingsPage() {
                   </div>
                 </>
               )}
-
-              <button className={styles.backBtn} type="button" onClick={() => navigate(tasksUrl(workspaceId))}>{t('common.back')}</button>
             </div>
-          </div>
-        )}
+          )}
+        </div>
       </div>
 
       {editingConfig && (
@@ -1101,6 +1099,6 @@ export default function SettingsPage() {
           }}
         />
       )}
-    </AppLayout>
+    </div>
   )
 }

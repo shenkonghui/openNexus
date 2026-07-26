@@ -17,8 +17,6 @@ import { parsePermissionRequest } from '../utils/permission'
 import AppLayout, { SidebarToggleButton } from '../components/AppLayout'
 import ErrorBanner from '../components/ErrorBanner'
 import LoadingSpinner from '../components/LoadingSpinner'
-import UserMenu from '../components/UserMenu'
-import WorkspaceSelector from '../components/WorkspaceSelector'
 import { type ConvState as ConvStatusState } from '../components/ConvStatusBar'
 import TaskModeSwitch, { type TaskMode } from '../components/TaskModeSwitch'
 import OrchestrationView from '../components/OrchestrationView'
@@ -102,7 +100,7 @@ export default function ChatPage() {
     localStorage.setItem(LEFT_PANELS_HIDDEN_KEY, leftHidden ? '1' : '0')
   }, [leftHidden])
   const sidePanelsByMode: Record<string, string[]> = {
-    coding: ['files', 'terminal', 'changes', 'debug'],
+    coding: ['files', 'terminal', 'changes', 'debug', 'browser'],
     docs: ['doc-preview'],
   }
   const sidePanels = sidePanelsByMode[taskMode]
@@ -1389,7 +1387,7 @@ export default function ChatPage() {
   // 以路径为准：同实例从会话页切到 /orchestration 时 taskMode 可能尚未同步，不能只看 state。
   if (isOrchestrationPath(location.pathname)) {
     return (
-      <AppLayout taskMode="orchestration" sidebarProps={{ sessions, workspaceId, onDelete: handleDeleteSession, onRename: handleRenameSession }}>
+      <AppLayout sidebarProps={{ sessions, workspaceId, onDelete: handleDeleteSession, onRename: handleRenameSession, onWorkspaceChange: handleWorkspaceChange, onWorkspaceRefresh: handleWorkspaceRefresh }}>
         <div className={styles.main}>
           <div className={styles.header}>
             <div className={styles.sysBar}>
@@ -1397,8 +1395,6 @@ export default function ChatPage() {
               {/* 编排是侧边栏独立页，不是任务类型；顶栏显示页标题，不走 TaskModeSwitch */}
               <span className={styles.agentType}>{t('nav.orchestration')}</span>
               <div className={styles.actions}>
-                <WorkspaceSelector value={workspaceId} onChange={handleWorkspaceChange} onRefresh={handleWorkspaceRefresh} onError={setError} />
-                <UserMenu />
               </div>
             </div>
           </div>
@@ -1540,7 +1536,7 @@ export default function ChatPage() {
         }
 
     return (
-      <AppLayout taskMode={taskMode} sidebarProps={{ sessions, workspaceId, currentId: sessionId, onDelete: handleDeleteSession, onRename: handleRenameSession }}>
+      <AppLayout sidebarProps={{ sessions, workspaceId, currentId: sessionId, onDelete: handleDeleteSession, onRename: handleRenameSession, onWorkspaceChange: handleWorkspaceChange, onWorkspaceRefresh: handleWorkspaceRefresh }}>
         <div className={styles.main}>
           <div className={styles.header}>
             <div className={styles.sysBar}>
@@ -1551,8 +1547,8 @@ export default function ChatPage() {
                 onChange={handleTaskModeChange}
                 disabled={hasSession}
               />
-              <div className={styles.actions}>
-                {canTogglePanels && (
+              {canTogglePanels && (
+                <div className={styles.centerToggle}>
                   <button
                     type="button"
                     className={styles.iconBtn}
@@ -1561,7 +1557,9 @@ export default function ChatPage() {
                   >
                     {leftHidden ? <PanelRightOpen size={16} /> : <PanelRightClose size={16} />}
                   </button>
-                )}
+                </div>
+              )}
+              <div className={styles.actions}>
                 <button
                   type="button"
                   className={`${styles.yoloBtn} ${yoloEnabled ? styles.yoloBtnOn : ''}`}
@@ -1572,7 +1570,6 @@ export default function ChatPage() {
                   <Zap size={14} />
                   {yoloEnabled ? t('session.yoloOn') : t('session.yoloOff')}
                 </button>
-                <WorkspaceSelector value={workspaceId} onChange={handleWorkspaceChange} onRefresh={handleWorkspaceRefresh} onError={setError} />
                 <button
                   type="button"
                   className={styles.newTaskBtn}
@@ -1581,7 +1578,6 @@ export default function ChatPage() {
                 >
                   <Plus size={16} />
                 </button>
-                <UserMenu />
               </div>
             </div>
           </div>
@@ -1607,7 +1603,7 @@ export default function ChatPage() {
                   onClick={() => handleResumeInterruptedTask(task.id)}
                   title={task.prompt}
                 >
-                  {t('session.resume', { defaultValue: '重发' })}: {task.prompt.slice(0, 40)}{task.prompt.length > 40 ? '...' : ''}
+                  {t('session.resendInterrupted', { defaultValue: '重发' })}: {task.prompt.slice(0, 40)}{task.prompt.length > 40 ? '...' : ''}
                 </button>
               ))}
             </div>
@@ -1703,14 +1699,14 @@ export default function ChatPage() {
       // 任务列表页不再展示历史列表：数据就绪后由 effect 自动跳转（最近任务 → 会话详情；无任务 → 新建任务页）。
       // 跳转完成前渲染加载占位，避免闪烁历史列表。
       return (
-        <AppLayout taskMode={taskMode} sidebarProps={{ sessions, workspaceId, onDelete: handleDeleteSession, onRename: handleRenameSession }}>
+        <AppLayout sidebarProps={{ sessions, workspaceId, onDelete: handleDeleteSession, onRename: handleRenameSession, onWorkspaceChange: handleWorkspaceChange, onWorkspaceRefresh: handleWorkspaceRefresh }}>
           <LoadingSpinner text={t('common.loading')} />
         </AppLayout>
       )
     }
 
     return (
-      <AppLayout taskMode={taskMode} sidebarProps={{ sessions, workspaceId, onDelete: handleDeleteSession, onRename: handleRenameSession }}>
+      <AppLayout sidebarProps={{ sessions, workspaceId, onDelete: handleDeleteSession, onRename: handleRenameSession, onWorkspaceChange: handleWorkspaceChange, onWorkspaceRefresh: handleWorkspaceRefresh }}>
         <div className={styles.main}>
           <div className={`${styles.header} ${styles.headerSingle}`}>
             <div className={styles.sessionInfo}>
@@ -1718,8 +1714,8 @@ export default function ChatPage() {
               {/* 新建任务可选编码/文档；编排走侧边栏「任务编排」 */}
               <TaskModeSwitch value={taskMode} onChange={handleTaskModeChange} />
             </div>
-            <div className={styles.actions}>
-              {canTogglePanels && (
+            {canTogglePanels && (
+              <div className={styles.centerToggle}>
                 <button
                   type="button"
                   className={styles.iconBtn}
@@ -1728,7 +1724,9 @@ export default function ChatPage() {
                 >
                   {leftHidden ? <PanelRightOpen size={16} /> : <PanelRightClose size={16} />}
                 </button>
-              )}
+              </div>
+            )}
+            <div className={styles.actions}>
               <button
                 type="button"
                 className={`${styles.yoloBtn} ${yoloEnabled ? styles.yoloBtnOn : ''}`}
@@ -1739,9 +1737,7 @@ export default function ChatPage() {
                 <Zap size={14} />
                 {yoloEnabled ? t('session.yoloOn') : t('session.yoloOff')}
               </button>
-              <WorkspaceSelector value={workspaceId} onChange={handleWorkspaceChange} onRefresh={handleWorkspaceRefresh} onError={setError} />
               <button type="button" className={styles.newTaskBtn} onClick={() => navigate(newTaskUrl(workspaceId))} title={t('session.newSession')}><Plus size={16} /></button>
-              <UserMenu />
             </div>
           </div>
 

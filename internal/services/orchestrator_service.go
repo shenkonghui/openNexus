@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -32,17 +33,16 @@ type OrchestratorExecutor interface {
 type OrchestratorService struct {
 	exec OrchestratorExecutor
 
-	mu       sync.Mutex            // 保护 defs/运行态
-	runs     map[string]*orchRun   // cwd -> 运行态（含信号量、cancel）
-	taskCtx  map[string]context.CancelFunc // cwd:taskID -> 取消函数
+	mu      sync.Mutex                    // 保护 defs/运行态
+	runs    map[string]*orchRun           // cwd -> 运行态（含信号量、cancel）
+	taskCtx map[string]context.CancelFunc // cwd:taskID -> 取消函数
 }
 
 type orchRun struct {
-	cwd        string
+	cwd         string
 	maxParallel int
-	sem         chan struct{}      // 并发槽位
-	wg          sync.WaitGroup     // 等待所有任务结束
-	parentSessionID *uint          // 编排管理会话 DB 主键，供子任务关联父会话
+	sem         chan struct{}  // 并发槽位
+	wg          sync.WaitGroup // 等待所有任务结束
 }
 
 // tasksFileName 是 cwd 下编排定义文件名。
@@ -208,9 +208,9 @@ func (s *OrchestratorService) DeleteTask(cwd, taskID string) error {
 		return err
 	}
 	var (
-		idx     = -1
-		wtPath  string
-		branch  string
+		idx    = -1
+		wtPath string
+		branch string
 	)
 	for i := range def.Tasks {
 		if def.Tasks[i].ID == taskID {
@@ -260,20 +260,6 @@ func (s *OrchestratorService) SetMaxParallel(cwd string, maxParallel int) error 
 	return s.Save(cwd, def)
 }
 
-// SetParentSession 登记编排管理会话的 DB 主键到 tasks.json，供后续任务执行时
-// 将其创建的子会话关联到该父会话（Session.ParentSessionID）。
-func (s *OrchestratorService) SetParentSession(cwd string, sessionID uint) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	def, err := s.Load(cwd)
-	if err != nil {
-		return err
-	}
-	id := sessionID
-	def.ParentSessionID = &id
-	return s.Save(cwd, def)
-}
-
 // Start 启动任务。taskID 为空时启动全部 pending/failed/canceled/interrupt 任务，
 // 否则仅启动指定任务。已在运行的不会重复启动。
 func (s *OrchestratorService) Start(ctx context.Context, cwd string, workspaceID uint, userID uint, taskID string) error {
@@ -299,7 +285,6 @@ func (s *OrchestratorService) Start(ctx context.Context, cwd string, workspaceID
 		run = &orchRun{cwd: cwd, maxParallel: maxParallel, sem: make(chan struct{}, maxParallel)}
 		s.runs[cwd] = run
 	}
-	run.parentSessionID = def.ParentSessionID
 	s.mu.Unlock()
 
 	// 收集待启动任务
@@ -384,7 +369,7 @@ func (s *OrchestratorService) runTask(run *orchRun, t *models.OrchestrationTask,
 		task.Error = ""
 	})
 
-	result, runErr := s.executeTask(ctx, run.cwd, t, workspaceID, userID, run.parentSessionID)
+	result, runErr := s.executeTask(ctx, run.cwd, t, workspaceID, userID)
 
 	fin := time.Now()
 	s.updateTask(run.cwd, t.ID, func(task *models.OrchestrationTask) {
@@ -409,7 +394,7 @@ func (s *OrchestratorService) runTask(run *orchRun, t *models.OrchestrationTask,
 }
 
 // executeTask 创建 worktree 并调用 RunSessionTask 执行任务。
-func (s *OrchestratorService) executeTask(ctx context.Context, cwd string, t *models.OrchestrationTask, workspaceID, userID uint, parentSessionID *uint) (acp.SessionTaskResult, error) {
+func (s *OrchestratorService) executeTask(ctx context.Context, cwd string, t *models.OrchestrationTask, workspaceID, userID uint) (acp.SessionTaskResult, error) {
 	// 解析仓库根（worktree add 需在公共 git 仓库下执行）
 	repoRoot := cwd
 	if root, err := acp.GitRoot(cwd); err == nil {
@@ -439,18 +424,11 @@ func (s *OrchestratorService) executeTask(ctx context.Context, cwd string, t *mo
 		task.WorktreePath = wtPath
 	})
 
-	// 解析 agent 类型：任务未指定时优先继承父编排会话的 agent，其次回退到首个已注册 agent。
-	// 直接把空 agent_type 传给 RunSessionTask 会因 GetBackend 失败而报“agent 类型未注册”。
+	// 解析 agent 类型：任务未指定时回退到首个已注册 agent。
+	// 直接把空 agent_type 传给 RunSessionTask 会因 GetBackend 失败而报"agent 类型未注册"。
 	agentType := t.AgentType
 	if agentType == "" {
-		if parentSessionID != nil {
-			if ps, err := s.exec.GetSessionByDBID(*parentSessionID); err == nil && ps != nil {
-				agentType = ps.AgentType
-			}
-		}
-		if agentType == "" {
-			agentType = s.exec.DefaultAgentType()
-		}
+		agentType = s.exec.DefaultAgentType()
 		// 回写解析结果，使 UI 显示实际使用的 agent，并让后续重跑保持一致。
 		if agentType != "" {
 			resolved := agentType
@@ -466,11 +444,9 @@ func (s *OrchestratorService) executeTask(ctx context.Context, cwd string, t *mo
 		Prompt:      t.Detail,
 		UserID:      userID,
 		WorkspaceID: workspaceID,
-		Source:      models.SessionSourceOrchestration,
+		Source:      models.SessionSourceManual,
 		// 任务在其专属 git worktree 内运行：用 worktree 路径覆盖工作区 cwd。
 		Cwd: wtPath,
-		// 关联编排管理会话为父会话，使各任务会话成为其子会话。
-		ParentSessionID: parentSessionID,
 		// 会话落库后立即回写 db_session_id/session_id，使前端启动后能马上导航到该会话
 		//（无需等 RunSessionTask 阻塞返回）。
 		OnSessionCreated: func(dbID uint, sid string) {
@@ -553,6 +529,74 @@ func (s *OrchestratorService) updateTask(cwd, taskID string, mutate func(*models
 	if err := s.Save(cwd, def); err != nil {
 		slog.Warn("updateTask 写回 tasks.json 失败", "cwd", cwd, "err", err)
 	}
+}
+
+// RegisterSessionTask 把一个已存在的会话作为任务登记到 cwd 下的 tasks.json。
+// 用于将"新建对话"与 tasks.json 强关联：用户手动新建会话首次发送 prompt 时调用，
+// 使所有任务/对话统一在 tasks.json 中可见，便于任务视图集中管理。
+//
+// 入参约束：
+//   - cwd 为空或 sess 为空时直接返回 nil（无操作）。
+//   - 仅 manual 会话登记；scheduled/classify 由各自引擎管理，不在此重复登记。
+//   - 子会话（ParentSessionID 非 nil，由 MCP 工具创建）不登记，避免重复。
+//
+// 去重：按 db_session_id 检查，若 tasks.json 已存在相同 db_session_id 的任务则跳过，
+// 避免重复发送导致重复条目。task.id 采用会话 DB 主键的字符串形式，
+// 与自定义字符串 id 命名空间基本不冲突。
+func (s *OrchestratorService) RegisterSessionTask(cwd string, sess *models.Session, prompt string) error {
+	if cwd == "" || sess == nil {
+		return nil
+	}
+	if sess.Source != models.SessionSourceManual {
+		return nil
+	}
+	if sess.ParentSessionID != nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	def, err := s.Load(cwd)
+	if err != nil {
+		return fmt.Errorf("加载 tasks.json: %w", err)
+	}
+	for i := range def.Tasks {
+		if existing := def.Tasks[i].DBSessionID; existing != nil && *existing == sess.ID {
+			return nil // 已登记，跳过
+		}
+	}
+	title := strings.TrimSpace(sess.Title)
+	if title == "" {
+		title = firstLine(prompt, 40)
+	}
+	now := time.Now()
+	dbID := sess.ID
+	task := models.OrchestrationTask{
+		ID:          strconv.FormatUint(uint64(sess.ID), 10),
+		Title:       title,
+		Detail:      prompt,
+		AgentType:   sess.AgentType,
+		ModelValue:  sess.ModelValue,
+		Priority:    models.OrchTaskPriorityP1,
+		Status:      models.OrchTaskStatusRunning,
+		SessionID:   sess.SessionID,
+		DBSessionID: &dbID,
+		StartedAt:   &now,
+	}
+	def.Tasks = append(def.Tasks, task)
+	return s.Save(cwd, def)
+}
+
+// firstLine 取 prompt 首行并截断到 maxLen 字符，用于任务标题兜底。
+func firstLine(prompt string, maxLen int) string {
+	s := strings.TrimSpace(prompt)
+	if idx := strings.IndexByte(s, '\n'); idx >= 0 {
+		s = s[:idx]
+	}
+	s = strings.TrimSpace(s)
+	if maxLen > 0 && len(s) > maxLen {
+		s = s[:maxLen]
+	}
+	return s
 }
 
 // RecoverAll 在服务启动时调用，将所有 cwd 的 running/queued 状态重置为 interrupt。

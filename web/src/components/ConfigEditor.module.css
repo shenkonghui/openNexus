@@ -556,3 +556,82 @@
   opacity: 0.6;
   cursor: not-allowed;
 }
+
+/* MCP 聚合网关：各 agent 原生配置片段 */
+.snippetBlock {
+  margin-top: 10px;
+  padding: 10px 12px;
+  background: var(--bg-muted);
+  border-radius: 4px;
+}
+
+.snippetHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.snippetLabel {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.snippetHint {
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: 'IBM Plex Mono', 'Monaco', 'Menlo', monospace;
+  word-break: break-all;
+}
+
+.snippetCode {
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 12px;
+  font-family: 'IBM Plex Mono', 'Monaco', 'Menlo', monospace;
+  color: var(--text-secondary);
+  overflow-x: auto;
+  white-space: pre;
+}
+
+/* 跳转卡片：把网关入口指向独立页面 */
+.linkCard {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  text-decoration: none;
+  color: inherit;
+  transition: border-color 0.15s, transform 0.15s;
+}
+
+.linkCard:hover {
+  border-color: var(--accent);
+  transform: translateY(-1px);
+}
+
+.linkCardBody {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.linkCardDesc {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin-top: 2px;
+}
+
+.linkCardArrow {
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}

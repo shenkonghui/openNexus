@@ -26,9 +26,9 @@ import (
 	"opennexus/internal/database"
 	"opennexus/internal/handlers"
 	"opennexus/internal/logging"
+	gatewaymcp "opennexus/internal/mcp/gateway"
 	notesmcp "opennexus/internal/mcp/notes"
 	orchestrationmcp "opennexus/internal/mcp/orchestration"
-	subagentmcp "opennexus/internal/mcp/subagent"
 	"opennexus/internal/models"
 	"opennexus/internal/repository"
 	"opennexus/internal/router"
@@ -89,6 +89,13 @@ func main() {
 	// 以及回收空闲超过阈值的 acp 连接。必须在 flag.Parse 之前拦截，避免与 server flag 冲突。
 	if len(os.Args) > 1 && os.Args[1] == "watchdog" {
 		runWatchdog()
+		return
+	}
+
+	// `opennexus mcp-bridge`：stdio MCP 桥子进程，把聚合网关桥接给
+	// 不支持 http mcpCapabilities 的 ACP agent（如 devin）。同样须在 flag.Parse 前拦截。
+	if len(os.Args) > 1 && os.Args[1] == "mcp-bridge" {
+		runMCPBridge()
 		return
 	}
 
@@ -281,32 +288,49 @@ func main() {
 	permSettingsH := handlers.NewPermissionSettingsHandler(cfgPath, agentRouter)
 
 	configH := handlers.NewConfigHandler(cfgPath, acpSvc)
-	mcpH := handlers.NewMCPHandler(cfg.Agents.MCP.ConfigPath)
+
+	// MCP 聚合网关：把全局 mcp.json 里的 http/sse 上游汇聚成单一 endpoint。
+	// 很多 ACP agent 不实现 session/new 的 mcpServers 参数，只能在其原生配置里手工配置；
+	// 有了网关，这种手工配置只需做一次，之后增删 MCP server 不必再改 agent 配置。
+	// 默认不主动启用（启用会改变所有会话的 MCP 注入方式），由设置页显式开启；
+	// 这里只做启动自愈：条目已存在时刷新其 url 与 token。
+	mcpGateway, err := gatewaymcp.New(cfg.Agents.MCP.ConfigPath, gatewaymcp.NewDBAuthenticator(noteSettingsRepo), "")
+	if err != nil {
+		log.Fatalf("创建 MCP 网关失败: %v", err)
+	}
+	mcpGateway.SetPublicBaseURL(publicBase)
+	mcpGateway.SyncEntry()
+	defer mcpGateway.Close()
+
+	// 默认启用网关：把网关 endpoint + 共享 token 注入 acpSvc，
+	// 此后所有会话的 MCP 注入自动走网关（http/sse 上游收敛），无需用户手动启用。
+	// 尚无任何 MCP Token 时 SharedToken 返回空，acpSvc 退回原行为（不注入网关）。
+	if gwToken := mcpGateway.SharedToken(); gwToken != "" {
+		acpSvc.SetGatewayEndpoint(mcpGateway.Endpoint(), gwToken)
+	}
+
+	mcpH := handlers.NewMCPHandler(cfg.Agents.MCP.ConfigPath, mcpGateway)
 
 	// 日志查看器：复用 logging 包在 Setup 时初始化的日志中心单例，
 	// 通过 SSE 把后端 slog 日志实时推送给前端。
 	logH := handlers.NewLogHandler(logging.DefaultHub())
 	debugH := handlers.NewDebugHandler(agentRouter, acpSvc.Debugger())
 
-	// Subagent：定义来自 markdown 文件（~/.agents/agents/*.md，由 Service 扫描），
-	// 供主 agent 通过 opennexus-subagent MCP 调起。这里仅负责 MCP 条目同步自愈。
+	// 内置 MCP（opennexus-task）条目同步自愈（复用笔记 token 体系）。
 	agentPrefsRepo := repository.NewUserAgentPrefsRepository(db)
 	subAgentH := handlers.NewSubAgentHandler(noteSettingsRepo, cfg.Agents.MCP.ConfigPath, publicBase)
-	// 启动自愈：把 opennexus-subagent 条目同步到全局 mcp.json（复用笔记 token 体系）。
 	subAgentH.SyncAllSubagentMCP()
 
-	engine := router.Setup(authSvc, jwtSvc, agentRouter, agentCfgH, registryH, schedTaskH, noteH, taskSettingsH, agentPrefsH, configH, mcpH, logH, debugH, subAgentH, orchH, permSettingsH, cfg.Agents.Skills, cfg.Agents.Commands, cfg.Agents.Rules, cfg.Agents.SubAgents, cfg.Server.Mode, cfg.Server.WebDist, cfg.Auth.AutoLogin)
+	engine := router.Setup(authSvc, jwtSvc, agentRouter, agentCfgH, registryH, schedTaskH, noteH, taskSettingsH, agentPrefsH, configH, mcpH, logH, debugH, subAgentH, orchH, permSettingsH, orchestratorSvc, cfg.Agents.Skills, cfg.Agents.Commands, cfg.Agents.Rules, cfg.Agents.SubAgents, cfg.Server.Mode, cfg.Server.WebDist, cfg.Auth.AutoLogin)
 	engine.Any("/mcp/notes", gin.WrapH(notesmcp.Handler(noteRepo, noteSettingsRepo)))
 	engine.Any("/mcp/notes/*path", gin.WrapH(notesmcp.Handler(noteRepo, noteSettingsRepo)))
-	// subagent MCP server：主 agent 通过 tools/call 调起预定义的 subagent，或创建/运行持久会话。
-	// 数据源是文件扫描（acpSvc.ListSubAgents）；agentPrefsRepo 用于解析"继承父 agent"（用户最近使用的 agent）。
-	// agentRouter 同时实现 SessionCreator/SessionTaskRunner/SessionLookup，支撑 create_session / run_session_task 工具。
-	engine.Any("/mcp/subagent", gin.WrapH(subagentmcp.Handler(acpSvc, noteSettingsRepo, agentPrefsRepo, agentRouter, agentRouter, agentRouter, agentRouter)))
-	engine.Any("/mcp/subagent/*path", gin.WrapH(subagentmcp.Handler(acpSvc, noteSettingsRepo, agentPrefsRepo, agentRouter, agentRouter, agentRouter, agentRouter)))
 	// orchestration MCP server：主 agent 通过 MCP 工具管理工作区任务编排（tasks.json）。
-	// 从原 opennexus-subagent 抽离而来；agentRouter 作为 WorkspaceResolver，orchestratorSvc 执行增删改与启停。
+	// agentRouter 作为 WorkspaceResolver，orchestratorSvc 执行增删改与启停。
 	engine.Any("/mcp/orchestration", gin.WrapH(orchestrationmcp.Handler(noteSettingsRepo, agentPrefsRepo, agentRouter, orchestratorSvc)))
 	engine.Any("/mcp/orchestration/*path", gin.WrapH(orchestrationmcp.Handler(noteSettingsRepo, agentPrefsRepo, agentRouter, orchestratorSvc)))
+	// 聚合网关的 MCP endpoint 本身（实例在上面创建，两条路由共享以复用上游连接池与工具缓存）。
+	engine.Any(gatewaymcp.GatewayPath, gin.WrapH(mcpGateway.Handler()))
+	engine.Any(gatewaymcp.GatewayPath+"/*path", gin.WrapH(mcpGateway.Handler()))
 
 	addr := fmt.Sprintf(":%d", cfg.Server.Port)
 	srv := &http.Server{Addr: addr, Handler: engine}

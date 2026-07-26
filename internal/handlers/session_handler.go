@@ -31,6 +31,9 @@ type SessionStore interface {
 	CreateSessionWithCwd(ctx context.Context, agentType string, workspaceID uint, userID uint, source, modelValue, cwd string) (*models.Session, error)
 	ListSessions(userID uint) ([]models.Session, error)
 	ListSessionsBySource(userID uint, source string) ([]models.Session, error)
+	// FindSessionsByWorkspaceID 返回指定 workspace 下的会话（按 created_at DESC）。
+	// 任务助手用它实现“一个工作区只复用最近一条管理会话”。
+	FindSessionsByWorkspaceID(workspaceID uint) ([]models.Session, error)
 	GetSessionByDBID(id uint) (*models.Session, error)
 	DeleteSession(ctx context.Context, sessionID string) error
 	CancelSession(ctx context.Context, sessionID string) error
@@ -71,14 +74,27 @@ type SessionStore interface {
 	ListRunningDBSessionIDs(userID uint) ([]uint, error)
 }
 
+// SessionTaskRegistrar 把新建会话登记到工作区 cwd 下的 tasks.json，
+// 使任务编排视图统一展示所有任务/对话。由 *services.OrchestratorService 实现。
+type SessionTaskRegistrar interface {
+	RegisterSessionTask(cwd string, sess *models.Session, prompt string) error
+}
+
 // SessionHandler 处理会话相关请求。
 type SessionHandler struct {
-	store SessionStore
+	store     SessionStore
+	registrar SessionTaskRegistrar
 }
 
 // NewSessionHandler 创建 SessionHandler。
 func NewSessionHandler(store SessionStore) *SessionHandler {
 	return &SessionHandler{store: store}
+}
+
+// SetTaskRegistrar 注入任务登记器，使新建会话首次发送 prompt 时同步写入 tasks.json。
+// 不调用此方法时，SessionHandler 行为与原先一致（不写 tasks.json）。
+func (h *SessionHandler) SetTaskRegistrar(r SessionTaskRegistrar) {
+	h.registrar = r
 }
 
 // currentUserID 从 context 读取中间件注入的 userID。
@@ -153,7 +169,7 @@ type createSessionRequest struct {
 	AgentType   string `json:"agent_type" binding:"required"`
 	WorkspaceID uint   `json:"workspace_id"`
 	ModelValue  string `json:"model_value"`
-	// Source 会话来源；仅允许 manual/orchestration，空=manual。
+	// Source 会话来源；仅允许 manual，空=manual。保留字段仅为前端兼容，不再有 orchestration 特殊分支。
 	Source string `json:"source"`
 	// Cwd 可选的自定义工作目录（如用户选择的已存在 worktree 目录）；空=跟随工作区 cwd。
 	Cwd string `json:"cwd"`
@@ -173,7 +189,6 @@ func (h *SessionHandler) Create(c *gin.Context) {
 		Fail(c, http.StatusUnauthorized, "UNAUTHORIZED", "未认证")
 		return
 	}
-	source := strings.TrimSpace(req.Source)
 	cwd := strings.TrimSpace(req.Cwd)
 	var sess *models.Session
 	var err error
@@ -185,12 +200,7 @@ func (h *SessionHandler) Create(c *gin.Context) {
 			Fail(c, http.StatusBadRequest, "CWD_NOT_FOUND", "目录不存在: "+cwd)
 			return
 		}
-		if source == "" {
-			source = models.SessionSourceManual
-		}
-		sess, err = h.store.CreateSessionWithCwd(c.Request.Context(), req.AgentType, req.WorkspaceID, uid, source, req.ModelValue, cwd)
-	case source == models.SessionSourceOrchestration:
-		sess, err = h.store.CreateSessionWithSource(c.Request.Context(), req.AgentType, req.WorkspaceID, uid, source, req.ModelValue)
+		sess, err = h.store.CreateSessionWithCwd(c.Request.Context(), req.AgentType, req.WorkspaceID, uid, models.SessionSourceManual, req.ModelValue, cwd)
 	default:
 		sess, err = h.store.CreateSession(c.Request.Context(), req.AgentType, req.WorkspaceID, uid, req.ModelValue)
 	}
@@ -245,6 +255,44 @@ func (h *SessionHandler) RunningSessions(c *gin.Context) {
 		return
 	}
 	Success(c, http.StatusOK, gin.H{"db_session_ids": ids})
+}
+
+// LatestByWorkspace GET /api/v1/sessions/latest?workspace_id=123
+// 返回指定 workspace 下最近一条会话（按 created_at DESC）。
+// 任务助手（OrchestrationChatPanel）用它实现“一个工作区只复用一条管理会话”：
+// 进入任务页或首次发送前调用本接口，命中则复用，未命中（404）再创建新会话。
+// 仅校验 workspace 归属当前用户，不限制 source——由调用方决定复用策略。
+func (h *SessionHandler) LatestByWorkspace(c *gin.Context) {
+	uid, ok := currentUserID(c)
+	if !ok {
+		Fail(c, http.StatusUnauthorized, "UNAUTHORIZED", "未认证")
+		return
+	}
+	wsIDStr := strings.TrimSpace(c.Query("workspace_id"))
+	if wsIDStr == "" {
+		Fail(c, http.StatusBadRequest, "INVALID_REQUEST", "缺少 workspace_id")
+		return
+	}
+	wsID, err := strconv.ParseUint(wsIDStr, 10, 64)
+	if err != nil || wsID == 0 {
+		Fail(c, http.StatusBadRequest, "INVALID_REQUEST", "workspace_id 参数无效")
+		return
+	}
+	sessions, err := h.store.FindSessionsByWorkspaceID(uint(wsID))
+	if err != nil {
+		writeSessionError(c, err)
+		return
+	}
+	// 过滤归属当前用户的会话（workspace 已校验归属，但会话 user_id 防御性二次校验）
+	for i := range sessions {
+		if sessions[i].UserID != uid {
+			continue
+		}
+		Success(c, http.StatusOK, sessions[i])
+		return
+	}
+	// 无归属当前用户的会话：返回 404，调用方据此新建
+	Fail(c, http.StatusNotFound, "SESSION_NOT_FOUND", "该工作区暂无会话")
 }
 
 // Get GET /api/v1/sessions/:id
@@ -761,6 +809,12 @@ func (h *SessionHandler) Prompt(c *gin.Context) {
 			return
 		}
 	}
+	// 首次发送（pending 会话从未激活过）：把该会话登记到工作区 tasks.json，
+	// 使"新建对话"与编排任务统一在 tasks.json 中可见。仅 manual 与顶级 orchestration 会话登记，
+	// 子会话/定时/分类会话由各自引擎管理，不在此重复登记。失败仅记录日志，不阻断 prompt。
+	if sess.Status == models.SessionStatusPending {
+		h.registerToTasks(c, sess, req.Prompt)
+	}
 	ch, err := h.store.Prompt(c.Request.Context(), sess.SessionID, req.Prompt)
 	if err != nil {
 		writeSessionError(c, err)
@@ -768,6 +822,25 @@ func (h *SessionHandler) Prompt(c *gin.Context) {
 	}
 
 	streamSSEMessages(c, ch)
+}
+
+// registerToTasks 把会话登记到其工作区 cwd 下的 tasks.json。
+// 通过 SessionStore.GetWorkspaceCwd 解析工作区目录；registrar 未注入或工作区缺失时静默跳过。
+// 登记失败仅记录日志，不影响后续 prompt 流程。
+func (h *SessionHandler) registerToTasks(c *gin.Context, sess *models.Session, prompt string) {
+	if h.registrar == nil {
+		return
+	}
+	if sess.WorkspaceID == nil {
+		return
+	}
+	cwd, err := h.store.GetWorkspaceCwd(*sess.WorkspaceID)
+	if err != nil || cwd == "" {
+		return
+	}
+	if err := h.registrar.RegisterSessionTask(cwd, sess, prompt); err != nil {
+		slog.Warn("登记会话到 tasks.json 失败", "session", sess.ID, "cwd", cwd, "err", err)
+	}
 }
 
 // Stream GET /api/v1/sessions/:id/stream

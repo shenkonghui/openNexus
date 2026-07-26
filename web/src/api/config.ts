@@ -130,3 +130,73 @@ export interface MCPServerStatus {
 export function getMCPStatus(): Promise<{ data: { servers: MCPServerStatus[]; error?: string } }> {
   return apiFetch('/config/mcp/status')
 }
+
+// MCP 聚合网关：单个上游的聚合状态
+export interface MCPGatewayUpstream {
+  name: string
+  type: string
+  source: string // "mcp.json" | "custom" | "disabled"
+  connected: boolean
+  tool_count: number
+  error?: string
+}
+
+// MCP 聚合网关：未被接管的条目及原因
+export interface MCPGatewaySkipped {
+  name: string
+  type: string
+  reason: string
+  disabled?: boolean
+}
+
+// MCP 聚合网关整体状态
+export interface MCPGatewayStatus {
+  enabled: boolean
+  endpoint: string
+  path: string
+  token: string
+  tool_count: number
+  upstreams: MCPGatewayUpstream[] | null
+  skipped: MCPGatewaySkipped[] | null
+}
+
+// 获取聚合网关状态（会实时探测上游）
+export function getMCPGatewayStatus(): Promise<{ data: MCPGatewayStatus }> {
+  return apiFetch('/config/mcp/gateway')
+}
+
+// 启用/停用聚合网关（写入或移除 mcp.json 中的 opennexus-gateway 条目）
+export function setMCPGatewayEnabled(enabled: boolean): Promise<{ data: MCPGatewayStatus }> {
+  return apiFetch('/config/mcp/gateway', {
+    method: 'POST',
+    body: JSON.stringify({ enabled }),
+  })
+}
+
+// 禁用指定上游（网关层面，不修改 mcp.json）
+export function disableGatewayUpstream(name: string): Promise<{ data: { name: string; disabled: boolean } }> {
+  return apiFetch(`/config/mcp/gateway/upstreams/${encodeURIComponent(name)}/disable`, { method: 'POST' })
+}
+
+// 启用指定上游（解除禁用）
+export function enableGatewayUpstream(name: string): Promise<{ data: { name: string; disabled: boolean } }> {
+  return apiFetch(`/config/mcp/gateway/upstreams/${encodeURIComponent(name)}/enable`, { method: 'POST' })
+}
+
+// 添加自定义上游（不写入 mcp.json）
+export interface CustomServerEntry {
+  type: string
+  url: string
+  headers?: Record<string, string>
+}
+export function addGatewayCustomServer(name: string, entry: CustomServerEntry): Promise<{ data: { name: string; added: boolean } }> {
+  return apiFetch('/config/mcp/gateway/custom-servers', {
+    method: 'POST',
+    body: JSON.stringify({ name, entry }),
+  })
+}
+
+// 移除自定义上游
+export function removeGatewayCustomServer(name: string): Promise<{ data: { name: string; removed: boolean } }> {
+  return apiFetch(`/config/mcp/gateway/custom-servers/${encodeURIComponent(name)}`, { method: 'DELETE' })
+}

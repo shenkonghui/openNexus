@@ -55,18 +55,6 @@ func (r *Router) CreateSessionWithCwd(ctx context.Context, agentType string, wor
 	return r.service.CreateSessionWithCwd(ctx, agentType, workspaceID, userID, source, modelValue, cwd)
 }
 
-// CreateSessionWithParent 创建会话并可指定父会话（用于 MCP 工具创建子会话/子任务）。
-// parentSessionID 非 nil 时记录父子关系。
-func (r *Router) CreateSessionWithParent(ctx context.Context, agentType string, workspaceID uint, userID uint, source, modelValue string, parentSessionID *uint) (*models.Session, error) {
-	if _, err := r.registry.Get(agentType); err != nil {
-		return nil, err
-	}
-	if r.service == nil {
-		return nil, errors.New("service 未配置")
-	}
-	return r.service.CreateSessionWithParent(ctx, agentType, workspaceID, userID, source, modelValue, parentSessionID)
-}
-
 // ResumeSession 恢复或重开会话，委托 service。
 func (r *Router) ResumeSession(ctx context.Context, sessionID string) (*models.Session, error) {
 	if r.service == nil {

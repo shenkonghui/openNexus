@@ -33,6 +33,12 @@ build:
 	@echo "==> 构建后端 ($(VERSION))"
 	@CGO_ENABLED=1 go build $(LDFLAGS) -o opennexus ./cmd/server
 
+# 构建 MCP 聚合网关独立二进制（不依赖主 server / sqlite，可单独部署）
+# 用法: make gateway
+gateway:
+	@echo "==> 构建 MCP 网关 ($(VERSION))"
+	@CGO_ENABLED=0 go build $(LDFLAGS) -o opennexus-gateway ./cmd/gateway
+
 # 使用 Pake (Tauri) 打包桌面客户端壳子
 # 依赖: Rust + Node + pake-cli (pnpm install -g pake-cli@3.13.0)
 # 用法: make pake

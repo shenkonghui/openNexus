@@ -11,6 +11,8 @@ interface Window {
       node: string
       chrome: string
     }
+    // webview 预加载脚本绝对路径(仅 Electron 可用)。
+    webviewPreload?: string
     // 把拖入的 File 对象反查为本地绝对路径(仅 Electron 可用)。
     // 浏览器场景下不存在,消费前必须先判 isElectron。
     getPathForFile?: (file: File) => string

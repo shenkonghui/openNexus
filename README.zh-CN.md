@@ -237,7 +237,7 @@ npm exec --include=optional --yes @agentclientprotocol/claude-agent-acp@latest -
 
 ## 子 Agent (Sub-Agent)
 
-子 Agent 是可复用的 Agent 定义，通过内置 MCP 服务（`/mcp/subagent`）从任意 Agent 会话中调用。
+子 Agent 是可复用的 Agent 定义（Markdown 文件），由后端扫描并在设置页展示；支持原生 subagent 的 Agent（如 Claude Code）可通过自身的 Task 机制直接调用同规范的定义。
 
 ### 定义子 Agent
 
@@ -257,13 +257,12 @@ tools:
 你是一个代码审查专家。分析提交请求中的 Bug、风格问题和安全漏洞。
 ```
 
-后端启动时自动扫描这些文件，注册为 MCP 工具，所有 Agent 会话均可使用。
+后端启动时自动扫描这些文件，可在设置页查看管理。
 
 ### 使用方法
 
-- **从 Agent 对话中调用**：使用 `RunSubAgent`（`/subagent`）工具调用
-- **自动发现**：`opennexus-subagent` MCP 服务自动将条目同步到全局 MCP 配置
-- **继承**：子 Agent 可以通过 `UserAgentPrefs` 继承父会话的 Agent 偏好（模型、设置等）
+- **原生调用**：支持 subagent 的 Agent（如 Claude Code）在会话中自动发现并委派给子 Agent
+- **会话级任务委派**：使用任务编排（`opennexus-task` MCP 服务）创建独立子任务会话
 
 ## 笔记 MCP 服务
 

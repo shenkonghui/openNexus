@@ -24,7 +24,6 @@ export interface OrchestrationTask {
 export interface OrchestrationDef {
   max_parallel: number
   tasks: OrchestrationTask[]
-  parent_session_id?: number
 }
 
 function qs(workspaceId: number | null | undefined): string {
@@ -97,12 +96,4 @@ export function getOrchGitStatus(workspaceId: number): Promise<{ data: { cwd: st
 // 初始化 git 仓库（含初始提交）并创建 .worktrees 目录
 export function initOrchGitRepo(workspaceId: number): Promise<{ data: { cwd: string; is_git_repo: boolean } }> {
   return apiFetch(`/orchestration/git-init${qs(workspaceId)}`, { method: 'POST' })
-}
-
-// 登记编排管理会话为 tasks.json 的父会话（后续任务的子会话通过 ParentSessionID 关联）
-export function setOrchParentSession(workspaceId: number, sessionId: number): Promise<void> {
-  return apiFetch(`/orchestration/parent-session${qs(workspaceId)}`, {
-    method: 'PUT',
-    body: JSON.stringify({ session_id: sessionId }),
-  })
 }

@@ -4,8 +4,8 @@ import {
   createSession, updateSessionTitle, setConfigOption, setSessionMode,
   listSkills, listModes, listCommands, listConfigOptions,
   respondPermission, getSession, listMessages,
+  getLatestSessionByWorkspace,
 } from '../api/sessions'
-import { setOrchParentSession, getOrchestration } from '../api/orchestration'
 import { probeAgentConfigs, listAgentCommands, listAgentModes } from '../api/agents'
 import { streamPrompt, isTimeoutError } from '../api/sse'
 import { parsePermissionRequest } from '../utils/permission'
@@ -32,14 +32,14 @@ interface Props {
 function buildSystemPrelude(): string {
   return [
     '你是任务编排助手。请根据用户需求管理当前工作区的任务编排。',
-    '编排工具由 opennexus-orchestration 这个 MCP 服务器提供（已从 opennexus-subagent 抽离为独立服务器），已自动注入会话，直接调用即可：',
-    '- list_orchestration_tasks：列出任务现状（先了解再操作）',
-    '- create_orchestration_task：新增任务（title/detail 必填，即发给 agent 的 prompt；自动生成 id 并置 pending；priority 可选 p0/p1/p2，默认 p1）',
-    '- update_orchestration_task：改任务字段（task_id 必填 + 要改的字段，含 priority）',
-    '- delete_orchestration_task：删除任务（task_id 必填）',
-    '- start_orchestration_task：启动任务（task_id 留空=启动全部待执行）',
-    '- stop_orchestration_task：停止任务（task_id 留空=停止全部运行中）',
-    '- set_orchestration_max_parallel：调整并发上限（1=串行，1~16）',
+    '编排工具由 opennexus-task 这个 MCP 服务器提供，已自动注入会话，直接调用即可：',
+    '- list_tasks：列出任务现状（先了解再操作）',
+    '- create_task：新增任务（title/detail 必填，即发给 agent 的 prompt；自动生成 id 并置 pending；priority 可选 p0/p1/p2，默认 p1）',
+    '- update_task：改任务字段（task_id 必填 + 要改的字段，含 priority）',
+    '- delete_task：删除任务（task_id 必填）',
+    '- start_task：启动任务（task_id 留空=启动全部待执行）',
+    '- stop_task：停止任务（task_id 留空=停止全部运行中）',
+    '- set_max_parallel：调整并发上限（1=串行，1~16）',
     '所有工具都需要 workspace_id 参数。',
     `当前工作区 workspace_id：__WORKSPACE_ID__`,
     '若工具列表里看不到上述名称，再改为直接读写当前目录下 tasks.json 并运行校验：bash .agents/skills/orchestration-tasks/scripts/validate-tasks.sh tasks.json。',
@@ -209,9 +209,11 @@ export default function OrchestrationChatPanel({
     }
   }, [])
 
-  // 恢复已有的编排管理会话：优先用侧边栏点击传入的 restoreSessionId，否则回退到
-  // tasks.json 登记的 parent_session_id。使编排对话在重新进入编排页时可见历史记录，
-  // 而非每次都新建会话导致旧对话“丢失”（旧对话虽已落库，但此前 UI 从不回读）。
+  // 恢复已有的任务管理会话：优先用侧边栏点击传入的 restoreSessionId，否则回退到
+  // 该工作区最近的一条会话（通过 /sessions/latest 精确按 workspace 查询）。
+  // 使任务对话在重新进入任务页时可见历史记录，而非每次都新建会话导致旧对话"丢失"。
+  // 恢复期间置 conv='connecting' 阻止发送，避免恢复未完成时用户发送触发新建会话，
+  // 从而保证“一个工作区只有一个任务助手管理会话”。
   const restoredKeyRef = useRef<string>('')
   useEffect(() => {
     if (!workspaceId) return
@@ -219,12 +221,14 @@ export default function OrchestrationChatPanel({
     if (restoredKeyRef.current === key) return
     restoredKeyRef.current = key
     let alive = true
+    setConv('connecting')
     ;(async () => {
       try {
         let targetId = restoreSessionId
         if (!targetId) {
-          const def = await getOrchestration(workspaceId)
-          targetId = def.data.parent_session_id || undefined
+          // 精确查询该 workspace 最近一条会话（替代全局 listSessions 过滤）
+          const latest = await getLatestSessionByWorkspace(workspaceId)
+          targetId = latest.data?.id
         }
         if (!targetId) return
         const [sResp, mResp] = await Promise.all([getSession(targetId), listMessages(targetId)])
@@ -232,9 +236,10 @@ export default function OrchestrationChatPanel({
         setSession(sResp.data)
         setMessages(mResp.data.messages || [])
         setSelectedAgent(sResp.data.agent_type)
-        // 侧边栏显式指定会话时，重新登记为父会话，使后续任务子会话关联到当前查看的编排对话。
-        if (restoreSessionId) setOrchParentSession(workspaceId, restoreSessionId).catch(() => {})
       } catch { /* 会话可能已删除：忽略，保持空会话，允许重新新建 */ }
+      finally {
+        if (alive) setConv('idle')
+      }
     })()
     return () => { alive = false }
   }, [workspaceId, restoreSessionId])
@@ -245,23 +250,38 @@ export default function OrchestrationChatPanel({
     if (!text || conv !== 'idle' || !selectedAgent) return
     setError('')
 
-    // 首条消息：惰性建会话(source=orchestration)，下发探测配置，注入系统引导
+    // 首条消息：保证“一个工作区只有一个任务助手管理会话”。
+    // 先通过 /sessions/latest 查询该 workspace 是否已有会话：
+    //   - 命中：复用该会话，回读历史消息，跳过系统引导与配置下发（会话已有自己的配置）。
+    //   - 未命中：创建新会话(manual)，下发探测配置，注入系统引导。
+    // 此处双重检查避免恢复逻辑未完成或未命中时竞态创建多个会话。
     let activeSession = session
     let sendText = text
     if (!activeSession) {
       setConv('connecting')
       try {
-        const resp = await createSession(selectedAgent, workspaceId, selectedModel || undefined, 'orchestration')
-        activeSession = resp.data
-        setSession(activeSession)
-        updateSessionTitle(activeSession.id, t('orchestration.aiTitle')).catch(() => {})
-        // 登记为编排管理（父）会话：后续任务执行时创建的会话将关联为其子会话。
-        setOrchParentSession(workspaceId, activeSession.id).catch(() => {})
-        const extras = probeConfigs.filter((o) => o.type === 'select' && o.category !== 'model' && o.current_value)
-        for (const o of extras) {
-          try { await setConfigOption(activeSession.id, o.id, o.current_value) } catch { /* ignore */ }
+        // 1) 双重检查：查询工作区是否已有会话
+        const latest = await getLatestSessionByWorkspace(workspaceId)
+        if (latest.data) {
+          activeSession = latest.data
+          setSession(activeSession)
+          setSelectedAgent(activeSession.agent_type)
+          try {
+            const hist = await listMessages(activeSession.id)
+            setMessages(hist.data.messages || [])
+          } catch { /* 回读失败：保留空消息，仍复用会话 */ }
+        } else {
+          // 2) 未命中：创建新会话
+          const resp = await createSession(selectedAgent, workspaceId, selectedModel || undefined)
+          activeSession = resp.data
+          setSession(activeSession)
+          updateSessionTitle(activeSession.id, t('orchestration.aiTitle')).catch(() => {})
+          const extras = probeConfigs.filter((o) => o.type === 'select' && o.category !== 'model' && o.current_value)
+          for (const o of extras) {
+            try { await setConfigOption(activeSession.id, o.id, o.current_value) } catch { /* ignore */ }
+          }
+          sendText = buildSystemPrelude().replace('__WORKSPACE_ID__', String(workspaceId)) + text
         }
-        sendText = buildSystemPrelude().replace('__WORKSPACE_ID__', String(workspaceId)) + text
       } catch (e) {
         setConv('idle')
         setError(String((e as Error)?.message || e))

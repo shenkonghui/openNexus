@@ -299,6 +299,153 @@ func TestUpsertMCPServerEntry_InvalidJSON(t *testing.T) {
 	}
 }
 
+func TestRemoveMCPServerEntry(t *testing.T) {
+	path := writeTempMCPConfig(t, `{"mcpServers":{"a":{"command":"x"},"b":{"type":"http","url":"http://h/mcp"}}}`)
+	if err := RemoveMCPServerEntry(path, "b"); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := LoadMCPServerEntries(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name != "a" {
+		t.Fatalf("剩余条目 = %+v, 期望仅 a", entries)
+	}
+	// 幂等：再删一次不报错
+	if err := RemoveMCPServerEntry(path, "b"); err != nil {
+		t.Fatalf("重复删除应幂等: %v", err)
+	}
+	// 文件不存在也不报错
+	if err := RemoveMCPServerEntry(filepath.Join(t.TempDir(), "missing.json"), "b"); err != nil {
+		t.Fatalf("文件不存在应视为成功: %v", err)
+	}
+}
+
+func TestCollapseViaGateway(t *testing.T) {
+	entries := []NamedMCPServerEntry{
+		{Name: "local-fs", Entry: MCPServerEntry{Command: "fs-server"}},
+		{Name: "remote-a", Entry: MCPServerEntry{Type: MCPTypeHTTP, Url: "http://a/mcp"}},
+		{Name: "remote-b", Entry: MCPServerEntry{Type: MCPTypeSSE, Url: "http://b/sse"}},
+	}
+
+	// 无网关条目：原样返回
+	if got := CollapseViaGateway(entries); len(got) != 3 {
+		t.Fatalf("无网关时应原样返回，实际 %d 条", len(got))
+	}
+
+	// 有网关条目：http/sse 收敛掉，只留网关 + stdio
+	withGW := append(entries, NamedMCPServerEntry{
+		Name:  GatewayMCPName,
+		Entry: MCPServerEntry{Type: MCPTypeHTTP, Url: "http://gw/mcp/gateway"},
+	})
+	got := CollapseViaGateway(withGW)
+	names := make([]string, 0, len(got))
+	for _, ne := range got {
+		names = append(names, ne.Name)
+	}
+	if len(names) != 2 || names[0] != "local-fs" || names[1] != GatewayMCPName {
+		t.Fatalf("收敛结果 = %v, 期望 [local-fs %s]", names, GatewayMCPName)
+	}
+}
+
+func TestCollapseWithGatewayEntry(t *testing.T) {
+	entries := []NamedMCPServerEntry{
+		{Name: "local-fs", Entry: MCPServerEntry{Command: "fs-server"}},
+		{Name: "remote-a", Entry: MCPServerEntry{Type: MCPTypeHTTP, Url: "http://a/mcp"}},
+		{Name: "remote-b", Entry: MCPServerEntry{Type: MCPTypeSSE, Url: "http://b/sse"}},
+	}
+
+	// 默认启用：不依赖 mcp.json 已有网关条目，直接注入 endpoint+token 的 http 形态条目
+	got := collapseWithGatewayEntry(entries, gatewayHTTPEntry("http://gw:8090/mcp/gateway", "tok"))
+	names := make([]string, 0, len(got))
+	for _, ne := range got {
+		names = append(names, ne.Name)
+	}
+	// 期望：网关 + local-fs（stdio 不收敛）；remote-a/remote-b 被收敛
+	if len(names) != 2 {
+		t.Fatalf("收敛结果 = %v, 期望 2 条", names)
+	}
+	// 网关条目应在列表中，且 endpoint 为传入值
+	var gwEntry *NamedMCPServerEntry
+	for i := range got {
+		if got[i].Name == GatewayMCPName {
+			gwEntry = &got[i]
+		}
+	}
+	if gwEntry == nil {
+		t.Fatalf("收敛结果缺网关条目: %v", names)
+	}
+	if gwEntry.Entry.Url != "http://gw:8090/mcp/gateway" {
+		t.Errorf("网关 url = %q", gwEntry.Entry.Url)
+	}
+	if gwEntry.Entry.Headers["Authorization"] != "Bearer tok" {
+		t.Errorf("网关 Authorization = %q", gwEntry.Entry.Headers["Authorization"])
+	}
+
+	// mcp.json 中已有旧网关条目时，用传入 endpoint 覆盖
+	withOld := append(entries, NamedMCPServerEntry{
+		Name:  GatewayMCPName,
+		Entry: MCPServerEntry{Type: MCPTypeHTTP, Url: "http://old-host/mcp/gateway"},
+	})
+	got2 := collapseWithGatewayEntry(withOld, gatewayHTTPEntry("http://gw:8090/mcp/gateway", "tok"))
+	for _, ne := range got2 {
+		if ne.Name == GatewayMCPName && ne.Entry.Url != "http://gw:8090/mcp/gateway" {
+			t.Errorf("旧网关条目未被覆盖: %q", ne.Entry.Url)
+		}
+	}
+
+	// stdio 桥形态的网关条目：http/sse 上游同样收敛，网关自身为 stdio 条目
+	bridge := NamedMCPServerEntry{
+		Name: GatewayMCPName,
+		Entry: MCPServerEntry{
+			Type:    MCPTypeStdio,
+			Command: "/usr/local/bin/opennexus",
+			Args:    []string{"mcp-bridge"},
+			Env:     map[string]string{"OPENNEXUS_GATEWAY_URL": "http://gw:8090/mcp/gateway", "OPENNEXUS_GATEWAY_TOKEN": "tok"},
+		},
+	}
+	got3 := collapseWithGatewayEntry(entries, bridge)
+	if len(got3) != 2 || got3[0].Name != GatewayMCPName || got3[0].Entry.Command != "/usr/local/bin/opennexus" {
+		t.Fatalf("stdio 桥形态收敛结果不符: %+v", got3)
+	}
+}
+
+func TestFilterByMcpCapabilities(t *testing.T) {
+	servers := []acp.McpServer{
+		{Stdio: &acp.McpServerStdio{Name: "local-fs", Command: "fs-server"}},
+		{Http: &acp.McpServerHttpInline{Name: "remote-http", Type: MCPTypeHTTP, Url: "http://a/mcp"}},
+		{Sse: &acp.McpServerSseInline{Name: "remote-sse", Type: MCPTypeSSE, Url: "http://b/sse"}},
+	}
+
+	// 全部支持：原样返回
+	if got := filterByMcpCapabilities(servers, acp.McpCapabilities{Http: true, Sse: true}); len(got) != 3 {
+		t.Fatalf("全能力时应原样返回，实际 %d 条", len(got))
+	}
+
+	// http:false, sse:false（如 devin）：只剩 stdio
+	got := filterByMcpCapabilities(servers, acp.McpCapabilities{})
+	if len(got) != 1 || got[0].Stdio == nil || got[0].Stdio.Name != "local-fs" {
+		t.Fatalf("无 http/sse 能力时应只剩 stdio，实际 %+v", got)
+	}
+
+	// 仅 http:true：sse 被过滤
+	got = filterByMcpCapabilities(servers, acp.McpCapabilities{Http: true})
+	if len(got) != 2 {
+		t.Fatalf("仅 http 能力时应剩 2 条，实际 %d 条", len(got))
+	}
+	for _, sv := range got {
+		if sv.Sse != nil {
+			t.Errorf("sse 条目未被过滤: %+v", sv)
+		}
+	}
+
+	// 全被过滤时返回 nil
+	onlyHTTP := []acp.McpServer{{Http: &acp.McpServerHttpInline{Name: "h", Type: MCPTypeHTTP, Url: "http://h"}}}
+	if got := filterByMcpCapabilities(onlyHTTP, acp.McpCapabilities{}); got != nil {
+		t.Fatalf("全被过滤时应返回 nil，实际 %+v", got)
+	}
+}
+
 // serverName 从 acp.McpServer（tagged union）中提取 name。
 func serverName(s acp.McpServer) string {
 	switch {

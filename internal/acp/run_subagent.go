@@ -9,20 +9,21 @@ import (
 	"github.com/coder/acp-go-sdk"
 )
 
-// SubAgentRunConfig 描述一次 subagent 调用的参数。
+// SubAgentRunConfig 描述一次临时会话任务的参数。
 type SubAgentRunConfig struct {
 	AgentType    string        // 已注册的 agent type，必填
 	ModelValue   string        // 模型值，空=用 agent 默认
-	Prompt       string        // 用户任务文本（由 MCP 工具传入）
-	SystemPrompt string        // subagent 角色定义，注入 _meta.systemPrompt；空=不注入
+	Prompt       string        // 用户任务文本
+	SystemPrompt string        // 角色定义，注入 _meta.systemPrompt；空=不注入
 	UserID       uint          // 用于拉全局 mcpServers（继承父会话级别），0=不注入
 	Timeout      time.Duration // 单次调用超时，0=默认 promptOnceTimeout (60s)
 }
 
-// RunSubAgent 在临时 ACP 会话中执行一次 subagent 任务，收集 assistant 文本后关闭会话，不落库。
+// RunSubAgent 在临时 ACP 会话中执行一次任务，收集 assistant 文本后关闭会话，不落库。
+// 供内部功能（如笔记标签分类）使用。
 //
 // 与 RunPromptOnce 的差异：
-//   - 注入全局 mcpServers（按 UserID），让 subagent 继承父会话级别的工具
+//   - 注入全局 mcpServers（按 UserID），让任务继承父会话级别的工具
 //   - 注入 SystemPrompt 到 NewSessionRequest._meta.systemPrompt（角色定义）
 //   - 可配置超时
 //
@@ -44,7 +45,7 @@ func (s *Service) RunSubAgent(ctx context.Context, cfg SubAgentRunConfig) (strin
 	// 注入全局 mcpServers（继承父会话级别）+ systemPrompt
 	var mcpServers []acp.McpServer
 	if cfg.UserID > 0 {
-		mcpServers = s.sessionMCPServers(cfg.UserID)
+		mcpServers = s.sessionMCPServers(cfg.UserID, conn.McpCapabilities())
 	}
 	sessionID, configOptions, _, err := conn.NewSession(ctx, cwd, s.skillAdditionalDirs(cwd), mcpServers, cfg.SystemPrompt)
 	if err != nil {

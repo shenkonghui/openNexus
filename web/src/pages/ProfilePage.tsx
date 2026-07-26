@@ -6,7 +6,6 @@ import { updateProfile, changePassword } from '../api/auth'
 import { useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import AppLayout, { SidebarToggleButton } from '../components/AppLayout'
-import UserMenu from '../components/UserMenu'
 import ErrorBanner from '../components/ErrorBanner'
 import LoadingSpinner from '../components/LoadingSpinner'
 import styles from './ProfilePage.module.css'
@@ -90,7 +89,6 @@ export default function ProfilePage() {
             <SidebarToggleButton />
             <h1 className={styles.title}>{t('profile.title')}</h1>
           </div>
-          <UserMenu />
         </div>
 
         {error && <ErrorBanner message={error} onClose={() => setError('')} />}

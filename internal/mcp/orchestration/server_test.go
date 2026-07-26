@@ -8,7 +8,7 @@ import (
 
 // TestNewServerDoesNotPanic 验证 newServer 在依赖项缺失（nil）时也能安全构造，
 // 不会因为 mcp.AddTool 的潜在 panic 把整个 server 拖垮。
-// 这是 opennexus-orchestration 曾缺失工具的根因回归保护：
+// 这是 opennexus-task 曾缺失工具的根因回归保护：
 // 单个工具注册失败（panic）应被 addTool 兜住，server 仍可返回。
 func TestNewServerDoesNotPanic(t *testing.T) {
 	defer func() {
@@ -26,7 +26,7 @@ func TestNewServerDoesNotPanic(t *testing.T) {
 // TestOrchestrationJSONSchemaTagsValid 校验所有编排工具输入结构都能成功推断 schema。
 // jsonschema-go 的 forType 在遇到形如 "WORD=" 的 tag（第一个 '=' 前不含空白）时会返回
 // "tag must not begin with 'WORD='" 错误，进而让 mcp.AddTool panic。
-// 历史上 set_orchestration_max_parallel 的 tag "并发上限，1=串行，范围 1~16" 触发该规则，
+// 历史上 set_max_parallel 的 tag "并发上限，1=串行，范围 1~16" 触发该规则，
 // 导致 AddTool panic → 整个 MCP server 对外 500 → 工具全部消失。此处做回归保护。
 func TestOrchestrationJSONSchemaTagsValid(t *testing.T) {
 	check := func(t *testing.T, err error) {
@@ -44,4 +44,3 @@ func TestOrchestrationJSONSchemaTagsValid(t *testing.T) {
 	t.Run("setOrchMaxParallelIn", func(t *testing.T) { _, err := jsonschema.For[setOrchMaxParallelIn](nil); check(t, err) })
 	t.Run("listOrchTasksIn", func(t *testing.T) { _, err := jsonschema.For[listOrchTasksIn](nil); check(t, err) })
 }
-

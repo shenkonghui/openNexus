@@ -2,16 +2,17 @@ import { useState, useEffect, useMemo } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { formatTimeAgo } from '../utils/time'
-import { sessionUrl, newTaskUrl, orchestrationUrl } from '../utils/routes'
-import type { Session, ScheduledTask, AgentStatus } from '../types'
+import { sessionUrl, newTaskUrl, orchestrationUrl, tasksUrl } from '../utils/routes'
+import type { Session, ScheduledTask } from '../types'
 import { listScheduledTasks } from '../api/scheduledTasks'
-import { listAgentStatus } from '../api/agents'
 import { listSessions, listRunningSessions } from '../api/sessions'
 import { getOrchestration, getOrchStatus, startOrchestration, type OrchestrationTask } from '../api/orchestration'
-import { PanelLeftClose, Star, Pencil, X, Check, SquarePlus, FileText, Calendar, Settings, Zap, ScrollText, Loader2, CheckCircle2, XCircle, Clock3, CircleDashed, Network, MoreHorizontal, ChevronDown } from 'lucide-react'
+import { WORKSPACE_STORAGE_KEY } from '../hooks/useCurrentWorkspace'
+import { PanelLeftClose, Star, Pencil, X, Check, SquarePlus, FileText, Calendar, Settings, Zap, Loader2, CheckCircle2, XCircle, Clock3, CircleDashed, Network } from 'lucide-react'
 import styles from './SessionSidebar.module.css'
-import LogPanel from './LogPanel'
 import NexusLogoIcon from './NexusLogoIcon'
+import UserMenu from './UserMenu'
+import WorkspaceSelector from './WorkspaceSelector'
 
 interface SessionSidebarProps {
   sessions: Session[]
@@ -21,6 +22,9 @@ interface SessionSidebarProps {
   onRename?: (id: number, title: string) => void
   onCollapse?: () => void
   onNewScheduledTask?: () => void
+  /** 切换工作区（页面自定义行为）；未提供时默认持久化并跳转到该工作区任务页 */
+  onWorkspaceChange?: (id: number) => void
+  onWorkspaceRefresh?: () => void
   /** 由 AppLayout 统一渲染顶栏 Logo 时隐藏，避免重复 */
   hideLogo?: boolean
 }
@@ -28,16 +32,15 @@ interface SessionSidebarProps {
 const STORAGE_KEY = 'opennexus.sidebar.collapsed'
 const FAVS_KEY = 'opennexus.favorites'
 
-function loadCollapsed(): { favorites: boolean; manual: boolean; scheduled: boolean; orchestration: boolean; footer: boolean } {
+function loadCollapsed(): { favorites: boolean; manual: boolean; scheduled: boolean; orchestration: boolean } {
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
     if (raw) {
       const parsed = JSON.parse(raw)
-      // footer 每次进入都收起，把纵向空间留给任务列表；其余分组仍记忆折叠状态
-      return { favorites: false, manual: false, scheduled: false, orchestration: true, ...parsed, footer: true }
+      return { favorites: false, manual: false, scheduled: false, orchestration: true, ...parsed }
     }
   } catch { /* ignore */ }
-  return { favorites: false, manual: false, scheduled: false, orchestration: true, footer: true }
+  return { favorites: false, manual: false, scheduled: false, orchestration: true }
 }
 
 function loadFavorites(): number[] {
@@ -83,12 +86,9 @@ function OrchStatusDot({ status }: { status: string }) {
   return <CircleDashed size={size} className={`${cls} ${styles.taskStatusIconIdle}`} />
 }
 
-export default function SessionSidebar({ sessions, workspaceId, currentId, onDelete, onRename, onCollapse, onNewScheduledTask, hideLogo }: SessionSidebarProps) {
+export default function SessionSidebar({ sessions, workspaceId, currentId, onDelete, onRename, onCollapse, onNewScheduledTask, onWorkspaceChange, onWorkspaceRefresh, hideLogo }: SessionSidebarProps) {
   const { t } = useTranslation()
   const [editingId, setEditingId] = useState<number | null>(null)
-  const [showLogs, setShowLogs] = useState(false)
-  // Agent 连接状态默认折叠，点 footer 按钮展开
-  const [showAgentStatus, setShowAgentStatus] = useState(false)
   const [editTitle, setEditTitle] = useState('')
   const location = useLocation()
   const navigate = useNavigate()
@@ -96,7 +96,6 @@ export default function SessionSidebar({ sessions, workspaceId, currentId, onDel
   const [collapsed, setCollapsed] = useState(loadCollapsed)
   const [favorites, setFavorites] = useState<number[]>(loadFavorites)
   const [tasks, setTasks] = useState<ScheduledTask[]>([])
-  const [agentStatuses, setAgentStatuses] = useState<AgentStatus[]>([])
   const [runningIds, setRunningIds] = useState<Set<number>>(() => new Set())
   const [orchTasks, setOrchTasks] = useState<OrchestrationTask[]>([])
   // 正在通过编排引擎启动的任务 id（点击未运行任务时置位），用于展示运行中状态并避免重复点击。
@@ -127,9 +126,6 @@ export default function SessionSidebar({ sessions, workspaceId, currentId, onDel
   useEffect(() => {
     let alive = true
     const load = () => {
-      listAgentStatus()
-        .then((r) => { if (alive) setAgentStatuses(r.data.agents || []) })
-        .catch(() => { if (alive) setAgentStatuses([]) })
       listRunningSessions()
         .then((r) => { if (alive) setRunningIds(new Set(r.data.db_session_ids || [])) })
         .catch(() => {})
@@ -161,22 +157,36 @@ export default function SessionSidebar({ sessions, workspaceId, currentId, onDel
   // 编排管理会话（AI 编排面板对话）：source=orchestration 且无父会话（顶级）。
   // 作为「编排对话」记录展示在「任务」分组，点击回到编排页恢复其历史；
   // 编排子任务会话带 parent_session_id，不在此列（已由 orchTasks 以「编排-」前缀展示）。
-  const orchSessions = sessions.filter((s) => s.source === 'orchestration' && !s.parent_session_id)
+  // 每个工作区只展示最近一条：编排定义（tasks.json）本就按工作区唯一，历史遗留的多条
+  // 编排会话若全部列出会造成重复入口。
+  const orchSessions = useMemo(() => {
+    const tops = sessions
+      .filter((s) => s.source === 'orchestration' && !s.parent_session_id)
+      .sort((a, b) => (a.created_at < b.created_at ? 1 : -1))
+    const seen = new Set<number>()
+    return tops.filter((s) => {
+      const wsID = s.workspace_id ?? 0
+      if (seen.has(wsID)) return false
+      seen.add(wsID)
+      return true
+    })
+  }, [sessions])
   const favoriteSessions = useMemo(
     () => sessions.filter((s) => favorites.includes(s.id)),
     [sessions, favorites],
+  )
+  // 只展示已启动的编排任务：pending（仅在编排页定义、尚未入队）不占用任务列表，
+  // 启动后（queued/running/done/... 或已生成会话）才作为实际任务出现。
+  const startedOrchTasks = useMemo(
+    () => orchTasks.filter((t) => t.status !== 'pending' || !!t.db_session_id),
+    [orchTasks],
   )
   const recentTask = [...tasks]
     .filter((t) => t.last_run_at)
     .sort((a, b) => (a.last_run_at! < b.last_run_at! ? 1 : -1))[0]
 
-  function toggleGroup(group: 'favorites' | 'manual' | 'scheduled' | 'orchestration' | 'footer') {
-    setCollapsed((prev) => {
-      const nextCollapsed = !prev[group]
-      // 收起 footer 时一并隐藏 Agent 状态，避免只剩状态条
-      if (group === 'footer' && nextCollapsed) setShowAgentStatus(false)
-      return { ...prev, [group]: nextCollapsed }
-    })
+  function toggleGroup(group: 'favorites' | 'manual' | 'scheduled' | 'orchestration') {
+    setCollapsed((prev) => ({ ...prev, [group]: !prev[group] }))
   }
 
   function toggleFavorite(id: number, e: React.MouseEvent) {
@@ -284,6 +294,19 @@ export default function SessionSidebar({ sessions, workspaceId, currentId, onDel
           )}
         </div>
 
+        {/* 任务编排入口：置于「任务」分组上方（原在左下角 footer） */}
+        <div className={styles.group}>
+          <Link
+            to={orchestrationUrl(workspaceId)}
+            className={`${styles.groupHeader} ${location.pathname.endsWith('/orchestration') ? styles.itemActive : ''}`}
+          >
+            <span className={styles.groupTitle}>
+              <Network size={13} style={{ marginRight: 4, verticalAlign: '-2px' }} />
+              {t('nav.orchestration')}
+            </span>
+          </Link>
+        </div>
+
         <div className={styles.group}>
           <button type="button" className={styles.groupHeader} onClick={() => toggleGroup('manual')}>
             <span className={styles.groupTitle}><FileText size={13} style={{ marginRight: 4, verticalAlign: '-2px' }} />{t('session.title')}</span>
@@ -332,7 +355,7 @@ export default function SessionSidebar({ sessions, workspaceId, currentId, onDel
                   </div>
                 )
               })}
-              {orchTasks.map((task) => (
+              {startedOrchTasks.map((task) => (
                 <div key={`orch-${task.id}`} className={styles.item}>
                   <div
                     className={styles.itemLink}
@@ -352,7 +375,7 @@ export default function SessionSidebar({ sessions, workspaceId, currentId, onDel
                   </div>
                 </div>
               ))}
-              {orchTasks.length === 0 && orchSessions.length === 0 && manualSessions.length === 0 ? (
+              {startedOrchTasks.length === 0 && orchSessions.length === 0 && manualSessions.length === 0 ? (
                 <p className={styles.empty}>{t('session.noSessions')}</p>
               ) : (
                 manualSessions.map((session) => (
@@ -478,74 +501,52 @@ export default function SessionSidebar({ sessions, workspaceId, currentId, onDel
           </Link>
         </div>
 
+        <div className={styles.group}>
+          <Link
+            to="/mcp-gateway"
+            className={`${styles.groupHeader} ${location.pathname === '/mcp-gateway' ? styles.itemActive : ''}`}
+          >
+            <span className={styles.groupTitle}>
+              <Network size={13} style={{ marginRight: 4, verticalAlign: '-2px' }} />
+              {t('nav.mcpGateway')}
+            </span>
+          </Link>
+        </div>
+
       </div>
 
-      {showAgentStatus && agentStatuses.length > 0 && (
-        <div className={styles.agentStatus}>
-          {agentStatuses.map((s) => {
-            const statusLabel = s.status === 'connected' ? t('status.connected') : s.status === 'connecting' ? t('status.connecting') : t('status.disconnected')
-            const dotClass = s.status === 'connected' ? styles.agentDotOn : s.status === 'connecting' ? styles.agentDotConnecting : styles.agentDotOff
-            const statusClass = s.status === 'connected' ? styles.agentStatusConnected : s.status === 'connecting' ? styles.agentStatusConnecting : styles.agentStatusDisconnected
-            return (
-              <div key={s.agent_type} className={styles.agentStatusItem}>
-                <span className={`${styles.agentDot} ${dotClass}`} />
-                <span className={styles.agentName}>{s.agent_type}</span>
-                <span className={`${styles.agentStatusText} ${statusClass}`}>{statusLabel}</span>
-                <span className={styles.agentCount}>{s.active_count}</span>
-              </div>
-            )
-          })}
-        </div>
-      )}
-
+      {/* 左下角：工作区切换 + 用户信息（弹出菜单均向上）+ 设置入口 */}
       <div className={styles.footer}>
+        <div className={styles.footerWorkspace}>
+          <WorkspaceSelector
+            variant="sidebar"
+            value={workspaceId ?? 0}
+            onChange={(id) => {
+              if (onWorkspaceChange) { onWorkspaceChange(id); return }
+              // 默认行为：持久化选择并跳转到该工作区的任务页
+              try { localStorage.setItem(WORKSPACE_STORAGE_KEY, String(id)) } catch { /* ignore */ }
+              navigate(tasksUrl(id))
+            }}
+            onRefresh={onWorkspaceRefresh}
+          />
+        </div>
         <div className={styles.footerBar}>
-          {!collapsed.footer && (
-            <>
-              <Link
-                to={orchestrationUrl(workspaceId)}
-                className={`${styles.footerIcon} ${location.pathname.endsWith('/orchestration') ? styles.footerIconActive : ''}`}
-                title={t('nav.orchestration')}
-              >
-                <Network size={15} />
-              </Link>
-              <Link
-                to="/settings"
-                className={`${styles.footerIcon} ${location.pathname === '/settings' ? styles.footerIconActive : ''}`}
-                title={t('common.settings')}
-              >
-                <Settings size={15} />
-              </Link>
-              <button
-                type="button"
-                className={`${styles.footerIcon} ${showLogs ? styles.footerIconActive : ''}`}
-                title={t('log.openLogs')}
-                onClick={() => setShowLogs((v) => !v)}
-              >
-                <ScrollText size={15} />
-              </button>
-              <button
-                type="button"
-                className={`${styles.footerIcon} ${showAgentStatus ? styles.footerIconActive : ''}`}
-                title={t('status.agentStatus')}
-                onClick={() => setShowAgentStatus((v) => !v)}
-              >
-                <Zap size={15} />
-              </button>
-            </>
-          )}
+          <UserMenu variant="sidebar" />
           <button
             type="button"
-            className={styles.footerIcon}
-            title={t('common.more')}
-            onClick={() => toggleGroup('footer')}
+            className={`${styles.footerIcon} ${new URLSearchParams(location.search).has('settings') ? styles.footerIconActive : ''}`}
+            title={t('common.settings')}
+            onClick={() => {
+              // 在当前页面上叠加设置弹窗（AppLayout 根据 URL 参数渲染）
+              const params = new URLSearchParams(location.search)
+              params.set('settings', '1')
+              navigate({ pathname: location.pathname, search: params.toString() })
+            }}
           >
-            {collapsed.footer ? <MoreHorizontal size={15} /> : <ChevronDown size={15} />}
+            <Settings size={15} />
           </button>
         </div>
       </div>
-
-      {showLogs && <LogPanel onClose={() => setShowLogs(false)} />}
     </div>
   )
 }

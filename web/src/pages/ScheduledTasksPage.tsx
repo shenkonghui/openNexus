@@ -15,8 +15,6 @@ import PromptInput from '../components/PromptInput'
 import ErrorBanner from '../components/ErrorBanner'
 import LoadingSpinner from '../components/LoadingSpinner'
 import AppLayout, { SidebarToggleButton } from '../components/AppLayout'
-import UserMenu from '../components/UserMenu'
-import WorkspaceSelector from '../components/WorkspaceSelector'
 import styles from './ScheduledTasksPage.module.css'
 import { Calendar, Plus, CheckCircle2, XCircle, Loader2, Clock3, CircleDashed } from 'lucide-react'
 
@@ -239,7 +237,7 @@ export default function ScheduledTasksPage() {
   }
 
   return (
-    <AppLayout sidebarProps={{ sessions, workspaceId, onNewScheduledTask: openCreate }}>
+    <AppLayout sidebarProps={{ sessions, workspaceId, onNewScheduledTask: openCreate, onWorkspaceChange: selectWorkspace, onWorkspaceRefresh: reloadWorkspace }}>
       <div className={styles.main}>
         <div className={styles.header}>
           <div className={styles.headerLeft}>
@@ -247,8 +245,6 @@ export default function ScheduledTasksPage() {
             <h1 className={styles.title}><Calendar size={20} style={{ verticalAlign: '-4px', marginRight: 6 }} />{t('scheduledTask.title')}</h1>
           </div>
           <div className={styles.headerActions}>
-            <WorkspaceSelector value={workspaceId} onChange={selectWorkspace} onRefresh={reloadWorkspace} onError={setError} />
-            <UserMenu />
           </div>
         </div>
         {error && <ErrorBanner message={error} onClose={() => setError('')} />}

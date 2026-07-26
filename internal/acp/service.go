@@ -78,16 +78,21 @@ type Service struct {
 	// probeCache 缓存探测结果，按 agentType 存储，避免重复创建临时会话探测。
 	probeCache map[string][]acp.SessionConfigOption
 	// agentCommands / agentModes 按 agentType 缓存，供新建任务页使用（无会话时）。
-	agentCommands       map[string][]acp.AvailableCommand
-	agentModes          map[string][]acp.SessionMode
-	probeLock           sync.Mutex // 缓存未命中时串行探测，避免并发重复建临时 session
-	mu                  sync.RWMutex
-	wsConfig            config.WorkspaceConfig
-	skillUserDirs       []string
-	skillProjectDirs    []string
-	noteSettings        *repository.NoteSettingsRepository
-	publicBaseURL       string
-	mcpConfigPath       string
+	agentCommands    map[string][]acp.AvailableCommand
+	agentModes       map[string][]acp.SessionMode
+	probeLock        sync.Mutex // 缓存未命中时串行探测，避免并发重复建临时 session
+	mu               sync.RWMutex
+	wsConfig         config.WorkspaceConfig
+	skillUserDirs    []string
+	skillProjectDirs []string
+	noteSettings     *repository.NoteSettingsRepository
+	publicBaseURL    string
+	mcpConfigPath    string
+	// gatewayEndpoint / gatewayToken 由主程序通过 SetGatewayEndpoint 注入。
+	// 非空时 configuredMCPServers 会默认把网关 endpoint 注入给所有会话，
+	// 并收敛被网关代理的 http/sse 上游，无需用户手动启用网关条目。
+	gatewayEndpoint     string
+	gatewayToken        string
 	commandUserDirs     []string
 	commandProjectDirs  []string
 	ruleUserDirs        []string
@@ -152,32 +157,32 @@ func (s *Service) SetTaskMetaTrigger(t TaskMetaTrigger) {
 // messagesDir 为会话消息 JSONL 目录（通常为 {data-dir}/messages）。
 func NewService(db *gorm.DB, messagesDir string, wsConfig config.WorkspaceConfig, skillsConfig config.SkillsConfig, commandsConfig config.CommandsConfig, rulesConfig config.RulesConfig, subAgentsConfig config.SubAgentsConfig) *Service {
 	return &Service{
-		sessions:            repository.NewSessionRepository(db),
-		messages:            repository.NewMessageRepository(messagesDir),
-		workspaces:          repository.NewWorkspaceRepository(db),
-		backends:            make(map[string]Backend),
-		pool:                make(map[string]*Connection),
-		states:              make(map[string]string),
-		connectDone:         make(map[string]chan struct{}),
-		sessionPoolKey:      make(map[string]string),
-		commands:            make(map[string][]acp.AvailableCommand),
-		configs:             make(map[string][]acp.SessionConfigOption),
-		modes:               make(map[string][]acp.SessionMode),
-		probeCache:          make(map[string][]acp.SessionConfigOption),
-		agentCommands:       make(map[string][]acp.AvailableCommand),
-		agentModes:          make(map[string][]acp.SessionMode),
-		activePrompts:       make(map[string]*msgBroadcaster),
-		runningTasks:        repository.NewRunningTaskRepository(db),
-		wsConfig:            wsConfig,
-		skillUserDirs:       append([]string(nil), skillsConfig.UserDirs...),
-		skillProjectDirs:    append([]string(nil), skillsConfig.ProjectDirs...),
-		commandUserDirs:     append([]string(nil), commandsConfig.UserDirs...),
-		commandProjectDirs:  append([]string(nil), commandsConfig.ProjectDirs...),
-		ruleUserDirs:        append([]string(nil), rulesConfig.UserDirs...),
-		ruleProjectDirs:     append([]string(nil), rulesConfig.ProjectDirs...),
-		subAgentUserDirs:          append([]string(nil), subAgentsConfig.UserDirs...),
-		subAgentProjectDirs:       append([]string(nil), subAgentsConfig.ProjectDirs...),
-		failedTaskAutoRetryOnce:   true, // 默认开启；可由 SetFailedTaskAutoRetryOnce 覆盖
+		sessions:                repository.NewSessionRepository(db),
+		messages:                repository.NewMessageRepository(messagesDir),
+		workspaces:              repository.NewWorkspaceRepository(db),
+		backends:                make(map[string]Backend),
+		pool:                    make(map[string]*Connection),
+		states:                  make(map[string]string),
+		connectDone:             make(map[string]chan struct{}),
+		sessionPoolKey:          make(map[string]string),
+		commands:                make(map[string][]acp.AvailableCommand),
+		configs:                 make(map[string][]acp.SessionConfigOption),
+		modes:                   make(map[string][]acp.SessionMode),
+		probeCache:              make(map[string][]acp.SessionConfigOption),
+		agentCommands:           make(map[string][]acp.AvailableCommand),
+		agentModes:              make(map[string][]acp.SessionMode),
+		activePrompts:           make(map[string]*msgBroadcaster),
+		runningTasks:            repository.NewRunningTaskRepository(db),
+		wsConfig:                wsConfig,
+		skillUserDirs:           append([]string(nil), skillsConfig.UserDirs...),
+		skillProjectDirs:        append([]string(nil), skillsConfig.ProjectDirs...),
+		commandUserDirs:         append([]string(nil), commandsConfig.UserDirs...),
+		commandProjectDirs:      append([]string(nil), commandsConfig.ProjectDirs...),
+		ruleUserDirs:            append([]string(nil), rulesConfig.UserDirs...),
+		ruleProjectDirs:         append([]string(nil), rulesConfig.ProjectDirs...),
+		subAgentUserDirs:        append([]string(nil), subAgentsConfig.UserDirs...),
+		subAgentProjectDirs:     append([]string(nil), subAgentsConfig.ProjectDirs...),
+		failedTaskAutoRetryOnce: true, // 默认开启；可由 SetFailedTaskAutoRetryOnce 覆盖
 	}
 }
 
@@ -191,6 +196,15 @@ func (s *Service) SetNotesMCP(settings *repository.NoteSettingsRepository, publi
 // 该文件（标准 mcpServers 格式）中的 server 会注入给所有 agent 会话。
 func (s *Service) SetMCPConfigPath(path string) {
 	s.mcpConfigPath = strings.TrimSpace(path)
+}
+
+// SetGatewayEndpoint 注入 MCP 聚合网关的对外 endpoint 与共享 token。
+// 两者均非空时，configuredMCPServers 会默认把网关注入给所有会话，
+// 并收敛被网关代理的 http/sse 上游——无需用户手动启用网关条目。
+// token 为空（用户尚未生成 MCP Token）时不注入网关，退回原行为。
+func (s *Service) SetGatewayEndpoint(endpoint, token string) {
+	s.gatewayEndpoint = strings.TrimRight(strings.TrimSpace(endpoint), "/")
+	s.gatewayToken = strings.TrimSpace(token)
 }
 
 // SetScanDirs 热刷新 skill/command/rule/subagent 的扫描目录配置。
@@ -217,28 +231,76 @@ func (s *Service) SetScanDirs(skills config.SkillsConfig, commands config.Comman
 
 // configuredMCPServers 读取全局共享 MCP 配置文件并转换为 ACP server 列表。
 // 文件不存在或解析失败时返回 nil 并记日志，不影响会话创建。
-func (s *Service) configuredMCPServers() []acp.McpServer {
+//
+// 若主程序已注入网关 endpoint（SetGatewayEndpoint），则默认把网关注入给所有会话，
+// 并收敛被网关代理的 http/sse 上游——无需用户在 mcp.json 里手动启用网关条目。
+// 网关不接管的 stdio server 仍走 session/new 原路注入。
+//
+// caps 为 agent 握手声明的 MCP 传输能力：agent 不支持 http 时（如 devin），
+// 网关降级为 stdio 桥形态（`opennexus mcp-bridge` 子进程）注入，工具集不变。
+func (s *Service) configuredMCPServers(caps acp.McpCapabilities) []acp.McpServer {
 	if s.mcpConfigPath == "" {
 		return nil
 	}
-	servers, err := LoadMCPServers(s.mcpConfigPath)
+	entries, err := LoadMCPServerEntries(s.mcpConfigPath)
 	if err != nil {
 		slog.Warn("加载全局 MCP 配置失败，跳过注入", "path", s.mcpConfigPath, "err", err)
 		return nil
 	}
-	return servers
+	// 主程序默认启用网关：endpoint + token 就绪时直接注入，不依赖 mcp.json 条目。
+	if s.gatewayEndpoint != "" && s.gatewayToken != "" {
+		gwEntry := gatewayHTTPEntry(s.gatewayEndpoint, s.gatewayToken)
+		if !caps.Http {
+			// 不支持 http 传输的 agent：网关降级为 stdio 桥注入。
+			// 桥不可用（取不到主程序路径）时保留 http 条目，交由末端能力过滤兜底。
+			if bridge, ok := s.gatewayBridgeEntry(); ok {
+				gwEntry = bridge
+			}
+		}
+		return ConvertMCPServers(collapseWithGatewayEntry(entries, gwEntry))
+	}
+	// 兼容旧路径：mcp.json 里已手动写入网关条目时仍按原逻辑收敛。
+	return ConvertMCPServers(CollapseViaGateway(entries))
+}
+
+// gatewayBridgeEntry 构造 stdio 形态的网关条目：通过 `opennexus mcp-bridge` 子进程
+// 把网关的 Streamable HTTP endpoint 桥接为 stdio MCP server，
+// 供握手声明 http:false 的 agent（如 devin）接入。
+// endpoint/token 经 env 传递，避免 token 暴露在进程参数里。
+func (s *Service) gatewayBridgeEntry() (NamedMCPServerEntry, bool) {
+	exe, err := os.Executable()
+	if err != nil {
+		slog.Warn("获取主程序可执行文件路径失败，无法注入 stdio 网关桥", "err", err)
+		return NamedMCPServerEntry{}, false
+	}
+	return NamedMCPServerEntry{
+		Name: GatewayMCPName,
+		Entry: MCPServerEntry{
+			Type:    MCPTypeStdio,
+			Command: exe,
+			Args:    []string{"mcp-bridge"},
+			Env: map[string]string{
+				"OPENNEXUS_GATEWAY_URL":   s.gatewayEndpoint,
+				"OPENNEXUS_GATEWAY_TOKEN": s.gatewayToken,
+			},
+		},
+	}, true
 }
 
 // sessionMCPServers 汇总注入给指定会话的全部 MCP server：全局共享 + 笔记 MCP。
 //
 // 去重：若全局 mcp.json 已含 opennexus-notes 条目（生成 token 时自动写入），
 // 则不再追加按用户 token 动态注入的笔记 MCP，避免同名 server 重复注入。
-func (s *Service) sessionMCPServers(userID uint) []acp.McpServer {
-	configured := s.configuredMCPServers()
-	if hasServerNamed(configured, notesMCPName) {
-		return configured
+// 聚合网关启用时笔记 MCP 已被网关代理并从列表中收敛，同样不再单独注入。
+//
+// 最终列表按 caps 做能力过滤：agent 不支持的传输类型（http/sse）丢弃并告警。
+func (s *Service) sessionMCPServers(userID uint, caps acp.McpCapabilities) []acp.McpServer {
+	configured := s.configuredMCPServers(caps)
+	servers := configured
+	if !hasServerNamed(configured, notesMCPName) && !hasServerNamed(configured, GatewayMCPName) {
+		servers = append(configured, s.notesMCPServers(userID)...)
 	}
-	return append(configured, s.notesMCPServers(userID)...)
+	return filterByMcpCapabilities(servers, caps)
 }
 
 // notesMCPName 是笔记 MCP server 的固定名称（与 mcp.json 中写入的条目名一致）。
@@ -1066,12 +1128,6 @@ func (s *Service) CreateSessionWithSource(ctx context.Context, agentType string,
 	return s.createSessionFull(ctx, agentType, workspaceID, userID, source, modelValue, nil, "")
 }
 
-// CreateSessionWithParent 创建会话并可指定父会话（用于 MCP 工具创建子会话/子任务）。
-// parentSessionID 非 nil 时记录父子关系；其余行为与 CreateSessionWithSource 一致。
-func (s *Service) CreateSessionWithParent(ctx context.Context, agentType string, workspaceID uint, userID uint, source, modelValue string, parentSessionID *uint) (*models.Session, error) {
-	return s.createSessionFull(ctx, agentType, workspaceID, userID, source, modelValue, parentSessionID, "")
-}
-
 // CreateSessionWithCwd 创建会话并将 cwd 固定为用户指定的目录（如已存在的 git worktree）。
 // cwd 非空时覆盖工作区 cwd；空字符串时等价于 CreateSessionWithSource（跟随工作区）。
 func (s *Service) CreateSessionWithCwd(ctx context.Context, agentType string, workspaceID uint, userID uint, source, modelValue, cwd string) (*models.Session, error) {
@@ -1250,7 +1306,7 @@ func (s *Service) PromptWithExecution(ctx context.Context, sessionID, prompt str
 			return nil, fmt.Errorf("激活会话-建立连接: %w", actErr)
 		}
 		s.debugBindPending(session.AgentType, session.ID)
-		newAgentSID, configOptions, modes, actErr := conn.NewSession(ctx, cwd, s.sessionAdditionalDirs(session, cwd), s.sessionMCPServers(session.UserID), s.rulesSystemPrompt(cwd))
+		newAgentSID, configOptions, modes, actErr := conn.NewSession(ctx, cwd, s.sessionAdditionalDirs(session, cwd), s.sessionMCPServers(session.UserID, conn.McpCapabilities()), s.rulesSystemPrompt(cwd))
 		s.debugClearPending(session.AgentType)
 		if actErr != nil {
 			return nil, fmt.Errorf("激活会话-创建 ACP 会话: %w", actErr)
@@ -2104,16 +2160,11 @@ func (s *Service) ListCommands(sessionID string) ([]acp.AvailableCommand, error)
 
 // sessionCwd 返回会话的工作目录。
 //
-// 编排任务（Source=orchestration）在其专属 git worktree 内运行，createSessionFull
-// 已将其 session.Cwd 设为 worktree 路径——此类会话优先使用 session.Cwd，不回退工作区 cwd。
-//
-// 普通会话若被固定到自定义目录（创建时用户选择了 worktree/目录，使 session.Cwd 与工作区
-// cwd 不同），同样优先使用 session.Cwd；否则 cwd 跟随工作区：若工作区 cwd 被修改，
-// 已有会话应感知到新 cwd，因此这类会话实时从工作区重新读取（保留历史行为，避免回归）。
+// 会话若被固定到自定义目录（创建时用户选择了 worktree/目录，或任务执行时指定了 worktree，
+// 使 session.Cwd 与工作区 cwd 不同），优先使用 session.Cwd；否则 cwd 跟随工作区：
+// 若工作区 cwd 被修改，已有会话应感知到新 cwd，因此这类会话实时从工作区重新读取
+// （保留历史行为，避免回归）。
 func sessionCwd(session *models.Session, workspaces *repository.WorkspaceRepository) string {
-	if session.Source == models.SessionSourceOrchestration && strings.TrimSpace(session.Cwd) != "" {
-		return session.Cwd
-	}
 	if session.WorkspaceID != nil {
 		if ws, err := workspaces.FindByID(*session.WorkspaceID); err == nil {
 			// 会话被固定到自定义目录（cwd 与工作区 cwd 不同）时优先使用会话自身 cwd。
@@ -2582,7 +2633,7 @@ func (s *Service) ResumeSession(ctx context.Context, sessionID string) (*models.
 		conn.Client().CancelPermissions(acp.SessionId(oldAgentSID))
 	}
 	s.debugBindPending(session.AgentType, session.ID)
-	newAgentSID, configOptions, modes, err := conn.NewSession(ctx, cwd, s.sessionAdditionalDirs(session, cwd), s.sessionMCPServers(session.UserID), s.rulesSystemPrompt(cwd))
+	newAgentSID, configOptions, modes, err := conn.NewSession(ctx, cwd, s.sessionAdditionalDirs(session, cwd), s.sessionMCPServers(session.UserID, conn.McpCapabilities()), s.rulesSystemPrompt(cwd))
 	s.debugClearPending(session.AgentType)
 	if err != nil {
 		return nil, fmt.Errorf("恢复会话-创建 ACP 会话: %w", err)
@@ -2670,7 +2721,7 @@ func (s *Service) ClearContext(ctx context.Context, sessionID string) (*models.S
 
 	oldAgentSID := session.AgentSessionID
 	s.debugBindPending(session.AgentType, session.ID)
-	newAgentSID, configOptions, modes, err := conn.NewSession(ctx, cwd, s.sessionAdditionalDirs(session, cwd), s.sessionMCPServers(session.UserID), s.rulesSystemPrompt(cwd))
+	newAgentSID, configOptions, modes, err := conn.NewSession(ctx, cwd, s.sessionAdditionalDirs(session, cwd), s.sessionMCPServers(session.UserID, conn.McpCapabilities()), s.rulesSystemPrompt(cwd))
 	s.debugClearPending(session.AgentType)
 	if err != nil {
 		return nil, fmt.Errorf("清理上下文-创建 ACP 会话: %w", err)

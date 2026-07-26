@@ -1,5 +1,5 @@
-import { useEffect } from 'react'
-import { BrowserRouter, Routes, Route, Navigate, useParams, useNavigate } from 'react-router-dom'
+import { useEffect, lazy, Suspense } from 'react'
+import { BrowserRouter, Routes, Route, Navigate, useParams, useNavigate, useSearchParams } from 'react-router-dom'
 import { AuthProvider } from './context/AuthContext'
 import { ThemeProvider } from './context/ThemeContext'
 import { FileViewerProvider } from './context/FileViewerContext'
@@ -7,11 +7,14 @@ import { WORKSPACE_STORAGE_KEY } from './hooks/useCurrentWorkspace'
 import { loadDocFolders } from './utils/docs'
 import LoginPage from './pages/LoginPage'
 import ChatPage from './pages/ChatPage'
-import SettingsPage from './pages/SettingsPage'
 import ScheduledTasksPage from './pages/ScheduledTasksPage'
 import NotesPage from './pages/NotesPage'
 import ProfilePage from './pages/ProfilePage'
 import SessionRedirect from './components/SessionRedirect'
+import LoadingSpinner from './components/LoadingSpinner'
+
+// MCP 网关页独立代码分割：访问 /mcp-gateway 时才加载，减小首屏 bundle。
+const McpGatewayPage = lazy(() => import('./pages/McpGatewayPage'))
 
 function WorkspaceHomeRedirect() {
   const { wid } = useParams<{ wid: string }>()
@@ -38,6 +41,13 @@ function DocRedirect() {
   return null
 }
 
+// 兼容旧的 /settings?tab=x 链接：设置已改为全局弹窗，重定向到首页并带弹窗参数。
+function SettingsRedirect() {
+  const [searchParams] = useSearchParams()
+  const tab = searchParams.get('tab')
+  return <Navigate to={`/?settings=1${tab ? `&settingsTab=${tab}` : ''}`} replace />
+}
+
 export default function App() {
   return (
     <ThemeProvider>
@@ -59,7 +69,15 @@ export default function App() {
           <Route path="/notes" element={<NotesPage />} />
           <Route path="/docs/:folderId/*" element={<DocRedirect />} />
           <Route path="/profile" element={<ProfilePage />} />
-          <Route path="/settings" element={<SettingsPage />} />
+          <Route path="/settings" element={<SettingsRedirect />} />
+          <Route
+            path="/mcp-gateway"
+            element={
+              <Suspense fallback={<LoadingSpinner />}>
+                <McpGatewayPage />
+              </Suspense>
+            }
+          />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
         </BrowserRouter>

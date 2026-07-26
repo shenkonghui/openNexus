@@ -3,10 +3,11 @@ import { useTranslation } from 'react-i18next'
 import TerminalPanel from '../components/Terminal'
 import ChangesPanel from '../components/ChangesPanel'
 import DebugPanel from '../components/DebugPanel'
+import BrowserPanel from '../components/BrowserPanel'
 import DocWorkspace, { type DocEditMode } from '../components/DocWorkspace'
 import WorkspaceFileEditor from '../components/WorkspaceFileEditor'
 import { useFileViewer } from '../context/FileViewerContext'
-import { Folder, SquareTerminal, Pencil, Bug, MessageSquare, BookOpenText } from 'lucide-react'
+import { Folder, SquareTerminal, Pencil, Bug, MessageSquare, BookOpenText, Globe } from 'lucide-react'
 import type { PanelDef, PanelCtx } from './types'
 import ChatPanel from './ChatPanel'
 
@@ -166,6 +167,10 @@ function renderChat(ctx: PanelCtx) {
   )
 }
 
+function renderBrowser(ctx: PanelCtx) {
+  return <BrowserPanel ctx={ctx} />
+}
+
 /** 面板注册表。新增面板在此加一条；新增模式只需在 MODES 引用面板 id。 */
 export const PANELS: PanelDef[] = [
   { id: 'chat', titleKey: 'panel.chat', icon: <MessageSquare size={14} />, render: renderChat },
@@ -173,5 +178,6 @@ export const PANELS: PanelDef[] = [
   { id: 'terminal', titleKey: 'panel.terminal', icon: <SquareTerminal size={14} />, render: renderTerminal },
   { id: 'changes', titleKey: 'panel.changes', icon: <Pencil size={14} />, render: renderChanges },
   { id: 'debug', titleKey: 'panel.debug', icon: <Bug size={14} />, render: renderDebug },
+  { id: 'browser', titleKey: 'panel.browser', icon: <Globe size={14} />, render: renderBrowser },
   { id: 'doc-preview', titleKey: 'panel.docPreview', icon: <BookOpenText size={14} />, render: renderDocPreview },
 ]

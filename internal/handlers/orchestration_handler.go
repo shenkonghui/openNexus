@@ -75,12 +75,11 @@ func (h *OrchestrationHandler) Get(c *gin.Context) {
 }
 
 type saveDefRequest struct {
-	MaxParallel     int                        `json:"max_parallel"`
-	Tasks           []models.OrchestrationTask `json:"tasks"`
-	ParentSessionID *uint                      `json:"parent_session_id"`
+	MaxParallel int                        `json:"max_parallel"`
+	Tasks       []models.OrchestrationTask `json:"tasks"`
 }
 
-// Save PUT /api/v1/orchestration?workspace_id=123 — 整体覆盖保存编排定义。
+// Save PUT /api/v1/orchestration?workspace_id=123 — 整体覆盖保存任务定义。
 func (h *OrchestrationHandler) Save(c *gin.Context) {
 	cwd, _, ok := h.resolveCwd(c)
 	if !ok {
@@ -91,42 +90,12 @@ func (h *OrchestrationHandler) Save(c *gin.Context) {
 		Fail(c, http.StatusBadRequest, "INVALID_REQUEST", "请求参数无效")
 		return
 	}
-	parentSessionID := req.ParentSessionID
-	// 整体覆盖时若未携带 parent_session_id，回填现有值，避免丢失父会话登记。
-	if parentSessionID == nil {
-		if cur, err := h.svc.Load(cwd); err == nil {
-			parentSessionID = cur.ParentSessionID
-		}
-	}
-	def := &models.OrchestrationDef{MaxParallel: req.MaxParallel, Tasks: req.Tasks, ParentSessionID: parentSessionID}
+	def := &models.OrchestrationDef{MaxParallel: req.MaxParallel, Tasks: req.Tasks}
 	if err := h.svc.Save(cwd, def); err != nil {
 		Fail(c, http.StatusInternalServerError, "INTERNAL", err.Error())
 		return
 	}
 	Success(c, http.StatusOK, def)
-}
-
-type setParentSessionRequest struct {
-	SessionID uint `json:"session_id" binding:"required"`
-}
-
-// SetParentSession PUT /api/v1/orchestration/parent-session?workspace_id=123
-// 登记编排管理会话为 tasks.json 的父会话，供后续任务子会话关联。
-func (h *OrchestrationHandler) SetParentSession(c *gin.Context) {
-	cwd, _, ok := h.resolveCwd(c)
-	if !ok {
-		return
-	}
-	var req setParentSessionRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		Fail(c, http.StatusBadRequest, "INVALID_REQUEST", "请求参数无效")
-		return
-	}
-	if err := h.svc.SetParentSession(cwd, req.SessionID); err != nil {
-		Fail(c, http.StatusInternalServerError, "INTERNAL", err.Error())
-		return
-	}
-	Success(c, http.StatusOK, gin.H{"parent_session_id": req.SessionID})
 }
 
 type upsertTaskRequest struct {

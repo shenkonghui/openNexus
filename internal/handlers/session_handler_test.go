@@ -108,6 +108,25 @@ func (f *fakeSessionStore) ListSessionsBySource(userID uint, source string) ([]m
 	return out, nil
 }
 
+// FindSessionsByWorkspaceID 返回指定 workspace 下的会话（按 created_at DESC）。
+func (f *fakeSessionStore) FindSessionsByWorkspaceID(workspaceID uint) ([]models.Session, error) {
+	var out []models.Session
+	for _, s := range f.sessions {
+		if s.WorkspaceID != nil && *s.WorkspaceID == workspaceID {
+			out = append(out, *s)
+		}
+	}
+	// 按 CreatedAt DESC 排序（fake store 用 map，需显式排序保证“最近一条”语义）
+	for i := 0; i < len(out); i++ {
+		for j := i + 1; j < len(out); j++ {
+			if out[j].CreatedAt.After(out[i].CreatedAt) {
+				out[i], out[j] = out[j], out[i]
+			}
+		}
+	}
+	return out, nil
+}
+
 func (f *fakeSessionStore) GetSessionByDBID(id uint) (*models.Session, error) {
 	s, ok := f.sessions[id]
 	if !ok {
@@ -335,6 +354,8 @@ func TestSessionHandler_Create_Success(t *testing.T) {
 	}
 }
 
+// 一个工作区只保留一个编排管理会话：同工作区重复创建应复用已有会话（200），
+// 不同工作区仍各自新建（201）。
 func TestSessionHandler_Create_UnknownAgent(t *testing.T) {
 	store := newFakeSessionStore()
 	store.createErr = agent.ErrAgentNotFound
@@ -594,6 +615,9 @@ func (s *commandsFakeStore) ListSessions(uint) ([]models.Session, error) { retur
 func (s *commandsFakeStore) ListSessionsBySource(uint, string) ([]models.Session, error) {
 	return nil, nil
 }
+func (s *commandsFakeStore) FindSessionsByWorkspaceID(uint) ([]models.Session, error) {
+	return nil, nil
+}
 func (s *commandsFakeStore) GetSessionByDBID(id uint) (*models.Session, error) {
 	if sess, ok := s.sessions[id]; ok {
 		return sess, nil
@@ -643,7 +667,7 @@ func (s *commandsFakeStore) SetConfigOption(_ context.Context, _, _, _ string) e
 }
 func (s *commandsFakeStore) SetSessionMode(_ context.Context, _, _ string) error { return nil }
 func (s *commandsFakeStore) RespondPermission(_, _, _ string, _ bool) error      { return nil }
-func (s *commandsFakeStore) UpdateTitle(_ uint, _ string) error { return nil }
+func (s *commandsFakeStore) UpdateTitle(_ uint, _ string) error                  { return nil }
 func (s *commandsFakeStore) SetSessionYolo(id uint, yolo bool) (*models.Session, error) {
 	return &models.Session{ID: id, Yolo: yolo}, nil
 }
@@ -661,7 +685,7 @@ func (s *commandsFakeStore) ResumeInterruptedTask(context.Context, uint) (<-chan
 	return nil, nil
 }
 func (s *commandsFakeStore) DeleteMessagesFromSequence(string, int) (int64, error) { return 0, nil }
-func (s *commandsFakeStore) FindMessageByID(uint) (*models.Message, error)       { return nil, nil }
+func (s *commandsFakeStore) FindMessageByID(uint) (*models.Message, error)         { return nil, nil }
 
 func TestSessionHandler_Prompt_Empty(t *testing.T) {
 	store := newFakeSessionStore()

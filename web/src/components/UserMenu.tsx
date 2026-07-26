@@ -6,7 +6,7 @@ import { useTheme } from '../context/ThemeContext'
 import { ChevronUp, ChevronDown, User, Sun, Moon, Languages, LogOut } from 'lucide-react'
 import styles from './UserMenu.module.css'
 
-export default function UserMenu() {
+export default function UserMenu({ variant = 'header' }: { variant?: 'header' | 'sidebar' }) {
   const { t, i18n } = useTranslation()
   const { user, logout } = useAuthContext()
   const { theme, toggleTheme } = useTheme()
@@ -49,18 +49,20 @@ export default function UserMenu() {
   }
 
   return (
-    <div className={styles.container} ref={ref}>
+    <div className={`${styles.container} ${variant === 'sidebar' ? styles.containerSidebar : ''}`} ref={ref}>
       <button
         type="button"
-        className={styles.trigger}
+        className={`${styles.trigger} ${variant === 'sidebar' ? styles.triggerSidebar : ''}`}
         onClick={() => setOpen((v) => !v)}
       >
         <span className={styles.avatar}>{user.username.charAt(0).toUpperCase()}</span>
         <span className={styles.username}>{user.username}</span>
-        <span className={styles.arrow}>{open ? <ChevronUp size={12} /> : <ChevronDown size={12} />}</span>
+        {variant === 'header' && (
+          <span className={styles.arrow}>{open ? <ChevronUp size={12} /> : <ChevronDown size={12} />}</span>
+        )}
       </button>
       {open && (
-        <div className={styles.dropdown}>
+        <div className={`${styles.dropdown} ${variant === 'sidebar' ? styles.dropdownUp : ''}`}>
           <button type="button" className={styles.menuItem} onClick={handleProfile}>
             <span className={styles.menuIcon}><User size={14} /></span>
             {t('nav.profile')}

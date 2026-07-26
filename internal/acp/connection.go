@@ -19,6 +19,10 @@ type Connection struct {
 	conn    *acp.ClientSideConnection
 	process *Process
 	client  *Client
+
+	// mcpCaps 是 initialize 握手中 agent 声明的 MCP 传输能力（http/sse 等）。
+	// 在 Initialize 成功后写入（连接入池前），之后只读。
+	mcpCaps acp.McpCapabilities
 }
 
 // NewConnection 启动 agent 进程并建立 ACP 连接。
@@ -62,8 +66,16 @@ func (c *Connection) Initialize(ctx context.Context) (acp.InitializeResponse, er
 	if err != nil {
 		return acp.InitializeResponse{}, fmt.Errorf("ACP initialize: %w", err)
 	}
-	slog.Debug("ACP initialize 完成", "protocol", resp.ProtocolVersion, "auth_methods", len(resp.AuthMethods))
+	c.mcpCaps = resp.AgentCapabilities.McpCapabilities
+	slog.Debug("ACP initialize 完成", "protocol", resp.ProtocolVersion, "auth_methods", len(resp.AuthMethods),
+		"mcp_http", c.mcpCaps.Http, "mcp_sse", c.mcpCaps.Sse)
 	return resp, nil
+}
+
+// McpCapabilities 返回 agent 握手时声明的 MCP 传输能力。
+// stdio 是 ACP 基线能力（协议保证支持），此处只描述 http/sse 等可选传输。
+func (c *Connection) McpCapabilities() acp.McpCapabilities {
+	return c.mcpCaps
 }
 
 // authMethodID 从 Initialize 返回的认证方式中提取 methodId。

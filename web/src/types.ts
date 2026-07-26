@@ -119,7 +119,7 @@ export interface Session {
   last_prompt: string;
   title: string;
   source: 'manual' | 'scheduled' | 'classify' | 'orchestration';
-  /** 父会话主键；编排管理会话为 null，编排子任务会话指向管理会话 */
+  /** 父会话主键；MCP 工具创建的子会话指向父会话，普通会话为 null */
   parent_session_id?: number | null;
   created_at: string;
   closed_at: string | null;

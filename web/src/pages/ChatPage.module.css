@@ -71,6 +71,15 @@
   color: var(--text-primary);
 }
 
+/* 任务模式顶栏收缩按钮居中容器 */
+.centerToggle {
+  flex: 1;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-width: 0;
+}
+
 /* agent 任务级栏：agent 类型、session 目录 */
 .sessionInfo {
   display: flex;

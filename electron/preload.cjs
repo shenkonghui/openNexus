@@ -11,6 +11,8 @@
  * 安全:contextIsolation=true,渲染进程拿不到 require/process。
  */
 
+const path = require('path')
+const { pathToFileURL } = require('url')
 const { contextBridge, webUtils, ipcRenderer } = require('electron')
 
 contextBridge.exposeInMainWorld('opennexus', {
@@ -21,6 +23,10 @@ contextBridge.exposeInMainWorld('opennexus', {
     chrome: process.versions.chrome,
   },
   isElectron: true,
+  // webview 预加载脚本,供前端 <webview preload="..."> 使用。
+  // 必须是 file:// URL:Electron 的 webview preload 属性只接受 file:/asar: 协议,
+  // 传裸路径会被静默忽略,导致 webview 里的选区/元素选择器完全失效。
+  webviewPreload: pathToFileURL(path.join(__dirname, 'webview-preload.cjs')).toString(),
   // file 为渲染层 drop 事件或 <input type=file> 拿到的原生 File 对象。
   // 注意:不能跨 IPC 序列化,必须在渲染层同步调用。
   getPathForFile: (file) => webUtils.getPathForFile(file),

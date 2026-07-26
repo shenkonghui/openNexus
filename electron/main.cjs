@@ -196,6 +196,7 @@ async function bootstrap() {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false, // preload.cjs 需用 node require
+      webviewTag: true, // 启用 <webview> 内置浏览器
     },
   })
 

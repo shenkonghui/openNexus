@@ -1,12 +1,13 @@
 import { useState, useEffect } from 'react'
 import type { ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
+import { Link } from 'react-router-dom'
 import { getAgentsConfig, updateAgentsConfig, scanSkillFiles, scanCommandFiles, scanRuleFiles, scanSubAgentFiles, writeFileContent } from '../api/config'
 import type { DirConfigView, AgentsConfigView, ScannedFileItem } from '../api/config'
 import ErrorBanner from './ErrorBanner'
 import FileEditor from './FileEditor'
 import McpConfigCard from './McpConfigCard'
-import { Zap, SquareTerminal, ClipboardList, Bot, X, Trash2, Plus } from 'lucide-react'
+import { Zap, SquareTerminal, ClipboardList, Bot, X, Trash2, Plus, Network, ArrowRight } from 'lucide-react'
 import styles from './ConfigEditor.module.css'
 
 type ConfigSection = 'skills' | 'commands' | 'rules' | 'subagents'
@@ -404,9 +405,20 @@ export default function ConfigEditor() {
         })}
       </div>
 
-      {/* MCP 配置卡片（全局共享，注入给所有 agent 会话） */}
+      {/* MCP 配置卡片（全局共享，注入给所有 agent 会话）。
+        聚合网关已抽到独立页面 /mcp-gateway，这里只留跳转入口。 */}
       <div className={styles.cards}>
         <McpConfigCard />
+        <Link to="/mcp-gateway" className={styles.linkCard}>
+          <div className={styles.linkCardBody}>
+            <span className={styles.cardIcon}><Network size={16} style={{ verticalAlign: '-2px' }} /></span>
+            <div>
+              <div className={styles.cardTitle}>{t('configEditor.gateway')}</div>
+              <div className={styles.linkCardDesc}>{t('configEditor.gatewayLinkDesc')}</div>
+            </div>
+          </div>
+          <ArrowRight size={16} className={styles.linkCardArrow} />
+        </Link>
       </div>
 
       {/* 路径配置编辑弹窗 */}

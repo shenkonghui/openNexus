@@ -237,7 +237,7 @@ Workspace directory policy:
 
 ## Sub-Agents
 
-Sub-agents are reusable agent definitions that can be invoked from any agent session via the built-in MCP server at `/mcp/subagent`.
+Sub-agents are reusable agent definitions (markdown files) scanned by the backend and shown in Settings; agents with native subagent support (e.g. Claude Code) can invoke definitions of the same format directly via their own Task mechanism.
 
 ### Defining a Sub-Agent
 
@@ -257,13 +257,12 @@ tools:
 You are a code review specialist. Analyze pull requests for bugs, style issues, and security vulnerabilities.
 ```
 
-The backend scans these files on startup and registers them as MCP tools accessible to all agent sessions.
+The backend scans these files on startup; they can be viewed and managed in Settings.
 
 ### Usage
 
-- **From agent prompt**: Invoke using `RunSubAgent` (`/subagent`) tool call
-- **Auto-discovery**: The `opennexus-subagent` MCP server automatically syncs entries to the global MCP config
-- **Inheritance**: Sub-agents can inherit the parent session's agent preference (model, settings) via `UserAgentPrefs`
+- **Native invocation**: Agents with subagent support (e.g. Claude Code) discover and delegate to sub-agents automatically within a session
+- **Session-level delegation**: Use task orchestration (the `opennexus-task` MCP server) to create independent sub-task sessions
 
 ## Notes MCP Server
 

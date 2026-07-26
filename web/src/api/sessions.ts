@@ -6,7 +6,7 @@ export function createSession(
   agentType: string,
   workspaceId?: number,
   modelValue?: string,
-  source?: 'manual' | 'orchestration',
+  source?: 'manual',
   cwd?: string,
   yolo?: boolean,
 ): Promise<{ data: Session }> {
@@ -23,8 +23,8 @@ export function createSession(
   })
 }
 
-// 获取会话列表（可选 source 过滤：manual / scheduled / classify）
-export function listSessions(source?: 'manual' | 'scheduled' | 'classify'): Promise<{ data: { sessions: Session[] } }> {
+// 获取会话列表（可选 source 过滤：manual / scheduled / classify / orchestration）
+export function listSessions(source?: 'manual' | 'scheduled' | 'classify' | 'orchestration'): Promise<{ data: { sessions: Session[] } }> {
   const qs = source ? `?source=${source}` : ''
   return apiFetch(`/sessions${qs}`)
 }
@@ -32,6 +32,21 @@ export function listSessions(source?: 'manual' | 'scheduled' | 'classify'): Prom
 // 获取当前用户正在运行的会话 db_session_id 列表（侧边栏运行状态图标用）
 export function listRunningSessions(): Promise<{ data: { db_session_ids: number[] } }> {
   return apiFetch('/sessions/running')
+}
+
+// 获取指定 workspace 下最近一条会话（按 created_at DESC）。
+// 任务助手（OrchestrationChatPanel）用它实现“一个工作区只复用一条管理会话”：
+// 命中返回该会话，无会话（后端 404）或非 404 错误时返回 null，由调用方决定是否新建。
+export async function getLatestSessionByWorkspace(
+  workspaceId: number,
+): Promise<{ data: Session | null }> {
+  try {
+    return await apiFetch(`/sessions/latest?workspace_id=${workspaceId}`)
+  } catch (e) {
+    const code = (e as Error & { code?: string })?.code
+    if (code === 'SESSION_NOT_FOUND') return { data: null }
+    throw e
+  }
 }
 
 // 获取单个会话
