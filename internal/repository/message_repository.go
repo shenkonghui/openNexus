@@ -148,6 +148,35 @@ func (r *MessageRepository) FindBySessionIDLastN(sessionID string, n int) ([]mod
 	return msgs[len(msgs)-n:], nil
 }
 
+// FindBySessionIDBeforeLastN 返回 sequence < beforeSeq 的最近 n 条（升序）。
+// beforeSeq<=0 时不限制 sequence（等价于 LastN）。n<=0 返回空切片。
+// 用于「加载更多更早消息」：以当前最早可见消息的 sequence 为游标，向前翻页。
+func (r *MessageRepository) FindBySessionIDBeforeLastN(sessionID string, beforeSeq int, n int) ([]models.Message, error) {
+	if n <= 0 {
+		return []models.Message{}, nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	msgs, err := r.readSessionLocked(sessionID)
+	if err != nil {
+		return nil, err
+	}
+	var out []models.Message
+	if beforeSeq > 0 {
+		for _, m := range msgs {
+			if m.Sequence < beforeSeq {
+				out = append(out, m)
+			}
+		}
+	} else {
+		out = msgs
+	}
+	if n >= len(out) {
+		return out, nil
+	}
+	return out[len(out)-n:], nil
+}
+
 // FindByKind 查询指定 kind 的消息，按 sequence 升序。
 func (r *MessageRepository) FindByKind(sessionID, kind string) ([]models.Message, error) {
 	r.mu.Lock()

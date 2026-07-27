@@ -2156,6 +2156,34 @@ func (s *Service) FindMessageByID(messageID uint) (*models.Message, error) {
 	return s.messages.FindByID(messageID)
 }
 
+// ListMessagesRecent 返回最近的若干条消息 + 是否还有更早的消息（供前端「加载更多」）。
+// beforeSeq>0 时仅返回 sequence<beforeSeq 的消息（向前翻页游标）；<=0 时不限制。
+// limit<=0 时使用默认页大小；limit>maxMessagePageSize 时截断为最大值。
+// hasMore 表示当前返回范围之外是否还有更早的消息——前端据此决定是否显示「加载更多」。
+// 实现上多取 1 条用于判断 hasMore，避免单独的 Count 调用。
+func (s *Service) ListMessagesRecent(sessionID string, beforeSeq int, limit int) (msgs []models.Message, hasMore bool, err error) {
+	session, err := s.GetSession(sessionID)
+	if err != nil {
+		return nil, false, err
+	}
+	if limit <= 0 {
+		limit = defaultMessagePageSize
+	}
+	if limit > maxMessagePageSize {
+		limit = maxMessagePageSize
+	}
+	// 多取 1 条用于判断 hasMore：返回条数 > limit 即说明还有更早的消息。
+	// fetched 为升序，末尾是最近的消息；截断时丢弃最早的那条多余条，保留最近的 limit 条。
+	fetched, err := s.messages.FindBySessionIDBeforeLastN(session.SessionID, beforeSeq, limit+1)
+	if err != nil {
+		return nil, false, err
+	}
+	if len(fetched) > limit {
+		return fetched[1:], true, nil
+	}
+	return fetched, false, nil
+}
+
 // DeleteMessagesFromSequence 删除指定会话中 sequence 大于等于 fromSeq 的消息（会话回滚，含目标）。
 func (s *Service) DeleteMessagesFromSequence(sessionID string, fromSeq int) (int64, error) {
 	return s.messages.DeleteFromSequence(sessionID, fromSeq)

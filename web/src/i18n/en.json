@@ -522,6 +522,7 @@
     "changes": "Changes",
     "diffView": "Diff View",
     "noMessages": "Start a conversation! Send a message to the Agent.",
+    "loadMore": "Load earlier messages",
     "clearHistory": "Clear History",
     "clearConfirm": "Are you sure you want to clear the session history?",
     "model": "Model",

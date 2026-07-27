@@ -522,6 +522,7 @@
     "changes": "变更",
     "diffView": "差异对比",
     "noMessages": "开始对话吧！发送一条消息给 Agent。",
+    "loadMore": "加载更多历史消息",
     "clearHistory": "清空历史",
     "clearConfirm": "确定清空当前会话历史吗？",
     "model": "模型",

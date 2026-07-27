@@ -240,6 +240,81 @@ func TestService_ListMessages_ReturnsLastN(t *testing.T) {
 	}
 }
 
+func TestService_ListMessagesRecent(t *testing.T) {
+	db := setupACPTestDB(t)
+	repo := repository.NewSessionRepository(db)
+	sess := &models.Session{
+		SessionID: "msg-recent-1", AgentType: "claude-code", Cwd: "/tmp",
+		Status: models.SessionStatusActive, WorkspaceMode: "",
+	}
+	_ = repo.Create(sess)
+	skills, commands, rules, subAgents := testDiscoveryConfig(t)
+	msgDir := t.TempDir()
+	msgRepo := repository.NewMessageRepository(msgDir)
+	// 写 10 条消息，sequence 1..10
+	for i := 1; i <= 10; i++ {
+		_ = msgRepo.Create(&models.Message{
+			SessionID: "msg-recent-1", DBSessionID: sess.ID,
+			Role: models.MessageRoleAssistant, Kind: models.MessageKindAgentMessageChunk,
+			Content: fmt.Sprintf("m%d", i), RawJSON: "{}", Sequence: i,
+		})
+	}
+	svc := NewService(db, msgDir, config.WorkspaceConfig{DefaultMode: "external"}, skills, commands, rules, subAgents)
+
+	// 默认（before=0, limit=0→默认页大小 500）：返回全部 10 条，hasMore=false
+	msgs, hasMore, err := svc.ListMessagesRecent("msg-recent-1", 0, 0)
+	if err != nil {
+		t.Fatalf("ListMessagesRecent 返回错误: %v", err)
+	}
+	if len(msgs) != 10 || hasMore {
+		t.Fatalf("期望 10 条 hasMore=false，实际 %d 条 hasMore=%v", len(msgs), hasMore)
+	}
+
+	// limit=3：返回最近 3 条 [8,9,10]，hasMore=true
+	msgs, hasMore, err = svc.ListMessagesRecent("msg-recent-1", 0, 3)
+	if err != nil {
+		t.Fatalf("ListMessagesRecent limit=3 返回错误: %v", err)
+	}
+	if len(msgs) != 3 || msgs[0].Sequence != 8 || msgs[2].Sequence != 10 || !hasMore {
+		t.Fatalf("期望 [8,9,10] hasMore=true，实际 %v hasMore=%v", seqs(msgs), hasMore)
+	}
+
+	// before=8, limit=3：返回 sequence<8 的最近 3 条 [5,6,7]，hasMore=true
+	msgs, hasMore, err = svc.ListMessagesRecent("msg-recent-1", 8, 3)
+	if err != nil {
+		t.Fatalf("ListMessagesRecent before=8 返回错误: %v", err)
+	}
+	if len(msgs) != 3 || msgs[0].Sequence != 5 || msgs[2].Sequence != 7 || !hasMore {
+		t.Fatalf("期望 [5,6,7] hasMore=true，实际 %v hasMore=%v", seqs(msgs), hasMore)
+	}
+
+	// before=3, limit=5：sequence<3 只有 [1,2]，hasMore=false
+	msgs, hasMore, err = svc.ListMessagesRecent("msg-recent-1", 3, 5)
+	if err != nil {
+		t.Fatalf("ListMessagesRecent before=3 返回错误: %v", err)
+	}
+	if len(msgs) != 2 || msgs[0].Sequence != 1 || msgs[1].Sequence != 2 || hasMore {
+		t.Fatalf("期望 [1,2] hasMore=false，实际 %v hasMore=%v", seqs(msgs), hasMore)
+	}
+
+	// before=1：没有更早消息，返回空，hasMore=false
+	msgs, hasMore, err = svc.ListMessagesRecent("msg-recent-1", 1, 10)
+	if err != nil {
+		t.Fatalf("ListMessagesRecent before=1 返回错误: %v", err)
+	}
+	if len(msgs) != 0 || hasMore {
+		t.Fatalf("期望空 hasMore=false，实际 %d 条 hasMore=%v", len(msgs), hasMore)
+	}
+}
+
+func seqs(msgs []models.Message) []int {
+	out := make([]int, 0, len(msgs))
+	for _, m := range msgs {
+		out = append(out, m.Sequence)
+	}
+	return out
+}
+
 func TestService_ListMessages_SessionNotFound(t *testing.T) {
 	svc := newTestService(t)
 	if _, err := svc.ListMessages("nonexistent"); err == nil {

@@ -99,8 +99,17 @@ export function clearContext(id: number): Promise<{ data: Session }> {
 }
 
 // 获取会话消息历史
-export function listMessages(id: number): Promise<{ data: { messages: Message[] } }> {
-  return apiFetch(`/sessions/${id}/messages`)
+// - 不传参数：返回最近 N 条 + has_more（前端据此决定是否显示「加载更多」）。
+// - before=<seq>：返回 sequence<before 的最近 limit 条 + has_more（向前翻页）。
+export function listMessages(
+  id: number,
+  params?: { before?: number; limit?: number },
+): Promise<{ data: { messages: Message[]; has_more?: boolean } }> {
+  const qs = new URLSearchParams()
+  if (params?.before != null) qs.set('before', String(params.before))
+  if (params?.limit != null) qs.set('limit', String(params.limit))
+  const query = qs.toString()
+  return apiFetch(`/sessions/${id}/messages${query ? `?${query}` : ''}`)
 }
 
 // 获取会话执行块（定时任务 / 笔记分类）

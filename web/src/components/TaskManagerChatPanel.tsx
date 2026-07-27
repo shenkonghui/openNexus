@@ -74,6 +74,9 @@ export default function TaskManagerChatPanel({
   // 会话与消息
   const [session, setSession] = useState<Session | null>(null)
   const [messages, setMessages] = useState<Message[]>([])
+  // 历史消息分页：hasMore 表示还有更早的消息可加载
+  const [hasMore, setHasMore] = useState(false)
+  const [loadingMore, setLoadingMore] = useState(false)
   const [conv, setConv] = useState<ConvState>('idle')
   const [error, setError] = useState('')
 
@@ -267,6 +270,7 @@ export default function TaskManagerChatPanel({
         if (!alive) return
         setSession(sResp.data)
         setMessages(mResp.data.messages || [])
+        setHasMore(!!mResp.data.has_more)
         setSelectedAgent(sResp.data.agent_type)
       } catch { /* 会话可能已删除：忽略，保持空会话，允许重新新建 */ }
       finally {
@@ -287,6 +291,22 @@ export default function TaskManagerChatPanel({
       }
     }
   }, [workspaceId, restoreSessionId])
+
+  // ===== 加载更早的历史消息（向前翻页） =====
+  const handleLoadMore = useCallback(async () => {
+    if (!session || loadingMore || !hasMore || messages.length === 0) return
+    const beforeSeq = messages[0].sequence
+    setLoadingMore(true)
+    try {
+      const resp = await listMessages(session.id, { before: beforeSeq })
+      const older = resp.data.messages || []
+      setHasMore(!!resp.data.has_more)
+      if (older.length > 0) {
+        setMessages((prev) => [...older, ...prev])
+      }
+    } catch { /* 忽略：用户可重试 */ }
+    finally { setLoadingMore(false) }
+  }, [session, loadingMore, hasMore, messages])
 
   // ===== 发送 =====
   async function handleSend(prompt: string) {
@@ -313,6 +333,7 @@ export default function TaskManagerChatPanel({
           try {
             const hist = await listMessages(activeSession.id)
             setMessages(hist.data.messages || [])
+            setHasMore(!!hist.data.has_more)
           } catch { /* 回读失败：保留空消息，仍复用会话 */ }
         } else {
           // 2) 未命中：创建新会话
@@ -443,6 +464,9 @@ export default function TaskManagerChatPanel({
     docTarget: null,
     docContent: '',
     onDocContentChange: () => {},
+    hasMore,
+    loadingMore,
+    onLoadMore: handleLoadMore,
   }
 
   return (

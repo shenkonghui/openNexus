@@ -42,6 +42,9 @@ type SessionStore interface {
 	ListMessages(sessionID string) ([]models.Message, error)
 	// ListMessagesPaged 分页查询消息；limit<=0 使用默认页大小。
 	ListMessagesPaged(sessionID string, limit, offset int) ([]models.Message, error)
+	// ListMessagesRecent 返回最近的若干条消息 + 是否还有更早的消息（供前端「加载更多」）。
+	// beforeSeq>0 时仅返回 sequence<beforeSeq 的消息；<=0 时不限制。
+	ListMessagesRecent(sessionID string, beforeSeq int, limit int) ([]models.Message, bool, error)
 	// ListMessagesByKind 仅查询指定 kind 的消息（如 tool_call_update），避免加载无关历史。
 	ListMessagesByKind(sessionID string, kind string) ([]models.Message, error)
 	// FindMessageByID 按消息主键查询单条消息（用于撤销等按消息定位的场景）。
@@ -457,26 +460,47 @@ func (h *SessionHandler) unregisterFromTasks(sess *models.Session) {
 }
 
 // Messages GET /api/v1/sessions/:id/messages
-// 支持 query 参数 limit / offset 做分页；不传时返回默认页大小（最近 N 条）。
+// 三种查询模式（按优先级）：
+//  1. before=<seq>：返回 sequence<before 的最近 limit 条 + has_more（前端「加载更多」向前翻页）。
+//  2. limit/offset：按 offset 升序分页（兼容旧接口）。
+//  3. 不传参数：返回默认页大小（最近 N 条）+ has_more。
+//
+// 响应体始终包含 has_more 字段（旧 offset 模式除外，保持兼容）。
 func (h *SessionHandler) Messages(c *gin.Context) {
 	sess, ok := h.loadOwnedSession(c)
 	if !ok {
 		return
 	}
-	var msgs []models.Message
-	var err error
+	if beforeStr := c.Query("before"); beforeStr != "" {
+		beforeSeq, _ := strconv.Atoi(beforeStr)
+		limit, _ := strconv.Atoi(c.Query("limit"))
+		msgs, hasMore, err := h.store.ListMessagesRecent(sess.SessionID, beforeSeq, limit)
+		if err != nil {
+			writeSessionError(c, err)
+			return
+		}
+		Success(c, http.StatusOK, gin.H{"messages": msgs, "has_more": hasMore})
+		return
+	}
 	if c.Query("limit") != "" || c.Query("offset") != "" {
 		limit, _ := strconv.Atoi(c.Query("limit"))
 		offset, _ := strconv.Atoi(c.Query("offset"))
-		msgs, err = h.store.ListMessagesPaged(sess.SessionID, limit, offset)
-	} else {
-		msgs, err = h.store.ListMessages(sess.SessionID)
+		msgs, err := h.store.ListMessagesPaged(sess.SessionID, limit, offset)
+		if err != nil {
+			writeSessionError(c, err)
+			return
+		}
+		// 旧 offset 模式保持原响应结构（仅 messages），避免破坏潜在调用方。
+		Success(c, http.StatusOK, gin.H{"messages": msgs})
+		return
 	}
+	// 默认：最近 N 条 + has_more（前端据此决定是否显示「加载更多」）。
+	msgs, hasMore, err := h.store.ListMessagesRecent(sess.SessionID, 0, 0)
 	if err != nil {
 		writeSessionError(c, err)
 		return
 	}
-	Success(c, http.StatusOK, gin.H{"messages": msgs})
+	Success(c, http.StatusOK, gin.H{"messages": msgs, "has_more": hasMore})
 }
 
 // Executions GET /api/v1/sessions/:id/executions — 会话内按 execution_id 聚合的执行块（定时任务/笔记分类）。

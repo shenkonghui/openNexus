@@ -185,6 +185,9 @@ export default function ChatPage() {
   // 会话相关状态
   const [session, setSession] = useState<Session | null>(null)
   const [messages, setMessages] = useState<Message[]>([])
+  // 历史消息分页：hasMore 表示还有更早的消息可加载，loadingMore 表示正在加载
+  const [hasMore, setHasMore] = useState(false)
+  const [loadingMore, setLoadingMore] = useState(false)
   const [restoreRefreshKey, setRestoreRefreshKey] = useState(0)
   // navState.draftPrompt 优先：从任务管理打开未运行任务时，用任务详情预填新建任务输入框。
   const [restoreInput, setRestoreInput] = useState<string | undefined>(() => navState?.draftPrompt)
@@ -361,6 +364,7 @@ export default function ChatPage() {
         setSession(sessionResp.data)
         const msgs = msgResp.data.messages || []
         setMessages(msgs)
+        setHasMore(!!msgResp.data.has_more)
         // 同步 lastSeqRef 为当前最大 sequence（用于断点续传重连）
         if (msgs.length > 0) {
           lastSeqRef.current = msgs[msgs.length - 1].sequence
@@ -371,6 +375,29 @@ export default function ChatPage() {
       if (!opts?.quiet) setError(err instanceof Error ? err.message : t('common.failed'))
     } finally { if (!opts?.quiet) setLoading(false) }
   }, [sessionId, hasSession, workspaceId])
+
+  // 加载更早的历史消息：以当前最早可见消息的 sequence 为 before 游标，向前翻一页。
+  // 新消息 prepend 到 messages 头部；hasMore 由响应更新。loadingMore 期间禁止重复触发。
+  const loadMore = useCallback(async () => {
+    if (!hasSession || loadingMore || !hasMore) return
+    // 取当前最早消息的 sequence 作为 before 游标（filterDisplay 后的最早条可能与原始 messages 不同，
+    // 但 sequence 单调，用原始 messages[0] 即可——更早的消息 sequence 一定更小）
+    if (messages.length === 0) return
+    const beforeSeq = messages[0].sequence
+    setLoadingMore(true)
+    try {
+      const resp = await listMessages(sessionId, { before: beforeSeq })
+      const older = resp.data.messages || []
+      setHasMore(!!resp.data.has_more)
+      if (older.length > 0) {
+        setMessages((prev) => [...older, ...prev])
+      }
+    } catch {
+      /* 忽略：用户可重试 */
+    } finally {
+      setLoadingMore(false)
+    }
+  }, [hasSession, loadingMore, hasMore, messages, sessionId])
 
   // 会话相关的辅助数据加载（executions/commands/modes/skills/configOptions/中断任务）。
   // 抽取出来供 loadData 的两条分支（全量 / skipMessages）共用，避免重复。
@@ -1597,6 +1624,9 @@ export default function ChatPage() {
           yoloEnabled,
           yoloSaving,
           onToggleYolo: handleToggleYolo,
+          hasMore,
+          loadingMore,
+          onLoadMore: loadMore,
           ...({
             __chatConfig: {
               configBar: 'coding',

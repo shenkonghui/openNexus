@@ -16,6 +16,12 @@ interface MessageListProps {
   sessionId?: number
   cwd?: string
   onRestored?: (promptText: string) => void
+  /** 是否还有更早的消息可加载（前端据此显示「加载更多」） */
+  hasMore?: boolean
+  /** 正在加载更早的消息（顶部显示转圈） */
+  loadingMore?: boolean
+  /** 点击「加载更多」时触发 */
+  onLoadMore?: () => void
 }
 
 const MERGEABLE_KINDS = new Set([
@@ -261,7 +267,7 @@ function mapSegmentsToTurns(
   return { turnOfSeg, turnEndSeg }
 }
 
-export default function MessageList({ messages, loading, scheduled, executions, sessionId, cwd, onRestored }: MessageListProps) {
+export default function MessageList({ messages, loading, scheduled, executions, sessionId, cwd, onRestored, hasMore, loadingMore, onLoadMore }: MessageListProps) {
   const { t } = useTranslation()
   // scheduled 模式仍用 endRef + scrollIntoView 的传统渲染；主聊天路径已改用 Virtuoso，
   // 其自动滚动由 followOutput（流式跟随）与 scrollToIndex（切会话滚底）接管。
@@ -272,7 +278,18 @@ export default function MessageList({ messages, loading, scheduled, executions, 
   }, [messages, scheduled])
 
   if (!scheduled) {
-    return <PlainList messages={messages} loading={loading} sessionId={sessionId} cwd={cwd} onRestored={onRestored} />
+    return (
+      <PlainList
+        messages={messages}
+        loading={loading}
+        sessionId={sessionId}
+        cwd={cwd}
+        onRestored={onRestored}
+        hasMore={hasMore}
+        loadingMore={loadingMore}
+        onLoadMore={onLoadMore}
+      />
+    )
   }
 
   const allBlocks = groupByExecution(messages)
@@ -407,12 +424,18 @@ function PlainList({
   sessionId,
   cwd,
   onRestored,
+  hasMore,
+  loadingMore,
+  onLoadMore,
 }: {
   messages: Message[]
   loading?: boolean
   sessionId?: number
   cwd?: string
   onRestored?: (promptText: string) => void
+  hasMore?: boolean
+  loadingMore?: boolean
+  onLoadMore?: () => void
 }) {
   const { t } = useTranslation()
   const displayMessages = useMemo(() => filterDisplay(messages), [messages])
@@ -425,6 +448,28 @@ function PlainList({
   useEffect(() => {
     virtuosoRef.current?.scrollToIndex({ index: 'LAST', behavior: 'auto' })
   }, [sessionId])
+
+  // 「加载更多」头部：hasMore 为 true 时显示。
+  // loadingMore 时显示转圈；否则显示可点击按钮。点击/滚动到顶部均触发 onLoadMore。
+  const showLoadMore = !!hasMore && displayMessages.length > 0
+  const headerContent = showLoadMore ? (
+    loadingMore ? (
+      <div className={styles.loadingMoreBar}>
+        <span className={styles.dot} />
+        <span className={styles.dot} />
+        <span className={styles.dot} />
+      </div>
+    ) : (
+      <button
+        type="button"
+        className={styles.loadMoreBtn}
+        onClick={onLoadMore}
+        disabled={!onLoadMore}
+      >
+        {t('chat.loadMore')}
+      </button>
+    )
+  ) : null
 
   return (
     <div className={styles.container}>
@@ -444,6 +489,8 @@ function PlainList({
           cwd={cwd}
           onRestored={onRestored}
           loadingFooter={!!loading}
+          headerContent={headerContent}
+          onStartReached={showLoadMore && !loadingMore ? onLoadMore : undefined}
         />
       )}
       {/* Virtuoso 为空时 loading 点单独渲染（避免空列表 + Footer 的空白） */}
@@ -480,8 +527,12 @@ const VirtuosoSegmentList = forwardRef<VirtuosoHandle, {
   cwd?: string
   onRestored?: (promptText: string) => void
   loadingFooter: boolean
+  headerContent?: React.ReactNode
+  /** 滚动到顶部时触发（用于自动加载更早消息） */
+  onStartReached?: () => void
 }>(function VirtuosoSegmentList({
   messages, lastUserIdx, loading, lastThoughtKey, sessionId, cwd, onRestored, loadingFooter,
+  headerContent, onStartReached,
 }, ref) {
   const segments = useMemo(() => segmentMessages(messages), [messages])
   const lastMsg = messages[messages.length - 1]
@@ -577,6 +628,8 @@ const VirtuosoSegmentList = forwardRef<VirtuosoHandle, {
       followOutput={(isAtBottom) => (isAtBottom ? 'auto' : false)}
       // 列表初始即滚到底部（首次进入会话）
       initialTopMostItemIndex={items.length - 1}
+      // 滚动到顶部时自动加载更早消息（onStartReached 由 PlainList 仅在可加载时传入）
+      startReached={onStartReached}
       style={{ height: '100%' }}
       itemContent={(index, item) => {
         const seg = item.seg
@@ -633,20 +686,23 @@ const VirtuosoSegmentList = forwardRef<VirtuosoHandle, {
       }}
       // react-virtuoso 对 optional props 仅在「键存在于 props」时才发布；
       // 若 loading 结束后省略 components，上次的 Footer 会残留（... 一直转）。
-      // 必须始终传入 components：有 Footer 时挂上，否则传 {} 清掉。
+      // 必须始终传入 components：有 Footer/Header 时挂上，否则传 {} 清掉。
       // 不要传 components={undefined}（会把内部默认覆盖坏）。
       components={
-        loadingFooter
-          ? {
-              Footer: () => (
-                <div className={styles.loading}>
-                  <span className={styles.dot} />
-                  <span className={styles.dot} />
-                  <span className={styles.dot} />
-                </div>
-              ),
-            }
-          : {}
+        {
+          ...(headerContent ? { Header: () => headerContent } : {}),
+          ...(loadingFooter
+            ? {
+                Footer: () => (
+                  <div className={styles.loading}>
+                    <span className={styles.dot} />
+                    <span className={styles.dot} />
+                    <span className={styles.dot} />
+                  </div>
+                ),
+              }
+            : {}),
+        }
       }
     />
   )

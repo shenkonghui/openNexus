@@ -202,6 +202,9 @@ export default function ChatPanel({
           sessionId={ctx.sessionId}
           cwd={ctx.cwd}
           onRestored={ctx.onRestored}
+          hasMore={ctx.hasMore}
+          loadingMore={ctx.loadingMore}
+          onLoadMore={ctx.onLoadMore}
         />
       )}
 

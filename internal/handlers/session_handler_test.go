@@ -24,18 +24,19 @@ import (
 
 // fakeSessionStore 是内存版 SessionStore，用于隔离真实 ACP 子进程。
 type fakeSessionStore struct {
-	sessions     map[uint]*models.Session
-	messages     map[string][]models.Message
-	createErr    error
-	listErr      error
-	deleteErr    error
-	cancelErr    error
-	resumeErr    error
-	resumeResult *models.Session
-	listMsgErr   error
-	promptCh     chan models.Message
-	promptErr    error
-	nextID       uint
+	sessions       map[uint]*models.Session
+	messages       map[string][]models.Message
+	createErr      error
+	listErr        error
+	deleteErr      error
+	cancelErr      error
+	resumeErr      error
+	resumeResult   *models.Session
+	listMsgErr     error
+	listMsgHasMore bool
+	promptCh       chan models.Message
+	promptErr      error
+	nextID         uint
 }
 
 func newFakeSessionStore() *fakeSessionStore {
@@ -162,6 +163,14 @@ func (f *fakeSessionStore) ListMessages(sessionID string) ([]models.Message, err
 // ListMessagesPaged 测试默认透传至 ListMessages（足够覆盖分页 handler 路径）。
 func (f *fakeSessionStore) ListMessagesPaged(sessionID string, _, _ int) ([]models.Message, error) {
 	return f.ListMessages(sessionID)
+}
+
+// ListMessagesRecent 测试默认透传至 ListMessages；hasMore 由测试通过 listMsgHasMore 控制。
+func (f *fakeSessionStore) ListMessagesRecent(sessionID string, _, _ int) ([]models.Message, bool, error) {
+	if f.listMsgErr != nil {
+		return nil, false, f.listMsgErr
+	}
+	return f.messages[sessionID], f.listMsgHasMore, nil
 }
 
 // ListMessagesByKind 过滤指定 kind 的消息。
@@ -492,11 +501,64 @@ func TestSessionHandler_Messages_Success(t *testing.T) {
 	var resp struct {
 		Data struct {
 			Messages []models.Message `json:"messages"`
+			HasMore  bool             `json:"has_more"`
 		} `json:"data"`
 	}
 	_ = json.Unmarshal(w.Body.Bytes(), &resp)
 	if len(resp.Data.Messages) != 2 {
 		t.Fatalf("消息数量 = %d, 期望 2", len(resp.Data.Messages))
+	}
+}
+
+func TestSessionHandler_Messages_HasMore(t *testing.T) {
+	store := newFakeSessionStore()
+	store.sessions[1] = &models.Session{ID: 1, SessionID: "acp-1", UserID: 100, Status: models.SessionStatusActive}
+	store.messages["acp-1"] = []models.Message{
+		{ID: 1, SessionID: "acp-1", Role: "user", Kind: "user_message", Content: "hi", Sequence: 1},
+	}
+	store.listMsgHasMore = true
+	r := newSessionTestRouter(store, 100)
+	w := doJSON(t, r, "GET", "/api/v1/sessions/1/messages", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("状态码 = %d, 期望 200, body=%s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Data struct {
+			Messages []models.Message `json:"messages"`
+			HasMore  bool             `json:"has_more"`
+		} `json:"data"`
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
+	if !resp.Data.HasMore {
+		t.Errorf("期望 has_more=true，实际 false")
+	}
+}
+
+func TestSessionHandler_Messages_BeforeParam(t *testing.T) {
+	store := newFakeSessionStore()
+	store.sessions[1] = &models.Session{ID: 1, SessionID: "acp-1", UserID: 100, Status: models.SessionStatusActive}
+	store.messages["acp-1"] = []models.Message{
+		{ID: 1, SessionID: "acp-1", Role: "user", Kind: "user_message", Content: "m1", Sequence: 1},
+	}
+	// before 模式下 fakeSessionStore 透传全部消息，hasMore 由 listMsgHasMore 控制
+	store.listMsgHasMore = false
+	r := newSessionTestRouter(store, 100)
+	w := doJSON(t, r, "GET", "/api/v1/sessions/1/messages?before=5&limit=10", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("状态码 = %d, 期望 200, body=%s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Data struct {
+			Messages []models.Message `json:"messages"`
+			HasMore  bool             `json:"has_more"`
+		} `json:"data"`
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
+	if len(resp.Data.Messages) != 1 {
+		t.Fatalf("消息数量 = %d, 期望 1", len(resp.Data.Messages))
+	}
+	if resp.Data.HasMore {
+		t.Errorf("期望 has_more=false，实际 true")
 	}
 }
 
@@ -639,6 +701,9 @@ func (s *commandsFakeStore) ClearContext(context.Context, string) (*models.Sessi
 func (s *commandsFakeStore) ListMessages(string) ([]models.Message, error) { return nil, nil }
 func (s *commandsFakeStore) ListMessagesPaged(string, int, int) ([]models.Message, error) {
 	return nil, nil
+}
+func (s *commandsFakeStore) ListMessagesRecent(string, int, int) ([]models.Message, bool, error) {
+	return nil, false, nil
 }
 func (s *commandsFakeStore) ListMessagesByKind(string, string) ([]models.Message, error) {
 	return nil, nil

@@ -124,6 +124,14 @@ export interface PanelCtx {
   yoloEnabled?: boolean
   yoloSaving?: boolean
   onToggleYolo?: () => void
+
+  // ===== 历史消息分页（「加载更多」） =====
+  /** 是否还有更早的消息可加载 */
+  hasMore?: boolean
+  /** 正在加载更早的消息 */
+  loadingMore?: boolean
+  /** 加载更早消息的回调 */
+  onLoadMore?: () => void
 }
 
 /** 面板注册项 */

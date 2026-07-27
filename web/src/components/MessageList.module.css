@@ -202,3 +202,35 @@
   background: transparent;
   padding: 2px 0;
 }
+
+/* 「加载更多更早消息」头部 */
+.loadMoreBtn {
+  display: block;
+  width: max-content;
+  margin: 4px auto 8px auto;
+  padding: 4px 14px;
+  background: var(--bg-hover);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.loadMoreBtn:hover:not(:disabled) {
+  background: var(--bg-muted);
+  color: var(--accent);
+}
+
+.loadMoreBtn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.loadingMoreBar {
+  display: flex;
+  gap: 6px;
+  justify-content: center;
+  padding: 8px 20px 12px 20px;
+}

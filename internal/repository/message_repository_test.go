@@ -224,6 +224,55 @@ func TestMessageRepo_FindBySessionIDLastN(t *testing.T) {
 	}
 }
 
+func TestMessageRepo_FindBySessionIDBeforeLastN(t *testing.T) {
+	repo := newTestMessageRepo(t)
+	seedPagingMessages(t, repo)
+
+	// before=4：取 sequence<4 的最近 2 条 → [2,3]
+	got, err := repo.FindBySessionIDBeforeLastN("pg-1", 4, 2)
+	if err != nil {
+		t.Fatalf("FindBySessionIDBeforeLastN 返回错误: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("期望 2 条，实际 %d", len(got))
+	}
+	if got[0].Sequence != 2 || got[1].Sequence != 3 {
+		t.Errorf("期望 [2,3]，实际 %d,%d", got[0].Sequence, got[1].Sequence)
+	}
+
+	// before=4：n 超过可用数 → 返回全部更早的 [1,2,3]
+	all, _ := repo.FindBySessionIDBeforeLastN("pg-1", 4, 100)
+	if len(all) != 3 || all[0].Sequence != 1 || all[2].Sequence != 3 {
+		t.Errorf("期望 [1,2,3]，实际 %v", sequencesOf(all))
+	}
+
+	// before<=0：等价于 LastN
+	last, _ := repo.FindBySessionIDBeforeLastN("pg-1", 0, 3)
+	if len(last) != 3 || last[0].Sequence != 3 || last[2].Sequence != 5 {
+		t.Errorf("before<=0 期望最近 3 条 [3,4,5]，实际 %v", sequencesOf(last))
+	}
+
+	// n<=0：空
+	zero, _ := repo.FindBySessionIDBeforeLastN("pg-1", 4, 0)
+	if len(zero) != 0 {
+		t.Errorf("n<=0 期望空，实际 %d", len(zero))
+	}
+
+	// before=1：没有更早的消息 → 空
+	none, _ := repo.FindBySessionIDBeforeLastN("pg-1", 1, 10)
+	if len(none) != 0 {
+		t.Errorf("before=1 期望空，实际 %d", len(none))
+	}
+}
+
+func sequencesOf(msgs []models.Message) []int {
+	out := make([]int, 0, len(msgs))
+	for _, m := range msgs {
+		out = append(out, m.Sequence)
+	}
+	return out
+}
+
 func TestMessageRepo_FindBySessionIDPaged(t *testing.T) {
 	repo := newTestMessageRepo(t)
 	seedPagingMessages(t, repo)

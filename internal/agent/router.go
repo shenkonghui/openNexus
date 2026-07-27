@@ -363,6 +363,15 @@ func (r *Router) ListMessagesByKind(sessionID string, kind string) ([]models.Mes
 	return r.service.ListMessagesByKind(sessionID, kind)
 }
 
+// ListMessagesRecent 返回最近的若干条消息 + 是否还有更早的消息（透传至 service）。
+// beforeSeq>0 时仅返回 sequence<beforeSeq 的消息；<=0 时不限制。
+func (r *Router) ListMessagesRecent(sessionID string, beforeSeq int, limit int) ([]models.Message, bool, error) {
+	if r.service == nil {
+		return nil, false, errors.New("service 未配置")
+	}
+	return r.service.ListMessagesRecent(sessionID, beforeSeq, limit)
+}
+
 // FindMessageByID 按消息主键查询单条消息。
 func (r *Router) FindMessageByID(messageID uint) (*models.Message, error) {
 	if r.service == nil {
