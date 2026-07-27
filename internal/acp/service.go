@@ -2488,12 +2488,7 @@ func (s *Service) ListSkills(sessionID string) ([]Skill, error) {
 	if err != nil {
 		return nil, err
 	}
-	cwd := session.Cwd
-	if session.WorkspaceID != nil {
-		if ws, wsErr := s.workspaces.FindByID(*session.WorkspaceID); wsErr == nil {
-			cwd = ws.Cwd
-		}
-	}
+	cwd := sessionCwd(session, s.workspaces)
 	return ScanSkills(cwd, s.skillUserDirs, s.skillProjectDirs), nil
 }
 
@@ -2614,12 +2609,11 @@ func (s *Service) ResumeSession(ctx context.Context, sessionID string) (*models.
 		}
 	}
 
-	// 从 workspace 获取 cwd
-	cwd := session.Cwd
+	// 会话若被固定到自定义目录，优先使用 session.Cwd；否则跟随工作区 cwd
+	cwd := sessionCwd(session, s.workspaces)
 	wsMode := ""
 	if session.WorkspaceID != nil {
 		if ws, wsErr := s.workspaces.FindByID(*session.WorkspaceID); wsErr == nil {
-			cwd = ws.Cwd
 			wsMode = ws.Mode
 		}
 	}
@@ -2707,12 +2701,11 @@ func (s *Service) ClearContext(ctx context.Context, sessionID string) (*models.S
 		return nil, errors.New("会话有进行中的任务，无法清理上下文")
 	}
 
-	// 从 workspace 获取 cwd
-	cwd := session.Cwd
+	// 会话若被固定到自定义目录，优先使用 session.Cwd；否则跟随工作区 cwd
+	cwd := sessionCwd(session, s.workspaces)
 	wsMode := ""
 	if session.WorkspaceID != nil {
 		if ws, wsErr := s.workspaces.FindByID(*session.WorkspaceID); wsErr == nil {
-			cwd = ws.Cwd
 			wsMode = ws.Mode
 		}
 	}

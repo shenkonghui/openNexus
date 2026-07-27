@@ -2,6 +2,8 @@ package services
 
 import (
 	"context"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"opennexus/internal/acp"
@@ -56,6 +58,31 @@ func TestExecuteTaskUsesManualSource(t *testing.T) {
 	}
 	if mock.lastCfg.Source != models.SessionSourceManual {
 		t.Fatalf("Source = %q, want manual", mock.lastCfg.Source)
+	}
+}
+
+// TestExecuteTaskUsesWorktreeCwd 验证 executeTask 将 worktree 路径作为 Cwd 传给 RunSessionTask，
+// 使任务 session 在独立 worktree 内运行。
+func TestExecuteTaskUsesWorktreeCwd(t *testing.T) {
+	cwd := t.TempDir()
+	mock := &mockTMExecutor{result: acp.SessionTaskResult{Success: true, SessionID: "s-uuid", DBSessionID: 99}}
+	svc := NewTaskManagerService(mock)
+
+	if err := svc.InitGitRepo(cwd); err != nil {
+		t.Fatalf("InitGitRepo: %v", err)
+	}
+
+	task := &models.TaskManagerTask{ID: "task1", Title: "T", Detail: "prompt", AgentType: "demo"}
+	res, err := svc.executeTask(context.Background(), cwd, task, 5, 8)
+	if err != nil {
+		t.Fatalf("executeTask: %v", err)
+	}
+	if !res.Success {
+		t.Fatalf("executeTask result 应成功: %+v", res)
+	}
+	wantSuffix := filepath.Join(".worktrees", "task1")
+	if mock.lastCfg.Cwd == "" || !strings.HasSuffix(mock.lastCfg.Cwd, wantSuffix) {
+		t.Fatalf("Cwd = %q, 期望以 %q 结尾", mock.lastCfg.Cwd, wantSuffix)
 	}
 }
 

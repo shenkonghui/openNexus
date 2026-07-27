@@ -637,3 +637,59 @@ func TestService_PromptMaxDuration(t *testing.T) {
 		t.Errorf("设置负值后期望默认 %v，实际 %v", defaultPromptMaxDuration, got)
 	}
 }
+
+// TestSessionCwd 验证 sessionCwd 在以下场景的优先级：
+// 1) session.Cwd 与工作区不同（如 worktree 覆盖）优先用 session.Cwd
+// 2) session.Cwd 为空时回退到工作区 cwd
+// 3) session.Cwd 与工作区相同则返回工作区 cwd
+// 4) 无工作区时直接返回 session.Cwd
+func TestSessionCwd(t *testing.T) {
+	db := setupACPTestDB(t)
+	wsRepo := repository.NewWorkspaceRepository(db)
+
+	tmp := t.TempDir()
+	wsCwd := filepath.Join(tmp, "workspace")
+	wtCwd := filepath.Join(tmp, "workspace", ".worktrees", "task-1")
+	if err := os.MkdirAll(wsCwd, 0o755); err != nil {
+		t.Fatalf("创建目录: %v", err)
+	}
+	if err := os.MkdirAll(wtCwd, 0o755); err != nil {
+		t.Fatalf("创建 worktree 目录: %v", err)
+	}
+
+	ws := &models.Workspace{UserID: 1, Name: "项目", Cwd: wsCwd, Mode: models.WorkspaceModePersistent}
+	if err := wsRepo.Create(ws); err != nil {
+		t.Fatalf("创建 workspace: %v", err)
+	}
+
+	t.Run("worktree覆盖优先使用session.Cwd", func(t *testing.T) {
+		wid := ws.ID
+		sess := &models.Session{SessionID: "s1", Cwd: wtCwd, WorkspaceID: &wid}
+		if got := sessionCwd(sess, wsRepo); got != wtCwd {
+			t.Errorf("sessionCwd = %q, want %q", got, wtCwd)
+		}
+	})
+
+	t.Run("session.Cwd为空则回退到workspace.cwd", func(t *testing.T) {
+		wid := ws.ID
+		sess := &models.Session{SessionID: "s2", Cwd: "", WorkspaceID: &wid}
+		if got := sessionCwd(sess, wsRepo); got != wsCwd {
+			t.Errorf("sessionCwd = %q, want %q", got, wsCwd)
+		}
+	})
+
+	t.Run("session.Cwd与workspace相同则返回workspace.cwd", func(t *testing.T) {
+		wid := ws.ID
+		sess := &models.Session{SessionID: "s3", Cwd: wsCwd, WorkspaceID: &wid}
+		if got := sessionCwd(sess, wsRepo); got != wsCwd {
+			t.Errorf("sessionCwd = %q, want %q", got, wsCwd)
+		}
+	})
+
+	t.Run("无workspace时返回session.Cwd", func(t *testing.T) {
+		sess := &models.Session{SessionID: "s4", Cwd: wtCwd}
+		if got := sessionCwd(sess, wsRepo); got != wtCwd {
+			t.Errorf("sessionCwd = %q, want %q", got, wtCwd)
+		}
+	})
+}
