@@ -224,7 +224,7 @@ export default function SessionSidebar({ sessions, workspaceId, currentId, onDel
   //   引擎对已在运行的任务是幂等的（跳过），故 pending/queued 均可安全触发。
   async function openTMTask(task: TaskManagerTask) {
     if (task.db_session_id) {
-      navigate(sessionUrl(task.db_session_id, workspaceId), { state: { taskMode: 'coding' } })
+      navigate(sessionUrl(task.db_session_id, workspaceId))
       return
     }
     if (!workspaceId || startingTaskId) return
@@ -239,7 +239,7 @@ export default function SessionSidebar({ sessions, workspaceId, currentId, onDel
         setOrchTasks(list) // 顺带刷新侧边栏状态
         const fresh = list.find((x) => x.id === task.id)
         if (fresh?.db_session_id) {
-          navigate(sessionUrl(fresh.db_session_id, workspaceId), { state: { taskMode: 'coding' } })
+          navigate(sessionUrl(fresh.db_session_id, workspaceId))
           return
         }
         if (fresh?.status === 'failed') break // 启动失败：停止轮询，状态点会显示失败
@@ -331,7 +331,7 @@ export default function SessionSidebar({ sessions, workspaceId, currentId, onDel
           {!collapsed.manual && (
             <div className={styles.groupList}>
               {tmSessions.map((session) => {
-                const goTM = () => navigate(taskManagerUrl(session.workspace_id ?? workspaceId), { state: { taskMode: 'taskmanager', tmSessionId: session.id } })
+                                const goTM = () => navigate(taskManagerUrl(session.workspace_id ?? workspaceId), { state: { tmSessionId: session.id } })
                 return (
                   <div key={`orchsess-${session.id}`} className={styles.item}>
                     <div

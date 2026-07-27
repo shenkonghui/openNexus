@@ -5,12 +5,13 @@
 // 由调度器读取并基于 git worktree 隔离执行每个任务。
 // 本 server 从原 opennexus-subagent 抽离而来，作为独立 MCP server 对外暴露。
 //
-// 暴露 7 个工具：
+// 暴露 8 个工具：
 //   - create_task：新增编排任务
 //   - update_task：更新编排任务可编辑字段
 //   - delete_task：删除编排任务
 //   - start_task： 启动编排任务
 //   - stop_task：  停止编排任务
+//   - send_prompt：向任务已有会话发送新 prompt 继续对话
 //   - set_max_parallel：设置并发上限
 //   - list_tasks： 列出编排任务现状
 //
@@ -28,6 +29,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"opennexus/internal/acp"
 	"opennexus/internal/models"
 	"opennexus/internal/repository"
 )
@@ -47,6 +49,8 @@ type TaskManagerTaskCreator interface {
 	Stop(cwd, taskID string) error
 	Start(ctx context.Context, cwd string, workspaceID uint, userID uint, taskID string) error
 	Load(cwd string) (*models.TaskManagerDef, error)
+	// SendPrompt 向任务已有会话追加发送新 prompt，继续对话。
+	SendPrompt(ctx context.Context, cwd, taskID, prompt string) error
 }
 
 // Handler 返回带 Bearer 鉴权的 taskmanager MCP Streamable HTTP Handler。
@@ -132,6 +136,15 @@ func newServer(prefsRepo *repository.UserAgentPrefsRepository, wsResolver Worksp
 		})
 	})
 
+	addTool("send_prompt", func() {
+		mcp.AddTool(srv, &mcp.Tool{
+			Name:        "send_prompt",
+			Description: "向指定编排任务的已有会话发送一条新 prompt，在原上下文中继续对话（如追加需求、补充修改意见）。任务必须已执行过且当前不在运行中；发送后任务转为 running，agent 在其专属 worktree 内继续处理，完成后转 done，可用 list_tasks 跟踪进度。",
+		}, func(ctx context.Context, _ *mcp.CallToolRequest, in sendPromptIn) (*mcp.CallToolResult, sendPromptOut, error) {
+			return handleSendPrompt(ctx, wsResolver, orchCreator, in)
+		})
+	})
+
 	addTool("set_max_parallel", func() {
 		mcp.AddTool(srv, &mcp.Tool{
 			Name:        "set_max_parallel",
@@ -213,6 +226,7 @@ type createTaskIn struct {
 	AgentType   string   `json:"agent_type,omitempty" jsonschema:"执行任务的 agent 类型，留空则继承用户最近使用的 agent"`
 	ModelValue  string   `json:"model_value,omitempty" jsonschema:"模型值，留空则用 agent 默认"`
 	Priority    string   `json:"priority,omitempty" jsonschema:"优先级，取值 p0、p1、p2，缺省为 p1"`
+	Branch      string   `json:"branch,omitempty" jsonschema:"任务 worktree 分支名，建议 feat/ 或 fix/ 开头的英文 kebab-case；留空则启动时由 AI 自动生成"`
 	DependsOn   []string `json:"depends_on,omitempty" jsonschema:"依赖的其他任务 id 数组"`
 	WorkspaceID uint     `json:"workspace_id,omitempty" jsonschema:"工作区 ID，留空则使用默认工作区"`
 }
@@ -259,6 +273,10 @@ func handleCreateTask(ctx context.Context, prefsRepo *repository.UserAgentPrefsR
 		Priority:   models.NormalizeTaskPriority(in.Priority),
 		Status:     models.TaskStatusPending,
 		DependsOn:  in.DependsOn,
+	}
+	// 显式指定分支名时规范化为 feat//fix/ 前缀；留空则启动时由 AI 自动生成。
+	if b := strings.TrimSpace(in.Branch); b != "" {
+		task.Branch = acp.NormalizeBranchName(b)
 	}
 	if err := orchCreator.UpsertTask(cwd, task); err != nil {
 		return nil, createTaskOut{}, fmt.Errorf("创建编排任务失败: %w", err)
@@ -425,6 +443,41 @@ func handleStopTask(ctx context.Context, wsResolver WorkspaceResolver, orchCreat
 		return nil, stopTaskOut{}, fmt.Errorf("停止编排任务失败: %w", err)
 	}
 	return nil, stopTaskOut{Stopped: true, TaskID: taskID}, nil
+}
+
+// ====== send_prompt ======
+
+type sendPromptIn struct {
+	TaskID      string `json:"task_id" jsonschema:"要继续对话的任务 id"`
+	Prompt      string `json:"prompt" jsonschema:"发送给任务会话的新 prompt"`
+	WorkspaceID uint   `json:"workspace_id,omitempty" jsonschema:"工作区 ID"`
+}
+
+type sendPromptOut struct {
+	TaskID string `json:"task_id"`
+	Sent   bool   `json:"sent"`
+}
+
+// handleSendPrompt 向任务已有会话追加发送 prompt，继续对话。
+func handleSendPrompt(ctx context.Context, wsResolver WorkspaceResolver, orchCreator TaskManagerTaskCreator, in sendPromptIn) (*mcp.CallToolResult, sendPromptOut, error) {
+	_, _, cwd, err := resolveTaskCwd(ctx, wsResolver, in.WorkspaceID)
+	if err != nil {
+		return nil, sendPromptOut{}, err
+	}
+	if orchCreator == nil {
+		return nil, sendPromptOut{}, fmt.Errorf("编排任务创建未配置")
+	}
+	taskID := strings.TrimSpace(in.TaskID)
+	if taskID == "" {
+		return nil, sendPromptOut{}, fmt.Errorf("task_id 必填")
+	}
+	if strings.TrimSpace(in.Prompt) == "" {
+		return nil, sendPromptOut{}, fmt.Errorf("prompt 必填")
+	}
+	if err := orchCreator.SendPrompt(ctx, cwd, taskID, in.Prompt); err != nil {
+		return nil, sendPromptOut{}, fmt.Errorf("继续对话失败: %w", err)
+	}
+	return nil, sendPromptOut{TaskID: taskID, Sent: true}, nil
 }
 
 // ====== set_max_parallel ======

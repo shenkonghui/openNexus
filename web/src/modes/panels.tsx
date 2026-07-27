@@ -6,6 +6,7 @@ import DebugPanel from '../components/DebugPanel'
 import BrowserPanel from '../components/BrowserPanel'
 import DocWorkspace, { type DocEditMode } from '../components/DocWorkspace'
 import WorkspaceFileEditor from '../components/WorkspaceFileEditor'
+import FileExplorer from '../components/FileExplorer'
 import { useFileViewer } from '../context/FileViewerContext'
 import { Folder, SquareTerminal, Pencil, Bug, MessageSquare, BookOpenText, Globe } from 'lucide-react'
 import type { PanelDef, PanelCtx } from './types'
@@ -45,26 +46,56 @@ function EmptyPanel({
 }
 
 /**
- * files 面板：不再自带文件树，仅展示左侧文件浏览器选中的文件内容。
+ * files 面板：左侧文件树（工作区 cwd）+ 右侧选中文件内容。
  * 挂载时向 FileViewer 注册为内嵌查看器，使 AppLayout 不再用主区域覆盖层显示文件。
  */
-function SelectedFileView() {
-  const { openFilePath, closeFile, registerEmbedded } = useFileViewer()
+function FilesView({ cwd }: { cwd: string }) {
+  const { openFilePath, openFile, closeFile, registerEmbedded } = useFileViewer()
   useEffect(() => registerEmbedded(), [registerEmbedded])
 
-  if (!openFilePath) {
-    return <EmptyPanel hintKey="fileBrowser.selectHint" icon={<Folder size={40} />} />
-  }
-  return <WorkspaceFileEditor key={openFilePath} path={openFilePath} onClose={closeFile} />
+  const content = openFilePath ? (
+    <WorkspaceFileEditor key={openFilePath} path={openFilePath} onClose={closeFile} />
+  ) : (
+    <EmptyPanel hintKey="fileBrowser.selectHint" icon={<Folder size={40} />} />
+  )
+
+  if (!cwd) return content
+
+  return (
+    <div style={{ flex: 1, display: 'flex', minHeight: 0, minWidth: 0 }}>
+      <div
+        style={{
+          width: 230,
+          flexShrink: 0,
+          display: 'flex',
+          flexDirection: 'column',
+          minHeight: 0,
+          borderRight: '1px solid var(--border-subtle)',
+          background: 'var(--bg-base)',
+        }}
+      >
+        <FileExplorer rootPath={cwd} onSelectFile={openFile} selectedPath={openFilePath ?? undefined} />
+      </div>
+      <div style={{ flex: 1, display: 'flex', minWidth: 0, minHeight: 0 }}>{content}</div>
+    </div>
+  )
 }
 
-function renderFiles() {
-  return <SelectedFileView />
+function renderFiles(ctx: PanelCtx) {
+  return <FilesView cwd={ctx.cwd || ''} />
 }
 
 function renderTerminal(ctx: PanelCtx) {
-  if (!ctx.sessionId) return <EmptyPanel hintKey="panel.requireSession" />
-  return <TerminalPanel sessionId={ctx.sessionId} onClose={() => {}} />
+  // 任务（会话）尚未开始时降级为工作区终端；会话出现后换 key 重建，切到会话工作目录
+  if (!ctx.sessionId && !ctx.workspaceId) return <EmptyPanel hintKey="panel.requireSession" />
+  return (
+    <TerminalPanel
+      key={ctx.sessionId ?? `ws-${ctx.workspaceId}`}
+      sessionId={ctx.sessionId}
+      workspaceId={ctx.workspaceId}
+      onClose={() => {}}
+    />
+  )
 }
 
 function renderChanges(ctx: PanelCtx) {
@@ -146,11 +177,10 @@ const DocPreviewView = memo(function DocPreviewView({
  */
 function renderChat(ctx: PanelCtx) {
   type ChatConfig = {
-    configBar: 'coding' | 'docs' | 'none'
+    configBar: 'coding' | 'none'
     emptyTitleKey?: string
     emptyHintKey?: string
     placeholderKey?: string
-    selectDocFirstKey?: string
     configBarNode?: ReactNode
   }
   const cfg = (ctx as PanelCtx & { __chatConfig?: ChatConfig }).__chatConfig
@@ -161,7 +191,6 @@ function renderChat(ctx: PanelCtx) {
       emptyTitleKey={cfg?.emptyTitleKey}
       emptyHintKey={cfg?.emptyHintKey}
       placeholderKey={cfg?.placeholderKey}
-      selectDocFirstKey={cfg?.selectDocFirstKey}
       configBarNode={cfg?.configBarNode}
     />
   )

@@ -693,24 +693,9 @@
     "exportFailed": "导出失败"
   },
   "docAI": {
-    "title": "AI 助手",
-    "subtitle": "对话生成 draw.io 图",
-    "placeholder": "描述你想生成的图，例如「画一个用户登录流程」",
-    "send": "生成",
-    "insertToDoc": "插入到文档",
-    "inserted": "已插入到文档末尾",
     "viewSource": "查看源码",
     "renderFailed": "渲染失败，请重试或让 AI 重新生成",
-    "generating": "生成中…",
-    "waitingGenerate": "等待 AI 生成图表…",
-    "initError": "初始化 AI 失败：{{message}}",
-    "sendFailed": "发送失败：{{message}}",
-    "welcome": "👋 我是文档图表助手。告诉我你想画什么图，我会用 draw.io 格式生成并可直接插入到文档。"
-  },
-  "taskMode": {
-    "coding": "编码",
-    "docs": "文档",
-    "taskmanager": "任务"
+    "waitingGenerate": "等待 AI 生成图表…"
   },
   "codingMode": {
     "chatEmptyTitle": "编码助手",
@@ -719,11 +704,7 @@
   "docMode": {
     "emptyTitle": "文档工作区",
     "emptyHint": "从左侧侧边栏的「文档」分组中选择一个 .md 文件开始编辑，或在对话中让 AI 生成 draw.io 图。",
-    "chatEmptyTitle": "文档 AI 助手",
-    "chatEmptyHint": "在下方输入框描述你想生成的图（例如「画一个用户登录流程」），AI 生成的 draw.io 图会自动出现在右侧文档中。",
-    "selectDocFirst": "请先从侧边栏选择一个文档",
-    "noAgent": "无可用 Agent",
-    "model": "模型"
+    "noAgent": "无可用 Agent"
   },
   "panel": {
     "chat": "对话",
@@ -795,6 +776,7 @@
     "aiPlaceholder": "描述你的需求，例如：新增一个重构登录模块的任务；把并发改成 5",
     "aiHint": "用自然语言描述需求，Agent 会通过任务工具增删改任务、启停、调整并发",
     "cwd": "工作目录",
+    "branch": "分支",
     "startedAt": "开始",
     "finishedAt": "结束",
     "openChat": "打开对话",

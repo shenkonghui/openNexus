@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -33,6 +34,16 @@ func (m *mockTMExecutor) DefaultAgentType() string {
 	return "mock-agent"
 }
 
+func (m *mockTMExecutor) RunPromptOnce(_ context.Context, _, _, _ string) (string, error) {
+	return "", errors.New("mock 不支持 RunPromptOnce")
+}
+
+func (m *mockTMExecutor) Prompt(_ context.Context, _, _ string) (<-chan models.Message, error) {
+	ch := make(chan models.Message)
+	close(ch)
+	return ch, nil
+}
+
 // TestExecuteTaskUsesManualSource 验证 executeTask 创建的会话 source 为 manual，
 // 且不再携带 ParentSessionID（编排管理会话概念已取消）。
 func TestExecuteTaskUsesManualSource(t *testing.T) {
@@ -62,7 +73,8 @@ func TestExecuteTaskUsesManualSource(t *testing.T) {
 }
 
 // TestExecuteTaskUsesWorktreeCwd 验证 executeTask 将 worktree 路径作为 Cwd 传给 RunSessionTask，
-// 使任务 session 在独立 worktree 内运行。
+// 使任务 session 在独立 worktree 内运行。AI 命名不可用（mock 报错）时，
+// 分支名回退为标题清洗 + feat/ 前缀，worktree 目录跟随分支名。
 func TestExecuteTaskUsesWorktreeCwd(t *testing.T) {
 	cwd := t.TempDir()
 	mock := &mockTMExecutor{result: acp.SessionTaskResult{Success: true, SessionID: "s-uuid", DBSessionID: 99}}
@@ -72,7 +84,7 @@ func TestExecuteTaskUsesWorktreeCwd(t *testing.T) {
 		t.Fatalf("InitGitRepo: %v", err)
 	}
 
-	task := &models.TaskManagerTask{ID: "task1", Title: "T", Detail: "prompt", AgentType: "demo"}
+	task := &models.TaskManagerTask{ID: "task1", Title: "add login", Detail: "prompt", AgentType: "demo"}
 	res, err := svc.executeTask(context.Background(), cwd, task, 5, 8)
 	if err != nil {
 		t.Fatalf("executeTask: %v", err)
@@ -80,8 +92,29 @@ func TestExecuteTaskUsesWorktreeCwd(t *testing.T) {
 	if !res.Success {
 		t.Fatalf("executeTask result 应成功: %+v", res)
 	}
-	wantSuffix := filepath.Join(".worktrees", "task1")
+	wantSuffix := filepath.Join(".worktrees", "feat", "add-login")
 	if mock.lastCfg.Cwd == "" || !strings.HasSuffix(mock.lastCfg.Cwd, wantSuffix) {
+		t.Fatalf("Cwd = %q, 期望以 %q 结尾", mock.lastCfg.Cwd, wantSuffix)
+	}
+}
+
+// TestExecuteTaskUsesExplicitBranch 验证任务显式指定 Branch 时直接沿用，
+// 不走 AI 命名，worktree 目录为 .worktrees/<branch>。
+func TestExecuteTaskUsesExplicitBranch(t *testing.T) {
+	cwd := t.TempDir()
+	mock := &mockTMExecutor{result: acp.SessionTaskResult{Success: true, SessionID: "s-uuid", DBSessionID: 99}}
+	svc := NewTaskManagerService(mock)
+
+	if err := svc.InitGitRepo(cwd); err != nil {
+		t.Fatalf("InitGitRepo: %v", err)
+	}
+
+	task := &models.TaskManagerTask{ID: "task1", Title: "T", Detail: "prompt", AgentType: "demo", Branch: "fix/login-crash"}
+	if _, err := svc.executeTask(context.Background(), cwd, task, 5, 8); err != nil {
+		t.Fatalf("executeTask: %v", err)
+	}
+	wantSuffix := filepath.Join(".worktrees", "fix", "login-crash")
+	if !strings.HasSuffix(mock.lastCfg.Cwd, wantSuffix) {
 		t.Fatalf("Cwd = %q, 期望以 %q 结尾", mock.lastCfg.Cwd, wantSuffix)
 	}
 }

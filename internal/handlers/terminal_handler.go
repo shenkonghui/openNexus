@@ -50,7 +50,47 @@ func (h *TerminalHandler) HandleTerminal(c *gin.Context) {
 		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": gin.H{"code": "NO_CWD", "message": "该会话没有工作目录"}})
 		return
 	}
+	h.servePTYShell(c, cwd)
+}
 
+// WorkspaceFinder 按 ID 查找工作区（含 UserID，用于归属校验）。由 *agent.Router 实现。
+type WorkspaceFinder interface {
+	FindWorkspaceByID(id uint) (*models.Workspace, error)
+}
+
+// HandleWorkspaceTerminal GET /api/v1/workspaces/:id/terminal?token=...
+// 在工作区 cwd 下启动 PTY shell，使任务（会话）尚未开始时也能使用终端。
+// 协议与 HandleTerminal 一致。
+func (h *TerminalHandler) HandleWorkspaceTerminal(c *gin.Context) {
+	userID, ok := h.authWSUser(c)
+	if !ok {
+		return
+	}
+	finder, ok := h.store.(WorkspaceFinder)
+	if !ok {
+		c.AbortWithStatusJSON(http.StatusNotImplemented, gin.H{"error": gin.H{"code": "NOT_SUPPORTED", "message": "当前后端不支持工作区终端"}})
+		return
+	}
+	id, ok := parseSessionID(c) // 路由参数同为 :id，复用解析
+	if !ok {
+		return
+	}
+	ws, err := finder.FindWorkspaceByID(id)
+	if err != nil || ws == nil || ws.UserID != userID {
+		c.AbortWithStatusJSON(http.StatusNotFound, gin.H{"error": gin.H{"code": "WORKSPACE_NOT_FOUND", "message": "工作区不存在"}})
+		return
+	}
+	if strings.TrimSpace(ws.Cwd) == "" {
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": gin.H{"code": "NO_CWD", "message": "该工作区没有工作目录"}})
+		return
+	}
+	h.servePTYShell(c, ws.Cwd)
+}
+
+// servePTYShell 是交互式终端的公共实现：校验 cwd → WebSocket 升级 →
+// 启动 PTY shell → 双向转发 stdin/stdout（含 0x01 resize 控制帧）。
+// 调用前需完成认证与归属校验。
+func (h *TerminalHandler) servePTYShell(c *gin.Context, cwd string) {
 	// 验证 cwd 存在且是目录
 	cwdAbs, err := filepath.Abs(cwd)
 	if err != nil {
@@ -62,7 +102,7 @@ func (h *TerminalHandler) HandleTerminal(c *gin.Context) {
 		return
 	}
 
-	// 3. WebSocket 升级
+	// WebSocket 升级
 	conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
 		// Upgrade 已写入错误响应
@@ -70,7 +110,7 @@ func (h *TerminalHandler) HandleTerminal(c *gin.Context) {
 	}
 	defer conn.Close()
 
-	// 4. 启动 PTY shell（提示符仅显示当前目录最后一级，而非完整路径）
+	// 启动 PTY shell（提示符仅显示当前目录最后一级，而非完整路径）
 	cmd, cleanup := buildTerminalCommand(cwdAbs)
 	defer cleanup()
 
@@ -88,7 +128,7 @@ func (h *TerminalHandler) HandleTerminal(c *gin.Context) {
 	ctx, cancel := context.WithCancel(c.Request.Context())
 	defer cancel()
 
-	// 5. PTY -> WebSocket（stdout 转发）
+	// PTY -> WebSocket（stdout 转发）
 	go func() {
 		buf := make([]byte, 4096)
 		for {
@@ -106,7 +146,7 @@ func (h *TerminalHandler) HandleTerminal(c *gin.Context) {
 		}
 	}()
 
-	// 6. WebSocket -> PTY（stdin 转发）
+	// WebSocket -> PTY（stdin 转发）
 	for {
 		select {
 		case <-ctx.Done():

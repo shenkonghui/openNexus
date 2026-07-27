@@ -693,24 +693,9 @@
     "exportFailed": "Export failed"
   },
   "docAI": {
-    "title": "AI Assistant",
-    "subtitle": "Generate draw.io diagrams via chat",
-    "placeholder": "Describe the diagram you want, e.g. \"draw a user login flow\"",
-    "send": "Generate",
-    "insertToDoc": "Insert to doc",
-    "inserted": "Inserted at end of doc",
     "viewSource": "View source",
     "renderFailed": "Render failed. Retry or ask AI to regenerate.",
-    "generating": "Generating…",
-    "waitingGenerate": "Waiting for AI to generate the diagram…",
-    "initError": "Failed to init AI: {{message}}",
-    "sendFailed": "Send failed: {{message}}",
-    "welcome": "👋 I'm your doc diagram assistant. Tell me what to draw and I'll produce draw.io XML that can be inserted into the doc."
-  },
-  "taskMode": {
-    "coding": "Coding",
-    "docs": "Docs",
-    "taskmanager": "Tasks"
+    "waitingGenerate": "Waiting for AI to generate the diagram…"
   },
   "codingMode": {
     "chatEmptyTitle": "Coding Assistant",
@@ -719,11 +704,7 @@
   "docMode": {
     "emptyTitle": "Docs Workspace",
     "emptyHint": "Pick a .md file from the \"Documents\" group in the left sidebar, or let AI generate a draw.io diagram in the chat.",
-    "chatEmptyTitle": "Doc AI Assistant",
-    "chatEmptyHint": "Describe the diagram you want in the input below (e.g. \"draw a user login flow\"). The generated draw.io diagram will appear in the doc on the right.",
-    "selectDocFirst": "Please pick a document from the sidebar first",
-    "noAgent": "No agent available",
-    "model": "Model"
+    "noAgent": "No agent available"
   },
   "panel": {
     "chat": "Chat",
@@ -795,6 +776,7 @@
     "aiPlaceholder": "Describe your need, e.g.: add a task to refactor the login module; set concurrency to 5",
     "aiHint": "Describe your needs in natural language; the agent manages tasks via task tools (create/update/delete/start/stop/set concurrency)",
     "cwd": "Working Dir",
+    "branch": "Branch",
     "startedAt": "Started",
     "finishedAt": "Finished",
     "openChat": "Open Chat",

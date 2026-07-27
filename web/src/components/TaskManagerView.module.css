@@ -224,6 +224,27 @@
   text-transform: uppercase;
 }
 
+/* worktree 分支徽标：图标 + 分支名，限宽省略，hover 提示 worktree 路径 */
+.taskBranch {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: var(--bg-hover);
+  color: var(--text-muted);
+  min-width: 0;
+  max-width: 140px;
+}
+
+.taskBranchName {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono, monospace);
+}
+
 .priority_p0 {
   background: var(--danger-bg);
   color: var(--danger);

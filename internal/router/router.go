@@ -262,6 +262,8 @@ func Setup(authSvc *services.AuthService, jwtSvc *services.JWTService, agentRout
 		// 终端 WebSocket（通过 query token 认证，不走 AuthRequired 中间件）
 		terminalH := handlers.NewTerminalHandler(agentRouter, jwtSvc)
 		v1.GET("/sessions/:id/terminal", terminalH.HandleTerminal)
+		// 工作区终端：任务（会话）尚未开始时在工作区 cwd 下启动 shell
+		v1.GET("/workspaces/:id/terminal", terminalH.HandleWorkspaceTerminal)
 		// agent 终端事件桥接（只读）：agent 执行 shell 时推送 created/output/exit 事件
 		v1.GET("/sessions/:id/agent-terminals", terminalH.HandleAgentTerminal)
 		// terminal 类型认证的交互式登录终端（设置页「登录」按钮）

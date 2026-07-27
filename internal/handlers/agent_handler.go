@@ -289,6 +289,8 @@ func (h *AgentHandler) Models(c *gin.Context) {
 			ID:           string(opt.Select.Id),
 			Name:         opt.Select.Name,
 			CurrentValue: string(opt.Select.CurrentValue),
+			// 初始化为空切片，避免 JSON 序列化为 null 导致前端 o.options.length 崩溃
+			Options: []configOptionValue{},
 		}
 		if opt.Select.Options.Ungrouped != nil {
 			for _, o := range *opt.Select.Options.Ungrouped {
@@ -347,7 +349,7 @@ func (h *AgentHandler) Probe(c *gin.Context) {
 	}
 	items := make([]configOptionItem, 0, len(opts))
 	for _, opt := range opts {
-		item := configOptionItem{Type: "boolean"}
+		item := configOptionItem{Type: "boolean", Options: []configOptionValue{}}
 		if opt.Select != nil {
 			item.ID = string(opt.Select.Id)
 			item.Name = opt.Select.Name

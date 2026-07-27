@@ -44,9 +44,7 @@ export const tabs = (panels: string[], flex = 1, defaultTab?: string): LayoutNod
  * 任一面板需要的数据都从 PanelCtx 取，避免各面板各自从 store/hook 拉。
  */
 export interface PanelCtx {
-  // ===== 会话生命周期（两种：编码主会话 / 文档助手会话） =====
-  sessionKind: 'primary' | 'docs'
-
+  // ===== 会话生命周期（统一主会话） =====
   sessionId: number | undefined
   session: Session | null
   messages: Message[]
@@ -67,7 +65,7 @@ export interface PanelCtx {
   configOptions: ConfigOption[]
   onSetConfigOption: (configId: string, value: string) => void
 
-  // 文档模式配置（agent + model 下拉）
+  // Agent + 模型下拉（新建任务页预探）
   agents: { type: string; display_name: string }[]
   selectedAgent: string
   onSelectAgent: (type: string) => void
@@ -104,10 +102,8 @@ export interface PanelCtx {
   // 清理会话上下文成功后回调（重新拉取消息，刷新 token 占用）
   onContextCleared?: () => void
 
-  // ===== 文档模式专用 =====
+  // ===== 文档预览面板专用 =====
   docTarget: { folderId: string; filePath: string } | null
-  docContent: string
-  onDocContentChange: (next: string) => void
   docForceMode?: DocEditMode
   onCloseDoc?: () => void
   // 文档预览重新读取磁盘的触发器（AI 直接编辑文件后自增，使预览刷新）
@@ -143,19 +139,13 @@ export interface PanelDef {
 }
 
 /** 配置栏样式（对话列顶部） */
-export type ConfigBarKind = 'coding' | 'docs' | 'none'
+export type ConfigBarKind = 'coding' | 'none'
 
 /** 模式注册项 */
 export interface ModeDef {
   id: string
   titleKey: string
   icon: ReactNode
-  /** 该模式对话列绑定哪个会话生命周期 */
-  sessionKind: 'primary' | 'docs'
-  /** 对话列顶部配置栏样式 */
-  configBar: ConfigBarKind
   /** 该模式的面板布局树 */
   layout: LayoutNode
-  /** 文档模式下额外需要的面板（如 doc-preview），由 PanelCtx 驱动是否渲染占位 */
-  requiresDocTarget?: boolean
 }

@@ -6,7 +6,10 @@ import AgentTerminalInstance, { type AgentTerminalHandle } from './AgentTerminal
 import styles from './Terminal.module.css'
 
 interface TerminalProps {
-  sessionId: number
+  /** 会话 ID；未提供时需提供 workspaceId（任务尚未开始的工作区终端） */
+  sessionId?: number
+  /** 工作区 ID：无会话时在工作区 cwd 下启动 shell */
+  workspaceId?: number
   onClose: () => void
 }
 
@@ -46,7 +49,7 @@ function makeTabName(base: string, index: number): string {
   return index === 0 ? base : `${base} ${index + 1}`
 }
 
-export default function TerminalPanel({ sessionId, onClose }: TerminalProps) {
+export default function TerminalPanel({ sessionId, workspaceId, onClose }: TerminalProps) {
   const { t } = useTranslation()
   const baseName = t('panel.terminal')
   const counterRef = useRef(0)
@@ -95,8 +98,9 @@ export default function TerminalPanel({ sessionId, onClose }: TerminalProps) {
     for (const op of pending) applyAgentOp(handle, op)
   }, [])
 
-  // 订阅 agent 终端事件：所有 agent shell 命令聚合到同一个只读 tab 展示
+  // 订阅 agent 终端事件：所有 agent shell 命令聚合到同一个只读 tab 展示（仅会话终端有 agent 事件）
   useEffect(() => {
+    if (sessionId == null) return
     let ws: WebSocket
     try {
       ws = new WebSocket(buildSessionWSURL(sessionId, 'agent-terminals'))
@@ -212,7 +216,7 @@ export default function TerminalPanel({ sessionId, onClose }: TerminalProps) {
             style={{ display: tab.id === activeId ? 'flex' : 'none' }}
           >
             {tab.kind === 'user' ? (
-              <TerminalInstance sessionId={sessionId} active={tab.id === activeId} />
+              <TerminalInstance sessionId={sessionId} workspaceId={workspaceId} active={tab.id === activeId} />
             ) : (
               <AgentTerminalInstance
                 active={tab.id === activeId}

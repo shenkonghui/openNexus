@@ -409,7 +409,6 @@ export default function TaskManagerChatPanel({
 
   // ===== 构造 PanelCtx（复刻 ChatPage 新建页 createCtx）=====
   const ctx: PanelCtx = {
-    sessionKind: 'primary',
     sessionId: session?.id,
     session,
     messages,
@@ -462,8 +461,6 @@ export default function TaskManagerChatPanel({
     workspaceId,
     cwd,
     docTarget: null,
-    docContent: '',
-    onDocContentChange: () => {},
     hasMore,
     loadingMore,
     onLoadMore: handleLoadMore,

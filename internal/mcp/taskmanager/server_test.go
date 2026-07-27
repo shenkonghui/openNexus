@@ -41,6 +41,7 @@ func TestTaskManagerJSONSchemaTagsValid(t *testing.T) {
 	t.Run("deleteTaskIn", func(t *testing.T) { _, err := jsonschema.For[deleteTaskIn](nil); check(t, err) })
 	t.Run("startTaskIn", func(t *testing.T) { _, err := jsonschema.For[startTaskIn](nil); check(t, err) })
 	t.Run("stopTaskIn", func(t *testing.T) { _, err := jsonschema.For[stopTaskIn](nil); check(t, err) })
+	t.Run("sendPromptIn", func(t *testing.T) { _, err := jsonschema.For[sendPromptIn](nil); check(t, err) })
 	t.Run("setMaxParallelIn", func(t *testing.T) { _, err := jsonschema.For[setMaxParallelIn](nil); check(t, err) })
 	t.Run("listTasksIn", func(t *testing.T) { _, err := jsonschema.For[listTasksIn](nil); check(t, err) })
 }

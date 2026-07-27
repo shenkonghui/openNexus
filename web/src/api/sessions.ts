@@ -1,5 +1,6 @@
 import type { Session, Message, AgentCommand, ConfigOption, SessionMode, AgentSkill, Execution, RunningTask } from '../types'
 import { apiFetch } from './client'
+import { normalizeOptionsField } from './agents'
 
 // 创建会话（可选 model_value 指定初始模型，可选 workspace_id，可选 source 标记来源，可选 cwd 指定自定义工作目录，可选 yolo；
 // autoWorktree 为 true 时由后端 AI 根据 prompt 自动命名并创建 worktree 作为会话 cwd）
@@ -134,7 +135,11 @@ export function listSkills(id: number): Promise<{ data: { skills: AgentSkill[] }
 
 // 获取会话的 config option（含模型选择）
 export function listConfigOptions(id: number): Promise<{ data: { config_options: ConfigOption[] } }> {
-  return apiFetch(`/sessions/${id}/config-options`)
+  return apiFetch<{ data: { config_options: ConfigOption[] } }>(`/sessions/${id}/config-options`)
+    .then((resp) => {
+      resp.data.config_options = normalizeOptionsField(resp.data.config_options)
+      return resp
+    })
 }
 
 // 设置会话的 config option 值（如切换模型）

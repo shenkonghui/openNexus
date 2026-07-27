@@ -271,13 +271,13 @@ export default function TaskManagerView({ workspaceId, cwd, agents, restoreSessi
     })
   }
 
-  // 点击任务名称：打开任务界面（与普通任务界面一致，默认编程模式）。
+  // 点击任务名称：打开任务界面（与普通任务界面一致）。
   // 已运行的任务打开其关联会话；尚未运行的任务打开新建任务页并用任务详情预填 prompt。
   function openTask(task: TaskManagerTask) {
     if (task.db_session_id) {
-      navigate(sessionUrl(task.db_session_id, workspaceId), { state: { taskMode: 'coding' } })
+      navigate(sessionUrl(task.db_session_id, workspaceId))
     } else {
-      navigate(newTaskUrl(workspaceId), { state: { taskMode: 'coding', draftPrompt: task.detail } })
+      navigate(newTaskUrl(workspaceId), { state: { draftPrompt: task.detail } })
     }
   }
 
@@ -435,6 +435,12 @@ export default function TaskManagerView({ workspaceId, cwd, agents, restoreSessi
                         >{task.title}</span>
                       </span>
                       <span className={styles.taskHeaderRight}>
+                        {task.branch && (
+                          <span className={styles.taskBranch} title={task.worktree_path || task.branch}>
+                            <GitBranch size={11} />
+                            <span className={styles.taskBranchName}>{task.branch}</span>
+                          </span>
+                        )}
                         <span className={`${styles.taskPriority} ${styles[`priority_${task.priority || 'p1'}`] || ''}`}>
                           {t(`taskmanager.priority_${task.priority || 'p1'}`)}
                         </span>
@@ -478,6 +484,12 @@ export default function TaskManagerView({ workspaceId, cwd, agents, restoreSessi
                     {isOpen && (
                       <div className={styles.taskBody}>
                         <div className={styles.taskDetail}>{task.detail}</div>
+                        {task.branch && (
+                          <div className={styles.taskCwd}>
+                            <span className={styles.cwdLabel}>{t('taskmanager.branch')}:</span>
+                            <code className={styles.cwdValue}>{task.branch}</code>
+                          </div>
+                        )}
                         {task.worktree_path && (
                           <div className={styles.taskCwd}>
                             <span className={styles.cwdLabel}>{t('taskmanager.cwd')}:</span>

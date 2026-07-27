@@ -681,6 +681,8 @@ func (h *SessionHandler) ConfigOptions(c *gin.Context) {
 	for _, opt := range opts {
 		item := configOptionItem{
 			Type: "boolean",
+			// 初始化为空切片，避免 JSON 序列化为 null 导致前端 o.options.length 崩溃
+			Options: []configOptionValue{},
 		}
 		if opt.Select != nil {
 			item.ID = string(opt.Select.Id)

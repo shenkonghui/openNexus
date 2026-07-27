@@ -24,6 +24,10 @@ type TaskManagerExecutor interface {
 	GetSessionByDBID(id uint) (*models.Session, error)
 	// DefaultAgentType 返回首个已注册 agent 类型，作为任务未指定 agent 时的最终回退。
 	DefaultAgentType() string
+	// Prompt 向已有会话发送 prompt（自动恢复断开的连接），用于任务的继续对话。
+	Prompt(ctx context.Context, sessionID, prompt string) (<-chan models.Message, error)
+	// RunPromptOnce 在临时 ACP 会话发送一次 prompt 并收集文本响应（不落库），用于 AI 生成分支名。
+	RunPromptOnce(ctx context.Context, agentType, modelValue, prompt string) (string, error)
 }
 
 // TaskManagerService 管理任务管理：读写工作区管理数据目录中的 tasks.json、按并发上限调度任务、
@@ -334,6 +338,38 @@ func (s *TaskManagerService) runTask(run *orchRun, t *models.TaskManagerTask, wo
 	})
 }
 
+// taskBranchNamePrompt 是 AI 生成任务分支名的提示词模板。
+const taskBranchNamePrompt = `请为以下开发任务生成一个简短的英文 git 分支名，要求以 feat/ 或 fix/ 开头（新功能用 feat/，缺陷修复用 fix/），斜杠后为 kebab-case 的 2-4 个英文单词，只用小写字母、数字和连字符，概括任务核心内容。
+任务标题：{{title}}
+任务详情：{{detail}}
+仅输出分支名，不要输出其他任何内容。`
+
+// generateTaskBranch 生成任务的 worktree 分支名：优先用任务的 agent 做一次性 AI 命名
+//（规范化为 feat//fix/ 前缀），失败回退到标题/详情清洗，仍为空则兜底 task-<ID>。
+func (s *TaskManagerService) generateTaskBranch(ctx context.Context, agentType string, t *models.TaskManagerTask) string {
+	desc := strings.TrimSpace(t.Title)
+	if desc == "" {
+		desc = strings.TrimSpace(t.Detail)
+	}
+	if desc != "" && agentType != "" {
+		aiCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+		defer cancel()
+		built := strings.ReplaceAll(taskBranchNamePrompt, "{{title}}", strings.TrimSpace(t.Title))
+		built = strings.ReplaceAll(built, "{{detail}}", strings.TrimSpace(t.Detail))
+		if resp, err := s.exec.RunPromptOnce(aiCtx, agentType, t.ModelValue, built); err == nil {
+			if name := acp.NormalizeBranchName(resp); name != "" {
+				return name
+			}
+		} else {
+			slog.Warn("AI 生成任务分支名失败，回退规则提取", "task", t.ID, "agent", agentType, "err", err)
+		}
+		if name := acp.NormalizeBranchName(desc); name != "" {
+			return name
+		}
+	}
+	return "task-" + t.ID
+}
+
 // executeTask 创建 worktree 并调用 RunSessionTask 执行任务。
 func (s *TaskManagerService) executeTask(ctx context.Context, cwd string, t *models.TaskManagerTask, workspaceID, userID uint) (acp.SessionTaskResult, error) {
 	// 解析仓库根（worktree add 需在公共 git 仓库下执行）
@@ -345,11 +381,31 @@ func (s *TaskManagerService) executeTask(ctx context.Context, cwd string, t *mod
 		return acp.SessionTaskResult{}, fmt.Errorf("创建 worktrees 目录: %w", err)
 	}
 
+	// 解析 agent 类型（提前到 worktree 创建前，AI 生成分支名也需要它）：
+	// 任务未指定时回退到首个已注册 agent。直接把空 agent_type 传给 RunSessionTask
+	// 会因 GetBackend 失败而报"agent 类型未注册"。
+	agentType := t.AgentType
+	if agentType == "" {
+		agentType = s.exec.DefaultAgentType()
+		// 回写解析结果，使 UI 显示实际使用的 agent，并让后续重跑保持一致。
+		if agentType != "" {
+			resolved := agentType
+			s.updateTask(cwd, t.ID, func(task *models.TaskManagerTask) {
+				task.AgentType = resolved
+			})
+		}
+	}
+
+	// 分支名：任务已指定则沿用（重跑场景保持不变）；否则 AI 生成 feat//fix/ 前缀分支名并去重。
 	branch := t.Branch
 	if branch == "" {
-		branch = "task-" + t.ID
+		branch = acp.UniqueWorktreeName(repoRoot, s.generateTaskBranch(ctx, agentType, t))
 	}
-	wtPath := acp.WorktreePath(repoRoot, t.ID)
+	// worktree 目录跟随分支名（feat/xxx 形成嵌套目录）；重跑时复用已记录路径。
+	wtPath := t.WorktreePath
+	if wtPath == "" {
+		wtPath = acp.WorktreePath(repoRoot, branch)
+	}
 
 	// 若 worktree 已存在（如上次中断），先清理重建
 	if _, err := os.Stat(wtPath); err == nil {
@@ -364,20 +420,6 @@ func (s *TaskManagerService) executeTask(ctx context.Context, cwd string, t *mod
 		task.Branch = branch
 		task.WorktreePath = wtPath
 	})
-
-	// 解析 agent 类型：任务未指定时回退到首个已注册 agent。
-	// 直接把空 agent_type 传给 RunSessionTask 会因 GetBackend 失败而报"agent 类型未注册"。
-	agentType := t.AgentType
-	if agentType == "" {
-		agentType = s.exec.DefaultAgentType()
-		// 回写解析结果，使 UI 显示实际使用的 agent，并让后续重跑保持一致。
-		if agentType != "" {
-			resolved := agentType
-			s.updateTask(cwd, t.ID, func(task *models.TaskManagerTask) {
-				task.AgentType = resolved
-			})
-		}
-	}
 
 	cfg := acp.SessionTaskConfig{
 		AgentType:   agentType,
@@ -404,6 +446,96 @@ func (s *TaskManagerService) executeTask(ctx context.Context, cwd string, t *mod
 
 	// worktree 始终保留（无论成败）：便于用户查看改动、继续对话或提交。
 	return res, err
+}
+
+// SendPrompt 向任务已有会话追加发送新 prompt，继续对话。
+// 任务必须已执行过（存在 session_id）。发送成功后立即返回，任务状态转 running，
+// 消息流在后台消费完毕后转 done；期间可被 Stop 取消（转 canceled）。
+// 注意：发送与消费不依赖调用方 ctx（MCP 请求结束即取消），而是绑定任务级 runCtx。
+func (s *TaskManagerService) SendPrompt(_ context.Context, cwd, taskID, prompt string) error {
+	taskID = strings.TrimSpace(taskID)
+	if taskID == "" {
+		return fmt.Errorf("task_id 不能为空")
+	}
+	if strings.TrimSpace(prompt) == "" {
+		return fmt.Errorf("prompt 不能为空")
+	}
+	def, err := s.storeFor(cwd).Load()
+	if err != nil {
+		return err
+	}
+	var task *models.TaskManagerTask
+	for i := range def.Tasks {
+		if def.Tasks[i].ID == taskID {
+			task = &def.Tasks[i]
+			break
+		}
+	}
+	if task == nil {
+		return fmt.Errorf("任务 %s 不存在", taskID)
+	}
+	if task.SessionID == "" {
+		return fmt.Errorf("任务 %s 尚未执行过，没有可继续的会话，请先 start_task", taskID)
+	}
+
+	// 内存中确实在跑的任务不允许并发追加 prompt，避免同一会话交叉发送
+	taskKey := cwd + ":" + taskID
+	s.mu.Lock()
+	if _, live := s.taskCtx[taskKey]; live {
+		s.mu.Unlock()
+		return fmt.Errorf("任务 %s 正在运行中，请先等待完成或 stop_task", taskID)
+	}
+	runCtx, cancel := context.WithCancel(context.Background())
+	s.taskCtx[taskKey] = cancel
+	s.mu.Unlock()
+
+	// 同步发送以便把会话不存在等错误立即反馈给调用方；消息流在后台消费。
+	// 使用 runCtx 而非调用方 ctx：MCP 工具请求返回后其 ctx 即被取消，会误中断对话。
+	ch, err := s.exec.Prompt(runCtx, task.SessionID, prompt)
+	if err != nil {
+		s.mu.Lock()
+		delete(s.taskCtx, taskKey)
+		s.mu.Unlock()
+		cancel()
+		return fmt.Errorf("发送 prompt 失败: %w", err)
+	}
+
+	now := time.Now()
+	s.updateTask(cwd, taskID, func(t *models.TaskManagerTask) {
+		t.Status = models.TaskStatusRunning
+		t.StartedAt = &now
+		t.FinishedAt = nil
+		t.Error = ""
+	})
+
+	go func() {
+		defer func() {
+			cancel()
+			s.mu.Lock()
+			delete(s.taskCtx, taskKey)
+			s.mu.Unlock()
+		}()
+		for {
+			select {
+			case _, ok := <-ch:
+				if !ok {
+					// 消息流结束：仅在仍为运行态时置 done（Stop 会先置 canceled）
+					fin := time.Now()
+					s.updateTask(cwd, taskID, func(t *models.TaskManagerTask) {
+						if models.IsTaskRunning(t.Status) {
+							t.Status = models.TaskStatusDone
+							t.FinishedAt = &fin
+						}
+					})
+					return
+				}
+			case <-runCtx.Done():
+				// 被 Stop 取消：状态已由 Stop 写为 canceled，这里只负责退出
+				return
+			}
+		}
+	}()
+	return nil
 }
 
 // Stop 停止任务。taskID 为空时停止该 cwd 下全部运行中/排队中任务。

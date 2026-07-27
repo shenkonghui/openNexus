@@ -6,7 +6,10 @@ import '@xterm/xterm/css/xterm.css'
 import styles from './Terminal.module.css'
 
 export interface TerminalInstanceProps {
-  sessionId: number
+  /** 会话终端：在会话工作目录（含 worktree）下启动 shell */
+  sessionId?: number
+  /** 工作区终端：任务尚未开始时在工作区 cwd 下启动 shell（sessionId 优先） */
+  workspaceId?: number
   active: boolean
 }
 
@@ -32,8 +35,9 @@ export function buildSessionWSURL(sessionId: number, endpoint: string): string {
   return buildWSURL(`/sessions/${sessionId}/${endpoint}`)
 }
 
-function buildTerminalURL(sessionId: number): string {
-  return buildSessionWSURL(sessionId, 'terminal')
+function buildTerminalURL(sessionId?: number, workspaceId?: number): string {
+  if (sessionId != null) return buildSessionWSURL(sessionId, 'terminal')
+  return buildWSURL(`/workspaces/${workspaceId}/terminal`)
 }
 
 function sendResize(term: XTerm, ws: WebSocket, fit: FitAddon) {
@@ -141,7 +145,7 @@ export function startTerminal(
   }
 }
 
-export default function TerminalInstance({ sessionId, active }: TerminalInstanceProps) {
+export default function TerminalInstance({ sessionId, workspaceId, active }: TerminalInstanceProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<XTerm | null>(null)
   const wsRef = useRef<WebSocket | null>(null)
@@ -149,8 +153,9 @@ export default function TerminalInstance({ sessionId, active }: TerminalInstance
 
   useEffect(() => {
     if (!containerRef.current) return
-    return startTerminal(buildTerminalURL(sessionId), containerRef.current, termRef, wsRef, fitRef)
-  }, [sessionId])
+    if (sessionId == null && workspaceId == null) return
+    return startTerminal(buildTerminalURL(sessionId, workspaceId), containerRef.current, termRef, wsRef, fitRef)
+  }, [sessionId, workspaceId])
 
   useEffect(() => {
     if (!active) return

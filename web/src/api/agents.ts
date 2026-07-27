@@ -18,7 +18,17 @@ export function getAgentCapabilities(agentType: string): Promise<{ data: AgentAc
 
 // 获取指定 agent 类型的可用模型列表（从已有会话缓存获取，可能为空）
 export function getAgentModels(agentType: string): Promise<{ data: { model_options: ModelOption[] } }> {
-  return apiFetch(`/agents/${encodeURIComponent(agentType)}/models`)
+  return apiFetch<{ data: { model_options: ModelOption[] } }>(`/agents/${encodeURIComponent(agentType)}/models`)
+    .then((resp) => {
+      resp.data.model_options = normalizeOptionsField(resp.data.model_options)
+      return resp
+    })
+}
+
+// 后端 nil 切片会序列化为 null：统一把 options 字段规范化为数组，
+// 避免调用方 o.options.length / .map 等直接访问时渲染崩溃。
+export function normalizeOptionsField<T extends { options: unknown }>(list: T[] | null | undefined): T[] {
+  return (list || []).map((o) => (o.options ? o : { ...o, options: [] }))
 }
 
 // 探测指定 agent 类型的全部 config options（服务端预连接时已缓存）。
@@ -43,7 +53,8 @@ export function probeAgentConfigs(
     `/agents/${encodeURIComponent(agentType)}/probe`,
     { method: 'POST' },
   ).then((resp) => {
-    probeCache.set(agentType, resp.data.config_options || [])
+    resp.data.config_options = normalizeOptionsField(resp.data.config_options)
+    probeCache.set(agentType, resp.data.config_options)
     return resp
   })
 }

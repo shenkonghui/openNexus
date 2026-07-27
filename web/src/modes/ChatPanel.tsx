@@ -20,7 +20,6 @@ interface ChatPanelProps {
   emptyTitleKey?: string
   emptyHintKey?: string
   placeholderKey?: string
-  selectDocFirstKey?: string
   /** 外部注入的自定义配置栏节点，渲染在 PromptInput 下方（优先于内置 configBar） */
   configBarNode?: ReactNode
 }
@@ -37,7 +36,7 @@ function cwdBaseName(path?: string): string {
 
 /**
  * 通用对话列：configBar + 消息列表 + ConvStatusBar + PromptInput。
- * 编码/文档两种模式共用此组件，差异仅在 configBar 样式与 onSend 处理器（由 ctx 传入）。
+ * 统一模式下所有入口共用此组件，差异仅在 configBar 样式与 onSend 处理器（由 ctx 传入）。
  */
 export default function ChatPanel({
   ctx,
@@ -45,23 +44,19 @@ export default function ChatPanel({
   emptyTitleKey,
   emptyHintKey,
   placeholderKey,
-  selectDocFirstKey,
   configBarNode,
 }: ChatPanelProps) {
   const { t } = useTranslation()
   const isEmpty = ctx.messages.length === 0
   const conv = ctx.convState
-  const disabled = ctx.sessionKind === 'docs' && !ctx.docTarget
   // 新建任务页的工作目录选择器弹窗开关
   const [showDirPicker, setShowDirPicker] = useState(false)
 
-  const placeholder = disabled && selectDocFirstKey
-    ? t(selectDocFirstKey)
-    : conv !== 'idle'
-      ? t(`session.conv_${conv}`)
-      : placeholderKey
-        ? t(placeholderKey)
-        : t('session.promptPlaceholder')
+  const placeholder = conv !== 'idle'
+    ? t(`session.conv_${conv}`)
+    : placeholderKey
+      ? t(placeholderKey)
+      : t('session.promptPlaceholder')
 
   // 统一配置栏：Agent·模型 合并下拉 + 模式 + 其余配置，所有模式复用同一套控件。
   // 数据源优先用会话级 configOptions（会话详情页，可切换运行时配置），
@@ -228,7 +223,6 @@ export default function ChatPanel({
               onSend={ctx.onSend}
               onCancel={ctx.onCancel}
               sending={conv !== 'idle'}
-              disabled={disabled}
               value={ctx.restoreInput}
               onValueChange={ctx.onRestoreInputChange}
               commands={ctx.commands}

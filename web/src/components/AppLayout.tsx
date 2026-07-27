@@ -1,13 +1,11 @@
 import { useState, useEffect, useRef, createContext, useContext, type ReactNode, type ComponentProps, type MouseEvent as ReactMouseEvent } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
-import { PanelLeftOpen, PanelLeftClose, Menu, FolderTree } from 'lucide-react'
+import { PanelLeftOpen, PanelLeftClose } from 'lucide-react'
 import SessionSidebar from './SessionSidebar'
-import FileExplorer from './FileExplorer'
 import WorkspaceFileEditor from './WorkspaceFileEditor'
 import StartupWarmup from './StartupWarmup'
 import SettingsDialog, { parseSettingsTab } from './SettingsDialog'
-import { getWorkspace } from '../api/workspaces'
 import { getPermissionSettings, updatePermissionSettings } from '../api/permissions'
 import type { PermissionSettings } from '../types'
 import { useFileViewer } from '../context/FileViewerContext'
@@ -74,13 +72,9 @@ interface AppLayoutProps {
  */
 export default function AppLayout({ sidebarProps, children }: AppLayoutProps) {
   const { t } = useTranslation()
-  const { openFilePath, openFile, closeFile, hasEmbedded } = useFileViewer()
+  const { openFilePath, closeFile, hasEmbedded } = useFileViewer()
   const [collapsed, setCollapsed] = useState(loadHidden)
   const [width, setWidth] = useState(loadWidth)
-  // 侧栏视图永远以「菜单」为默认，手动切到文件仅在本次会话内有效（不持久化）
-  const [view, setView] = useState<'menu' | 'files'>('menu')
-  // 当前工作区 cwd，作为文件浏览器的根目录
-  const [cwd, setCwd] = useState('')
   const workspaceId = sidebarProps.workspaceId
   // 设置弹窗：由 URL 参数 ?settings=1&settingsTab=xxx 控制，任何页面可打开且支持深链/后退关闭
   const [searchParams, setSearchParams] = useSearchParams()
@@ -150,15 +144,9 @@ export default function AppLayout({ sidebarProps, children }: AppLayoutProps) {
     try { localStorage.setItem(STORAGE_KEY, collapsed ? '1' : '0') } catch { /* ignore */ }
   }, [collapsed])
 
-  // 获取当前工作区 cwd，作为文件浏览器根目录；切换工作区时关闭已打开文件
+  // 切换工作区时关闭已打开文件（文件浏览器已移至右侧工具窗口的「文件」面板）
   useEffect(() => {
     closeFile()
-    if (!workspaceId) { setCwd(''); return }
-    let alive = true
-    getWorkspace(workspaceId)
-      .then((r) => { if (alive) setCwd(r.data.workspace.cwd || '') })
-      .catch(() => { if (alive) setCwd('') })
-    return () => { alive = false }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workspaceId])
 
@@ -206,34 +194,10 @@ export default function AppLayout({ sidebarProps, children }: AppLayoutProps) {
       <div className={styles.layout}>
         {!collapsed && (
           <div className={styles.sidebarWrap} style={{ width }}>
-            {/* Logo 与菜单/文件小开关同一行；模式变化会自动切默认视图，此处可手动覆盖 */}
             <div className={styles.header}>
               <Link to={newTaskUrl(workspaceId)} className={styles.logo} title={t('session.newSession')}>
                 <NexusLogoIcon size={22} />
               </Link>
-
-              <div className={styles.viewSwitch} role="tablist" aria-label={t('sidebar.menuTab') + '/' + t('sidebar.filesTab')}>
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={view === 'menu'}
-                  className={`${styles.viewBtn} ${view === 'menu' ? styles.viewBtnActive : ''}`}
-                  onClick={() => setView('menu')}
-                  title={t('sidebar.menuTab')}
-                >
-                  <Menu size={15} />
-                </button>
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={view === 'files'}
-                  className={`${styles.viewBtn} ${view === 'files' ? styles.viewBtnActive : ''}`}
-                  onClick={() => setView('files')}
-                  title={t('sidebar.filesTab')}
-                >
-                  <FolderTree size={15} />
-                </button>
-              </div>
               <button
                 type="button"
                 className={styles.collapseBtn}
@@ -244,15 +208,8 @@ export default function AppLayout({ sidebarProps, children }: AppLayoutProps) {
               </button>
             </div>
             <div className={styles.sidebarBody}>
-              <div className={styles.viewPane} style={{ display: view === 'menu' ? 'flex' : 'none' }}>
+              <div className={styles.viewPane} style={{ display: 'flex' }}>
                 <SessionSidebar {...sidebarProps} hideLogo yoloEnabled={globalYolo} yoloSaving={yoloBusy} onToggleYolo={handleToggleGlobalYolo} />
-              </div>
-              <div className={styles.viewPane} style={{ display: view === 'files' ? 'flex' : 'none' }}>
-                {cwd ? (
-                  <FileExplorer rootPath={cwd} onSelectFile={openFile} selectedPath={openFilePath ?? undefined} />
-                ) : (
-                  <div className={styles.filesEmpty}>{t('sidebar.noWorkspace')}</div>
-                )}
               </div>
             </div>
           </div>

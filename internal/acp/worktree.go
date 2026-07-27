@@ -165,6 +165,37 @@ func SanitizeWorktreeName(s string) string {
 	return out
 }
 
+// NormalizeBranchName 把任意文本（如 AI 输出）规范化为带 feat/ 或 fix/ 前缀的合法分支名：
+// 识别并保留 feat|fix|feature|bugfix|hotfix 前缀（feature 归一为 feat、bugfix/hotfix 归一为 fix），
+// 剩余部分经 SanitizeWorktreeName 清洗；无前缀时默认补 feat/。清洗后为空返回 ""。
+func NormalizeBranchName(s string) string {
+	s = strings.TrimSpace(s)
+	if idx := strings.IndexByte(s, '\n'); idx >= 0 {
+		s = s[:idx]
+	}
+	s = strings.Trim(s, "`\"'“”‘’《》【】")
+	prefix := "feat"
+	lower := strings.ToLower(s)
+	for _, p := range []struct{ raw, norm string }{
+		{"feature", "feat"}, {"feat", "feat"},
+		{"bugfix", "fix"}, {"hotfix", "fix"}, {"fix", "fix"},
+	} {
+		for _, sep := range []string{"/", "-", "_", ":", " "} {
+			if strings.HasPrefix(lower, p.raw+sep) {
+				prefix = p.norm
+				s = s[len(p.raw)+len(sep):]
+				goto matched
+			}
+		}
+	}
+matched:
+	name := SanitizeWorktreeName(s)
+	if name == "" {
+		return ""
+	}
+	return prefix + "/" + name
+}
+
 // branchExists 报告仓库中是否已存在本地分支 branch。
 func branchExists(repoRoot, branch string) bool {
 	cmd := exec.Command("git", "-C", repoRoot, "rev-parse", "--verify", "refs/heads/"+branch)
