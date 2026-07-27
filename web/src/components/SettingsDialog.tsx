@@ -8,13 +8,14 @@ import { listAgents, getAgentModels, probeAgentConfigs, clearAgentProbeCache } f
 import { getNoteSettings, updateNoteSettings, generateNoteMCPToken } from '../api/notes'
 import { getTaskSettings, updateTaskSettings } from '../api/tasks'
 import { getPermissionSettings, updatePermissionSettings } from '../api/permissions'
-import { reloadProgram } from '../api/config'
+import { reloadProgram, updateSelectorFilters } from '../api/config'
 import { getAgentPrefs, patchAgentPrefs } from '../api/agentPrefs'
 import type { AgentConfig, Agent, ModelOption, ConfigOption, TaskSettings, PermissionSettings } from '../types'
 import { translateTag } from '../utils/tag'
 import { translatePrompt } from '../utils/defaultPrompts'
 import EditAgentDialog, { type AgentFormPayload } from './EditAgentDialog'
 import ConfigEditor from './ConfigEditor'
+import RawConfigCard from './RawConfigCard'
 import ErrorBanner from './ErrorBanner'
 import LoadingSpinner from './LoadingSpinner'
 import i18n from '../i18n'
@@ -106,6 +107,10 @@ export default function SettingsDialog({ initialTab = 'language', onClose }: Pro
   const [permDeny, setPermDeny] = useState('')
   const [permSaving, setPermSaving] = useState(false)
   const [permSaved, setPermSaved] = useState(false)
+  // agent+模型 合并下拉的显示过滤正则（config.yaml agents.selector.filters，每行一条）
+  const [selectorFiltersText, setSelectorFiltersText] = useState('')
+  const [selectorSaving, setSelectorSaving] = useState(false)
+  const [selectorSaved, setSelectorSaved] = useState(false)
   const [reloadStatus, setReloadStatus] = useState<'idle' | 'reloading' | 'success' | 'failed'>('idle')
   const [reloadError, setReloadError] = useState('')
   const [loading, setLoading] = useState(true)
@@ -211,6 +216,7 @@ export default function SettingsDialog({ initialTab = 'language', onClose }: Pro
       ])
       setConfigs(cfgResp.data.agent_configs || [])
       setAgents(agentsResp.data.agents || [])
+      setSelectorFiltersText((agentsResp.data.selector_filters || []).join('\n'))
       const prefsResp = await getAgentPrefs().catch(() => ({ data: { last_agent_type: '', prefs: {} } }))
       const prefsMap: Record<string, Record<string, string>> = prefsResp.data.prefs || {}
       const lastAgent = prefsResp.data.last_agent_type || ''
@@ -404,6 +410,18 @@ export default function SettingsDialog({ initialTab = 'language', onClose }: Pro
       out.push(s)
     }
     return out
+  }
+
+  // 保存 agent+模型 显示过滤：后端校验正则合法性后写回 config.yaml，保存即生效
+  async function handleSaveSelectorFilters() {
+    setSelectorSaving(true); setError(''); setSelectorSaved(false)
+    try {
+      const resp = await updateSelectorFilters(linesToList(selectorFiltersText))
+      setSelectorFiltersText((resp.data.filters || []).join('\n'))
+      setSelectorSaved(true)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t('common.failed'))
+    } finally { setSelectorSaving(false) }
   }
 
   async function handleSavePermissionSettings() {
@@ -675,6 +693,30 @@ export default function SettingsDialog({ initialTab = 'language', onClose }: Pro
                         <p className={styles.sectionHint}>{t('settings.defaultModelHint')}</p>
                       </>
                     )}
+                  </div>
+                  {/* agent+模型 合并下拉的显示过滤（写回 config.yaml agents.selector.filters，保存即生效） */}
+                  <div className={styles.defaultSection}>
+                    <label className={styles.label}>{t('settings.selectorFilters')}</label>
+                    <p className={styles.hint}>{t('settings.selectorFiltersHint')}</p>
+                    <textarea
+                      className={styles.textarea}
+                      rows={4}
+                      value={selectorFiltersText}
+                      onChange={(e) => { setSelectorFiltersText(e.target.value); setSelectorSaved(false) }}
+                      placeholder={'^claude-code/\nsonnet\n^cursor/.*gpt-5.*'}
+                      spellCheck={false}
+                    />
+                    <div className={styles.inlineRow}>
+                      <button type="button" className={styles.saveNoteBtn}
+                        onClick={handleSaveSelectorFilters}
+                        disabled={selectorSaving}
+                      >
+                        {selectorSaving ? t('common.saving') : t('common.save')}
+                      </button>
+                      {selectorSaved && (
+                        <span className={styles.savedHint}>{t('settings.selectorFiltersSaved')}</span>
+                      )}
+                    </div>
                   </div>
                   <div className={styles.configList}>
                     <div className={styles.configListHeader}>
@@ -1074,6 +1116,8 @@ export default function SettingsDialog({ initialTab = 'language', onClose }: Pro
                       {window.opennexus?.isElectron ? t('system.desktopHint') : t('system.browserHint')}
                     </p>
                   </div>
+                  {/* config.yaml 原生编辑（保存前后端强制校验格式） */}
+                  <RawConfigCard />
                 </>
               )}
             </div>

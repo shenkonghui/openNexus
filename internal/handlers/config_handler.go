@@ -1,9 +1,12 @@
 package handlers
 
 import (
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
+	"regexp"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"gopkg.in/yaml.v3"
@@ -37,6 +40,9 @@ type ConfigHandler struct {
 	// reloaders 接收软重载通知，刷新各自持有的扫描目录副本。
 	// 在 router.Setup 构造 FileSystemHandler 后通过 SetReloaders 注入。
 	reloaders []ConfigReloader
+	// applySelectorFilters 是 agent+模型 下拉过滤的热更新回调（通常是 AgentHandler.SetSelectorFilters），
+	// 保存 selector 过滤后即时生效，无需重启。
+	applySelectorFilters func([]string)
 }
 
 // NewConfigHandler 创建 ConfigHandler。
@@ -62,6 +68,11 @@ func (h *ConfigHandler) SetFileSystemHandler(fs ConfigReloader) {
 		}
 	}
 	h.reloaders = append(h.reloaders, fs)
+}
+
+// SetSelectorFiltersApplier 注入 selector 过滤的热更新回调，在 router.Setup 构造 AgentHandler 后调用。
+func (h *ConfigHandler) SetSelectorFiltersApplier(fn func([]string)) {
+	h.applySelectorFilters = fn
 }
 
 // GetAgentsConfig GET /api/v1/config/agents
@@ -106,6 +117,136 @@ func (h *ConfigHandler) UpdateAgentsConfig(c *gin.Context) {
 	h.reloadScanDirs()
 
 	Success(c, http.StatusOK, gin.H{"message": "配置已更新并已自动重载扫描目录"})
+}
+
+// GetRawConfig GET /api/v1/config/raw
+// 返回 config.yaml 的原始文本内容与路径，供设置页原生编辑。
+func (h *ConfigHandler) GetRawConfig(c *gin.Context) {
+	data, err := os.ReadFile(h.configPath)
+	if err != nil {
+		Fail(c, http.StatusInternalServerError, "CONFIG_READ_ERROR", "读取配置文件失败")
+		return
+	}
+	Success(c, http.StatusOK, gin.H{"content": string(data), "path": h.configPath})
+}
+
+// rawConfigReq 是原生配置校验/保存的请求体。
+type rawConfigReq struct {
+	Content string `json:"content"`
+}
+
+// validateRawConfig 校验 config.yaml 原始文本：YAML 语法 + 业务规则（复用 config.Validate）。
+func validateRawConfig(content string) error {
+	if strings.TrimSpace(content) == "" {
+		return fmt.Errorf("配置内容不能为空")
+	}
+	cfg := &config.Config{}
+	if err := yaml.Unmarshal([]byte(content), cfg); err != nil {
+		return fmt.Errorf("YAML 语法错误: %w", err)
+	}
+	return cfg.Validate()
+}
+
+// ValidateRawConfig POST /api/v1/config/raw/validate
+// 仅校验不写盘，供前端「校验格式」按钮使用。
+func (h *ConfigHandler) ValidateRawConfig(c *gin.Context) {
+	var req rawConfigReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		Fail(c, http.StatusBadRequest, "INVALID_JSON", "请求参数格式错误")
+		return
+	}
+	if err := validateRawConfig(req.Content); err != nil {
+		Fail(c, http.StatusBadRequest, "INVALID_CONFIG", err.Error())
+		return
+	}
+	Success(c, http.StatusOK, gin.H{"valid": true})
+}
+
+// UpdateRawConfig PUT /api/v1/config/raw
+// 校验通过后整体写回 config.yaml，并软重载扫描目录；其余配置项需重启服务后生效。
+// 校验失败时不写盘，直接返回错误。
+func (h *ConfigHandler) UpdateRawConfig(c *gin.Context) {
+	var req rawConfigReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		Fail(c, http.StatusBadRequest, "INVALID_JSON", "请求参数格式错误")
+		return
+	}
+	if err := validateRawConfig(req.Content); err != nil {
+		Fail(c, http.StatusBadRequest, "INVALID_CONFIG", err.Error())
+		return
+	}
+	if err := os.WriteFile(h.configPath, []byte(req.Content), 0o644); err != nil {
+		Fail(c, http.StatusInternalServerError, "CONFIG_WRITE_ERROR", "写入配置文件失败")
+		return
+	}
+
+	// 写盘后尽力软重载扫描目录（失败不影响保存结果，reloadScanDirs 内部已记日志）。
+	_ = h.reloadScanDirs()
+
+	Success(c, http.StatusOK, gin.H{"message": "配置已保存；部分配置项需重启服务后生效", "path": h.configPath})
+}
+
+// GetSelectorFilters GET /api/v1/config/selector
+// 返回 config.yaml 中 agents.selector.filters（agent+模型 合并下拉的显示过滤正则列表）。
+func (h *ConfigHandler) GetSelectorFilters(c *gin.Context) {
+	cfg, err := config.Load(h.configPath)
+	if err != nil {
+		Fail(c, http.StatusInternalServerError, "CONFIG_READ_ERROR", "读取配置文件失败")
+		return
+	}
+	filters := cfg.Agents.Selector.Filters
+	if filters == nil {
+		filters = []string{}
+	}
+	Success(c, http.StatusOK, gin.H{"filters": filters})
+}
+
+// selectorFiltersReq 是 selector 过滤保存的请求体。
+type selectorFiltersReq struct {
+	Filters []string `json:"filters"`
+}
+
+// UpdateSelectorFilters PUT /api/v1/config/selector
+// 校验正则合法后写回 config.yaml 的 agents.selector.filters（保留注释与格式），
+// 并热更新到 AgentHandler 即时生效，无需重启服务。
+func (h *ConfigHandler) UpdateSelectorFilters(c *gin.Context) {
+	var req selectorFiltersReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		Fail(c, http.StatusBadRequest, "INVALID_JSON", "请求参数格式错误")
+		return
+	}
+
+	// 归一化 + 正则校验（与 config.SelectorConfig.normalize 一致：去空白、跳过空行）
+	filters := make([]string, 0, len(req.Filters))
+	for _, f := range req.Filters {
+		f = strings.TrimSpace(f)
+		if f == "" {
+			continue
+		}
+		if _, err := regexp.Compile(f); err != nil {
+			Fail(c, http.StatusBadRequest, "INVALID_FILTER", fmt.Sprintf("正则非法 %q: %v", f, err))
+			return
+		}
+		filters = append(filters, f)
+	}
+
+	root, err := readConfigRaw(h.configPath)
+	if err != nil {
+		Fail(c, http.StatusInternalServerError, "CONFIG_READ_ERROR", "读取配置文件失败")
+		return
+	}
+	setSelectorFiltersNode(root, filters)
+	if err := writeConfigRaw(h.configPath, root); err != nil {
+		Fail(c, http.StatusInternalServerError, "CONFIG_WRITE_ERROR", "写入配置文件失败")
+		return
+	}
+
+	// 热更新到 AgentHandler，后续 GET /agents 立即返回新过滤
+	if h.applySelectorFilters != nil {
+		h.applySelectorFilters(filters)
+	}
+
+	Success(c, http.StatusOK, gin.H{"filters": filters, "message": "过滤已保存并立即生效"})
 }
 
 // Reload POST /api/v1/config/reload
@@ -288,6 +429,44 @@ func setSequenceValue(mapping *yaml.Node, key string, values []string) {
 			return
 		}
 	}
+}
+
+// setSelectorFiltersNode 写入 agents.selector.filters 序列，缺失的 agents/selector/filters 节点会自动创建。
+func setSelectorFiltersNode(root *yaml.Node, filters []string) {
+	if root.Kind != yaml.DocumentNode || len(root.Content) == 0 {
+		return
+	}
+	mapping := root.Content[0]
+	agentsNode := ensureMappingChild(mapping, "agents")
+	selectorNode := ensureMappingChild(agentsNode, "selector")
+	if findMappingValue(selectorNode, "filters") == nil {
+		selectorNode.Content = append(selectorNode.Content,
+			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "filters"},
+			&yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq"},
+		)
+	}
+	setSequenceValue(selectorNode, "filters", filters)
+}
+
+// ensureMappingChild 返回映射节点下指定键的子映射，不存在或非映射时创建/替换为空映射。
+func ensureMappingChild(mapping *yaml.Node, key string) *yaml.Node {
+	if child := findMappingValue(mapping, key); child != nil {
+		if child.Kind == yaml.MappingNode {
+			return child
+		}
+		// 存在但不是映射（如 null）：原地改写为空映射
+		child.Kind = yaml.MappingNode
+		child.Tag = "!!map"
+		child.Value = ""
+		child.Content = nil
+		return child
+	}
+	child := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+	mapping.Content = append(mapping.Content,
+		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key},
+		child,
+	)
+	return child
 }
 
 // findMappingValue 在映射节点中查找指定键对应的值节点。

@@ -33,6 +33,46 @@ export function reloadProgram(): Promise<{ data: { message: string; restarted: b
   return apiFetch('/config/reload', { method: 'POST' })
 }
 
+// config.yaml 原生内容（全文编辑）
+export interface RawConfigResponse {
+  content: string
+  path: string
+}
+
+// 读取 config.yaml 原始内容
+export function getRawConfig(): Promise<{ data: RawConfigResponse }> {
+  return apiFetch('/config/raw')
+}
+
+// 仅校验不写盘（YAML 语法 + 配置规则），校验失败时 reject
+export function validateRawConfig(content: string): Promise<{ data: { valid: boolean } }> {
+  return apiFetch('/config/raw/validate', {
+    method: 'POST',
+    body: JSON.stringify({ content }),
+  })
+}
+
+// 校验通过后整体写回 config.yaml（后端校验失败不会写盘）
+export function updateRawConfig(content: string): Promise<{ data: { message: string; path: string } }> {
+  return apiFetch('/config/raw', {
+    method: 'PUT',
+    body: JSON.stringify({ content }),
+  })
+}
+
+// 读取 agent+模型 合并下拉的显示过滤正则（config.yaml agents.selector.filters）
+export function getSelectorFilters(): Promise<{ data: { filters: string[] } }> {
+  return apiFetch('/config/selector')
+}
+
+// 保存显示过滤正则：后端校验正则合法性，写回 config.yaml 并立即生效（无需重启）
+export function updateSelectorFilters(filters: string[]): Promise<{ data: { filters: string[]; message: string } }> {
+  return apiFetch('/config/selector', {
+    method: 'PUT',
+    body: JSON.stringify({ filters }),
+  })
+}
+
 // 扫描到的文件项
 export interface ScannedFileItem {
   name: string

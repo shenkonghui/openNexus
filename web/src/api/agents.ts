@@ -51,7 +51,7 @@ export function preconnectAgent(agentType: string, cwd?: string): void {
   apiFetch(`/agents/${encodeURIComponent(agentType)}/preconnect`, {
     method: 'POST',
     body,
-  }).catch(() => {})
+  }).catch(() => { })
 }
 
 // 获取指定 agent 类型 slash command（Agent 原生 + 配置 commands；可选 cwd 扫描项目级）

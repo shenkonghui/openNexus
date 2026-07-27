@@ -49,6 +49,10 @@ func Setup(authSvc *services.AuthService, jwtSvc *services.JWTService, agentRout
 
 			agentH := handlers.NewAgentHandler(agentRouter, agentRouter, agentRouter, agentRouter)
 			agentH.SetSelectorFilters(selectorCfg.Filters)
+			// 设置页保存 selector 过滤后热更新到 AgentHandler，无需重启
+			if configH != nil {
+				configH.SetSelectorFiltersApplier(agentH.SetSelectorFilters)
+			}
 			protected.GET("/agents", agentH.List)
 			protected.GET("/agents/status", agentH.Status)
 			protected.GET("/agents/:type/models", agentH.Models)
@@ -137,6 +141,13 @@ func Setup(authSvc *services.AuthService, jwtSvc *services.JWTService, agentRout
 			{
 				configG.GET("/agents", configH.GetAgentsConfig)
 				configG.PUT("/agents", configH.UpdateAgentsConfig)
+				// config.yaml 原生编辑：读取/校验/保存全文（保存前强制校验）
+				configG.GET("/raw", configH.GetRawConfig)
+				configG.POST("/raw/validate", configH.ValidateRawConfig)
+				configG.PUT("/raw", configH.UpdateRawConfig)
+				// agent+模型 合并下拉的显示过滤（agents.selector.filters，保存即生效）
+				configG.GET("/selector", configH.GetSelectorFilters)
+				configG.PUT("/selector", configH.UpdateSelectorFilters)
 				// 软重载：热刷新 skill/command/rule 扫描目录配置（不杀进程）
 				configG.POST("/reload", configH.Reload)
 				if mcpH != nil {
