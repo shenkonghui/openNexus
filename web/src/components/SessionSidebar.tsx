@@ -7,7 +7,7 @@ import type { Session, ScheduledTask } from '../types'
 import { listScheduledTasks } from '../api/scheduledTasks'
 import { listSessions, listRunningSessions } from '../api/sessions'
 import { getTaskManager, getTaskStatus, startTaskManager, type TaskManagerTask } from '../api/taskmanager'
-import { PanelLeftClose, Star, Pencil, X, Check, SquarePlus, FileText, Calendar, Settings, Zap, Loader2, CheckCircle2, XCircle, Clock3, CircleDashed, Network, MoreHorizontal, History } from 'lucide-react'
+import { PanelLeftClose, Star, Pencil, X, Check, SquarePlus, FileText, Calendar, Settings, Zap, Loader2, CheckCircle2, XCircle, Clock3, CircleDashed, Network, Layers, History } from 'lucide-react'
 import styles from './SessionSidebar.module.css'
 import NexusLogoIcon from './NexusLogoIcon'
 import UserMenu from './UserMenu'
@@ -502,7 +502,7 @@ export default function SessionSidebar({ sessions, workspaceId, currentId, onDel
         <div className={styles.group}>
           <button type="button" className={styles.groupHeader} onClick={() => toggleGroup('more')}>
             <span className={styles.groupTitle}>
-              <MoreHorizontal size={13} style={{ marginRight: 4, verticalAlign: '-2px' }} />
+              <Layers size={13} style={{ marginRight: 4, verticalAlign: '-2px' }} />
               {t('nav.more')}
             </span>
           </button>

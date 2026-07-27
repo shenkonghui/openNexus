@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"errors"
 	"time"
 
 	"gorm.io/gorm"
@@ -70,6 +71,31 @@ func (r *ToolCallRecordRepository) FinishByTerminal(dbSessionID uint, terminalID
 		Where("db_session_id = ? AND terminal_id = ?", dbSessionID, terminalID).
 		Updates(map[string]any{"exit_code": exitCode, "status": status, "finished_at": &now})
 	return res.RowsAffected, res.Error
+}
+
+// FinishByCommand 终端退出时按命令文本对齐未关联终端的 execute 记录：
+// agent 委托终端执行但未内嵌 terminal content 时，tool_call 记录无 terminal_id，
+// 靠「同会话 + 相同命令 + 未关联终端 + 无退出码」匹配最近一条回填，避免兜底新建造成重复。
+// 返回是否命中。
+func (r *ToolCallRecordRepository) FinishByCommand(dbSessionID uint, command, terminalID string, exitCode *int, status string) (bool, error) {
+	if command == "" {
+		return false, nil
+	}
+	var rec models.ToolCallRecord
+	err := r.db.
+		Where("db_session_id = ? AND kind = ? AND command = ? AND (terminal_id = '' OR terminal_id IS NULL) AND exit_code IS NULL",
+			dbSessionID, "execute", command).
+		Order("id DESC").First(&rec).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return false, nil
+		}
+		return false, err
+	}
+	now := time.Now()
+	err = r.db.Model(&models.ToolCallRecord{}).Where("id = ?", rec.ID).
+		Updates(map[string]any{"terminal_id": terminalID, "exit_code": exitCode, "status": status, "finished_at": &now}).Error
+	return err == nil, err
 }
 
 // ToolCallRecordWithSession 是列表查询结果：记录 + 所属会话摘要信息。

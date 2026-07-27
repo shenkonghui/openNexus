@@ -128,6 +128,16 @@ func (s *Service) handleTerminalExitRecord(dbSessionID uint, terminalID, command
 	if n > 0 {
 		return
 	}
+	// 未按 terminal_id 命中：agent 可能未内嵌 terminal content，改按命令文本对齐
+	// 同会话未关联终端的 execute 记录，避免兜底新建造成同一命令重复两条。
+	matched, err := s.toolCallRecords.FinishByCommand(dbSessionID, command, terminalID, exitCode, status)
+	if err != nil {
+		slog.Warn("终端退出按命令回填工具调用记录失败", "terminal", terminalID, "err", err)
+		return
+	}
+	if matched {
+		return
+	}
 	var userID uint
 	if sess, err := s.sessions.FindByID(dbSessionID); err == nil {
 		userID = sess.UserID
