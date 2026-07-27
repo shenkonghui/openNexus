@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo, useRef, Fragment, type MouseEvent as ReactMouseEvent } from 'react'
 import { useTranslation } from 'react-i18next'
+import { Plus, X } from 'lucide-react'
 import type { LayoutNode, PanelCtx } from './types'
 import { getPANELS } from './registry'
 import styles from './LayoutRenderer.module.css'
@@ -23,7 +24,7 @@ function collectPanels(node: LayoutNode): string[] {
     case 'leaf':
       return [node.panel]
     case 'tabs':
-      return node.panels
+      return [...node.panels, ...(node.optional ?? [])]
     case 'split':
       return node.children.flatMap(collectPanels)
   }
@@ -64,7 +65,7 @@ function childSignature(n: LayoutNode): string {
     case 'leaf':
       return 'L(' + n.panel + ')'
     case 'tabs':
-      return 'T(' + n.panels.join(',') + ')'
+      return 'T(' + [...n.panels, ...(n.optional ?? [])].join(',') + ')'
     case 'split':
       return 'S(' + n.dir + '[' + n.children.map(childSignature).join('|') + '])'
   }
@@ -192,41 +193,115 @@ function LeafView({ node, ctx, flex }: { node: Extract<LayoutNode, { kind: 'leaf
 }
 
 /**
- * 标签组视图。所有子面板一次性挂载，用 display 切换可见性——这样切换 tab 时
+ * 标签组视图。所有可见子面板一次性挂载，用 display 切换可见性——这样切换 tab 时
  * 终端的 WebSocket、xterm 实例、文件树展开状态等都得以保留。
+ * optional 面板默认不展示，通过标签栏右侧「+」打开（可关闭，选择存 localStorage）。
  */
+
+const TABS_OPEN_STORE_PREFIX = 'opennexus.tabs.open.'
+
+function loadOpenOptional(key: string, optional: string[]): string[] {
+  try {
+    const raw = localStorage.getItem(TABS_OPEN_STORE_PREFIX + key)
+    if (raw) {
+      const arr = JSON.parse(raw)
+      if (Array.isArray(arr)) return arr.filter((v) => typeof v === 'string' && optional.includes(v))
+    }
+  } catch {
+    /* ignore */
+  }
+  return []
+}
+
+function saveOpenOptional(key: string, opened: string[]) {
+  try {
+    localStorage.setItem(TABS_OPEN_STORE_PREFIX + key, JSON.stringify(opened))
+  } catch {
+    /* ignore */
+  }
+}
+
 function TabsView({ node, ctx, flex }: { node: Extract<LayoutNode, { kind: 'tabs' }>; ctx: PanelCtx; flex?: number; hiddenPanels?: Set<string> }) {
   const { t } = useTranslation()
   const PANELS = getPANELS()
-  const initial = node.defaultTab && node.panels.includes(node.defaultTab) ? node.defaultTab : node.panels[0]
+  const optional = useMemo(() => node.optional ?? [], [node.optional])
+  const storeKey = useMemo(() => [...node.panels, ...optional].join(','), [node.panels, optional])
+  // 已打开的 optional 面板（持久化，按打开顺序追加在固定标签之后）
+  const [openOptional, setOpenOptional] = useState<string[]>(() => loadOpenOptional(storeKey, optional))
+  const visiblePanels = useMemo(() => [...node.panels, ...openOptional], [node.panels, openOptional])
+  const initial = node.defaultTab && visiblePanels.includes(node.defaultTab) ? node.defaultTab : visiblePanels[0]
   const [active, setActive] = useState(initial)
+  // 「+」下拉列表开关（点击外部关闭）
+  const [addOpen, setAddOpen] = useState(false)
+  const addRef = useRef<HTMLDivElement>(null)
+
+  function openPanel(id: string) {
+    setOpenOptional((prev) => {
+      if (prev.includes(id)) return prev
+      const next = [...prev, id]
+      saveOpenOptional(storeKey, next)
+      return next
+    })
+    setActive(id)
+    setAddOpen(false)
+  }
+
+  function closePanel(id: string) {
+    setOpenOptional((prev) => {
+      const next = prev.filter((p) => p !== id)
+      saveOpenOptional(storeKey, next)
+      return next
+    })
+    if (active === id) {
+      setActive(node.defaultTab && node.panels.includes(node.defaultTab) ? node.defaultTab : node.panels[0])
+    }
+  }
 
   // 切换模式/布局时如果当前激活 tab 不在新列表里，回到默认
   useEffect(() => {
-    if (!node.panels.includes(active)) {
-      const next = node.defaultTab && node.panels.includes(node.defaultTab) ? node.defaultTab : node.panels[0]
+    if (!visiblePanels.includes(active)) {
+      const next = node.defaultTab && visiblePanels.includes(node.defaultTab) ? node.defaultTab : visiblePanels[0]
       setActive(next)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [node.panels.join(','), node.defaultTab])
+  }, [visiblePanels.join(','), node.defaultTab])
 
-  // 监听全局面板激活事件（如 agent 执行 shell 时自动弹出终端面板）
+  // 监听全局面板激活事件（如 agent 执行 shell 时自动弹出终端面板）；
+  // 目标是未打开的 optional 面板时自动打开（如侧边栏点文档激活 doc-preview）
   useEffect(() => {
     const onActivate = (e: Event) => {
       const panelId = (e as CustomEvent<{ panelId?: string }>).detail?.panelId
-      if (panelId && node.panels.includes(panelId)) setActive(panelId)
+      if (!panelId) return
+      if (visiblePanels.includes(panelId)) {
+        setActive(panelId)
+      } else if (optional.includes(panelId)) {
+        openPanel(panelId)
+      }
     }
     window.addEventListener('onx:activate-panel', onActivate)
     return () => window.removeEventListener('onx:activate-panel', onActivate)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [node.panels.join(',')])
+  }, [visiblePanels.join(','), optional.join(',')])
+
+  // 点击下拉外部时关闭
+  useEffect(() => {
+    if (!addOpen) return
+    const onDocClick = (e: MouseEvent) => {
+      if (addRef.current && !addRef.current.contains(e.target as Node)) setAddOpen(false)
+    }
+    document.addEventListener('mousedown', onDocClick)
+    return () => document.removeEventListener('mousedown', onDocClick)
+  }, [addOpen])
+
+  const closable = optional.filter((id) => !openOptional.includes(id))
 
   return (
     <div className={styles.tabs} style={{ flex: flex ?? node.flex ?? 1 }}>
       <div className={styles.tabNav}>
-        {node.panels.map((id) => {
+        {visiblePanels.map((id) => {
           const def = PANELS.find((p) => p.id === id)
           if (!def) return null
+          const isOptional = optional.includes(id)
           return (
             <button
               key={id}
@@ -237,12 +312,52 @@ function TabsView({ node, ctx, flex }: { node: Extract<LayoutNode, { kind: 'tabs
             >
               <span className={styles.tabIcon}>{def.icon}</span>
               <span className={styles.tabLabel}>{t(def.titleKey)}</span>
+              {isOptional && (
+                <span
+                  className={styles.tabClose}
+                  role="button"
+                  aria-label={t('panel.closeTab')}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    closePanel(id)
+                  }}
+                >
+                  <X size={11} />
+                </span>
+              )}
             </button>
           )
         })}
+        {closable.length > 0 && (
+          <div className={styles.tabAddWrap} ref={addRef}>
+            <button
+              type="button"
+              className={styles.tabAdd}
+              onClick={() => setAddOpen((v) => !v)}
+              title={t('panel.addTab')}
+              aria-label={t('panel.addTab')}
+            >
+              <Plus size={14} />
+            </button>
+            {addOpen && (
+              <div className={styles.tabAddMenu}>
+                {closable.map((id) => {
+                  const def = PANELS.find((p) => p.id === id)
+                  if (!def) return null
+                  return (
+                    <button key={id} type="button" className={styles.tabAddItem} onClick={() => openPanel(id)}>
+                      <span className={styles.tabIcon}>{def.icon}</span>
+                      <span className={styles.tabLabel}>{t(def.titleKey)}</span>
+                    </button>
+                  )
+                })}
+              </div>
+            )}
+          </div>
+        )}
       </div>
       <div className={styles.tabBody}>
-        {node.panels.map((id) => {
+        {visiblePanels.map((id) => {
           const def = PANELS.find((p) => p.id === id)
           if (!def) return null
           return (

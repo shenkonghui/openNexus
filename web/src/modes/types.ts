@@ -17,12 +17,13 @@ import type { DocEditMode } from '../components/DocWorkspace'
  * 布局树节点。一个模式的界面 = 一棵 LayoutNode 树。
  * - leaf：渲染单个面板（查 PANELS 注册表）
  * - split：沿 row/col 方向按 flex 比例排列子节点
- * - tabs：标签组，所有子面板保持挂载、用 display 切换可见性（终端 WS 等不中断）
+ * - tabs：标签组，所有子面板保持挂载、用 display 切换可见性（终端 WS 等不中断）。
+ *   optional：不默认展示的面板，用户通过标签栏右侧「+」按需打开（可关闭，选择持久化）
  */
 export type LayoutNode =
   | { kind: 'leaf'; panel: string; flex?: number }
   | { kind: 'split'; dir: 'row' | 'col'; children: LayoutNode[]; flex?: number }
-  | { kind: 'tabs'; panels: string[]; defaultTab?: string; flex?: number }
+  | { kind: 'tabs'; panels: string[]; defaultTab?: string; flex?: number; optional?: string[] }
 
 /** 便捷构造器 */
 export const leaf = (panel: string, flex = 1): LayoutNode => ({ kind: 'leaf', panel, flex })
@@ -32,11 +33,12 @@ export const split = (dir: 'row' | 'col', children: LayoutNode[], flex = 1): Lay
   children,
   flex,
 })
-export const tabs = (panels: string[], flex = 1, defaultTab?: string): LayoutNode => ({
+export const tabs = (panels: string[], flex = 1, defaultTab?: string, optional?: string[]): LayoutNode => ({
   kind: 'tabs',
   panels,
   defaultTab,
   flex,
+  optional,
 })
 
 /**

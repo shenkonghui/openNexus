@@ -15,6 +15,8 @@ import LoadingSpinner from './components/LoadingSpinner'
 
 // MCP 网关页独立代码分割：访问 /mcp-gateway 时才加载，减小首屏 bundle。
 const McpGatewayPage = lazy(() => import('./pages/McpGatewayPage'))
+// 工具调用记录页同样按需加载。
+const ToolCallsPage = lazy(() => import('./pages/ToolCallsPage'))
 
 function WorkspaceHomeRedirect() {
   const { wid } = useParams<{ wid: string }>()
@@ -75,6 +77,14 @@ export default function App() {
             element={
               <Suspense fallback={<LoadingSpinner />}>
                 <McpGatewayPage />
+              </Suspense>
+            }
+          />
+          <Route
+            path="/tool-calls"
+            element={
+              <Suspense fallback={<LoadingSpinner />}>
+                <ToolCallsPage />
               </Suspense>
             }
           />

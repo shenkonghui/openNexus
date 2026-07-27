@@ -332,3 +332,77 @@ func TestUnregisterSessionTask_NoMatchIsNoop(t *testing.T) {
 		t.Fatalf("零 id 应无操作: %v", err)
 	}
 }
+
+// pfExecutor 为 PromptFinished 测试提供会话→工作区 cwd 解析。
+type pfExecutor struct {
+	mockTMExecutor
+	cwd string
+}
+
+func (m *pfExecutor) GetSessionByDBID(id uint) (*models.Session, error) {
+	wsID := uint(1)
+	return &models.Session{ID: id, WorkspaceID: &wsID, Source: models.SessionSourceManual}, nil
+}
+
+func (m *pfExecutor) FindWorkspaceByID(_ uint) (*models.Workspace, error) {
+	return &models.Workspace{Cwd: m.cwd}, nil
+}
+
+// TestPromptFinished_SyncsRegisteredSessionTask 验证会话登记任务的完整状态闭环：
+// 首发登记 running → PromptFinished(done) 置 done → 再次发送刷新回 running →
+// PromptFinished(interrupted) 置 interrupt。
+func TestPromptFinished_SyncsRegisteredSessionTask(t *testing.T) {
+	cwd := t.TempDir()
+	svc := NewTaskManagerService(&pfExecutor{cwd: cwd})
+	sess := &models.Session{ID: 9, SessionID: "s-9", Source: models.SessionSourceManual}
+	if err := svc.RegisterSessionTask(cwd, sess, "p"); err != nil {
+		t.Fatalf("登记: %v", err)
+	}
+
+	svc.PromptFinished(9, models.RunningTaskStatusDone)
+	def, _ := svc.Load(cwd)
+	if def.Tasks[0].Status != models.TaskStatusDone {
+		t.Fatalf("prompt 结束后应置 done，实际 %q", def.Tasks[0].Status)
+	}
+	if def.Tasks[0].FinishedAt == nil {
+		t.Error("finished_at 应已设置")
+	}
+
+	// 同一会话再次发送 prompt：不新增条目，状态刷新回 running
+	if err := svc.RegisterSessionTask(cwd, sess, "again"); err != nil {
+		t.Fatalf("重复登记: %v", err)
+	}
+	def, _ = svc.Load(cwd)
+	if len(def.Tasks) != 1 {
+		t.Fatalf("任务数 = %d, want 1", len(def.Tasks))
+	}
+	if def.Tasks[0].Status != models.TaskStatusRunning {
+		t.Fatalf("再次发送后应回到 running，实际 %q", def.Tasks[0].Status)
+	}
+	if def.Tasks[0].FinishedAt != nil {
+		t.Error("再次发送后 finished_at 应清空")
+	}
+
+	svc.PromptFinished(9, models.RunningTaskStatusInterrupted)
+	def, _ = svc.Load(cwd)
+	if def.Tasks[0].Status != models.TaskStatusInterrupt {
+		t.Fatalf("中断结束应置 interrupt，实际 %q", def.Tasks[0].Status)
+	}
+}
+
+// TestPromptFinished_NoMatchIsNoop 验证无匹配条目/无法解析会话时不 panic、不影响其他任务。
+func TestPromptFinished_NoMatchIsNoop(t *testing.T) {
+	cwd := t.TempDir()
+	svc := NewTaskManagerService(&pfExecutor{cwd: cwd})
+	if err := svc.UpsertTask(cwd, models.TaskManagerTask{ID: "t1", Title: "普通任务"}); err != nil {
+		t.Fatalf("UpsertTask: %v", err)
+	}
+	svc.PromptFinished(999, models.RunningTaskStatusDone)
+	def, _ := svc.Load(cwd)
+	if len(def.Tasks) != 1 || def.Tasks[0].Status == models.TaskStatusDone {
+		t.Fatalf("无关任务不应受影响: %+v", def.Tasks)
+	}
+	// GetSessionByDBID 返回 nil（mockTMExecutor 默认行为）也应安全
+	svc2 := NewTaskManagerService(&mockTMExecutor{})
+	svc2.PromptFinished(1, models.RunningTaskStatusDone)
+}

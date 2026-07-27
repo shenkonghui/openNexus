@@ -144,6 +144,87 @@
   white-space: nowrap;
 }
 
+/* 可选面板标签上的关闭按钮（hover 时显现） */
+.tabClose {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: 2px;
+  padding: 1px;
+  border-radius: 3px;
+  opacity: 0;
+  transition: opacity 0.12s, background 0.12s;
+}
+
+.tab:hover .tabClose,
+.tabActive .tabClose {
+  opacity: 0.7;
+}
+
+.tabClose:hover {
+  opacity: 1;
+  background: var(--bg-hover, rgba(0, 0, 0, 0.08));
+}
+
+/* 「+」打开更多面板 */
+.tabAddWrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.tabAdd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  border-radius: 4px;
+  transition: background 0.12s, color 0.12s;
+}
+
+.tabAdd:hover {
+  background: var(--bg-hover, rgba(0, 0, 0, 0.04));
+  color: var(--text);
+}
+
+.tabAddMenu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 30;
+  min-width: 120px;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+}
+
+.tabAddItem {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+  border-radius: 4px;
+  text-align: left;
+  transition: background 0.12s;
+}
+
+.tabAddItem:hover {
+  background: var(--bg-hover, rgba(0, 0, 0, 0.04));
+}
+
 .tabBody {
   flex: 1;
   display: flex;

@@ -244,7 +244,7 @@ func (h *TerminalHandler) HandleAgentAuthTerminal(c *gin.Context) {
 
 	// 登录进程不依赖工作目录，在用户 home 下运行（凭证通常落在 home 下）
 	cmd := exec.Command(spec.Command, spec.Args...)
-	cmd.Env = spec.Env
+	cmd.Env = acp.EnsureUTF8Locale(spec.Env)
 	if home, herr := os.UserHomeDir(); herr == nil {
 		cmd.Dir = home
 	}
@@ -424,7 +424,7 @@ func findShell() string {
 // sh 及回退情况直接通过 PS1 环境变量设置（POSIX shell 无 rc 覆盖问题）。
 func buildTerminalCommand(cwd string) (*exec.Cmd, func()) {
 	shell := findShell()
-	env := append(os.Environ(), "TERM=xterm-256color")
+	env := acp.EnsureUTF8Locale(append(os.Environ(), "TERM=xterm-256color"))
 	cleanup := func() {}
 
 	switch filepath.Base(shell) {

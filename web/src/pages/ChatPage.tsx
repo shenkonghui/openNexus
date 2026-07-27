@@ -63,7 +63,7 @@ export default function ChatPage() {
   useEffect(() => {
     localStorage.setItem(LEFT_PANELS_HIDDEN_KEY, leftHidden ? '1' : '0')
   }, [leftHidden])
-  const sidePanels = ['files', 'terminal', 'changes', 'debug', 'browser', 'doc-preview']
+  const sidePanels = ['files', 'terminal', 'changes', 'git', 'debug', 'browser', 'doc-preview']
   const hiddenPanels = leftHidden ? new Set(sidePanels) : undefined
 
   // 当前打开的文档（右侧「文档预览」标签）。侧边栏点击文档时通过 navigate state 传入；否则读 localStorage 上次打开的。

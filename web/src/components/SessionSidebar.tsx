@@ -7,7 +7,7 @@ import type { Session, ScheduledTask } from '../types'
 import { listScheduledTasks } from '../api/scheduledTasks'
 import { listSessions, listRunningSessions } from '../api/sessions'
 import { getTaskManager, getTaskStatus, startTaskManager, type TaskManagerTask } from '../api/taskmanager'
-import { PanelLeftClose, Star, Pencil, X, Check, SquarePlus, FileText, Calendar, Settings, Zap, Loader2, CheckCircle2, XCircle, Clock3, CircleDashed, Network } from 'lucide-react'
+import { PanelLeftClose, Star, Pencil, X, Check, SquarePlus, FileText, Calendar, Settings, Zap, Loader2, CheckCircle2, XCircle, Clock3, CircleDashed, Network, MoreHorizontal, History } from 'lucide-react'
 import styles from './SessionSidebar.module.css'
 import NexusLogoIcon from './NexusLogoIcon'
 import UserMenu from './UserMenu'
@@ -34,15 +34,15 @@ interface SessionSidebarProps {
 const STORAGE_KEY = 'opennexus.sidebar.collapsed'
 const FAVS_KEY = 'opennexus.favorites'
 
-function loadCollapsed(): { favorites: boolean; manual: boolean; scheduled: boolean; taskmanager: boolean } {
+function loadCollapsed(): { favorites: boolean; manual: boolean; scheduled: boolean; taskmanager: boolean; more: boolean } {
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
     if (raw) {
       const parsed = JSON.parse(raw)
-      return { favorites: false, manual: false, scheduled: false, taskmanager: true, ...parsed }
+      return { favorites: false, manual: false, scheduled: false, taskmanager: true, more: true, ...parsed }
     }
   } catch { /* ignore */ }
-  return { favorites: false, manual: false, scheduled: false, taskmanager: true }
+  return { favorites: false, manual: false, scheduled: false, taskmanager: true, more: true }
 }
 
 function loadFavorites(): number[] {
@@ -195,7 +195,7 @@ export default function SessionSidebar({ sessions, workspaceId, currentId, onDel
     .filter((t) => t.last_run_at)
     .sort((a, b) => (a.last_run_at! < b.last_run_at! ? 1 : -1))[0]
 
-  function toggleGroup(group: 'favorites' | 'manual' | 'scheduled' | 'taskmanager') {
+  function toggleGroup(group: 'favorites' | 'manual' | 'scheduled' | 'taskmanager' | 'more') {
     setCollapsed((prev) => ({ ...prev, [group]: !prev[group] }))
   }
 
@@ -500,27 +500,46 @@ export default function SessionSidebar({ sessions, workspaceId, currentId, onDel
         </div>
 
         <div className={styles.group}>
-          <Link
-            to="/notes"
-            className={`${styles.groupHeader} ${location.pathname === '/notes' ? styles.itemActive : ''}`}
-          >
+          <button type="button" className={styles.groupHeader} onClick={() => toggleGroup('more')}>
             <span className={styles.groupTitle}>
-              <FileText size={13} style={{ marginRight: 4, verticalAlign: '-2px' }} />
-              {t('nav.notes')}
+              <MoreHorizontal size={13} style={{ marginRight: 4, verticalAlign: '-2px' }} />
+              {t('nav.more')}
             </span>
-          </Link>
-        </div>
-
-        <div className={styles.group}>
-          <Link
-            to="/mcp-gateway"
-            className={`${styles.groupHeader} ${location.pathname === '/mcp-gateway' ? styles.itemActive : ''}`}
-          >
-            <span className={styles.groupTitle}>
-              <Network size={13} style={{ marginRight: 4, verticalAlign: '-2px' }} />
-              {t('nav.mcpGateway')}
-            </span>
-          </Link>
+          </button>
+          {!collapsed.more && (
+            <div className={styles.groupList}>
+              <div className={`${styles.item} ${location.pathname === '/notes' ? styles.itemActive : ''}`}>
+                <Link to="/notes" className={styles.itemLink}>
+                  <div className={styles.itemRow}>
+                    <span className={styles.itemTitle}>
+                      <FileText size={13} style={{ marginRight: 4, verticalAlign: '-2px' }} />
+                      {t('nav.notes')}
+                    </span>
+                  </div>
+                </Link>
+              </div>
+              <div className={`${styles.item} ${location.pathname === '/mcp-gateway' ? styles.itemActive : ''}`}>
+                <Link to="/mcp-gateway" className={styles.itemLink}>
+                  <div className={styles.itemRow}>
+                    <span className={styles.itemTitle}>
+                      <Network size={13} style={{ marginRight: 4, verticalAlign: '-2px' }} />
+                      {t('nav.mcpGateway')}
+                    </span>
+                  </div>
+                </Link>
+              </div>
+              <div className={`${styles.item} ${location.pathname === '/tool-calls' ? styles.itemActive : ''}`}>
+                <Link to="/tool-calls" className={styles.itemLink}>
+                  <div className={styles.itemRow}>
+                    <span className={styles.itemTitle}>
+                      <History size={13} style={{ marginRight: 4, verticalAlign: '-2px' }} />
+                      {t('nav.toolCalls')}
+                    </span>
+                  </div>
+                </Link>
+              </div>
+            </div>
+          )}
         </div>
 
       </div>

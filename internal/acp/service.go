@@ -123,6 +123,12 @@ type Service struct {
 	// taskMetaTrigger 可选：发起任务时异步触发自动打标签 / 标题生成。nil 则跳过。
 	taskMetaTrigger TaskMetaTrigger
 
+	// promptFinished 可选：prompt 流结束时通知外部（如任务管理同步 tasks.json 状态）。nil 则跳过。
+	promptFinished PromptFinishedNotifier
+
+	// toolCallRecords 可选：工具调用历史仓库（SetToolCallRecordRepo 注入）。nil 则不记录。
+	toolCallRecords *repository.ToolCallRecordRepository
+
 	// dbg 可选：ACP 协议调试捕获器。nil 或未启用时零开销。
 	dbg *ACPDebugger
 
@@ -162,6 +168,17 @@ type TaskMetaTrigger interface {
 // SetTaskMetaTrigger 注入任务元数据触发器。
 func (s *Service) SetTaskMetaTrigger(t TaskMetaTrigger) {
 	s.taskMetaTrigger = t
+}
+
+// PromptFinishedNotifier 在会话 prompt 流结束时被回调（status 为 RunningTaskStatus* 常量），
+// 由 *services.TaskManagerService 实现：同步 tasks.json 中会话登记任务的运行状态。
+type PromptFinishedNotifier interface {
+	PromptFinished(dbSessionID uint, status string)
+}
+
+// SetPromptFinishedNotifier 注入 prompt 结束通知器。
+func (s *Service) SetPromptFinishedNotifier(n PromptFinishedNotifier) {
+	s.promptFinished = n
 }
 
 // NewService 创建新的 Service。
@@ -1532,6 +1549,10 @@ func (s *Service) PromptWithExecution(ctx context.Context, sessionID, prompt str
 			bc.close()
 			s.unregisterBroadcaster(sessionID)
 			finishTask(finalStatus)
+			// 通知任务管理同步 tasks.json 中会话登记任务的状态（否则登记条目永远显示运行中）
+			if s.promptFinished != nil {
+				s.promptFinished.PromptFinished(session.ID, finalStatus)
+			}
 			// 最后释放 prompt ctx（goroutine 退出即本 prompt 终结）。放在末尾确保上面
 			// 的 promptCtx.Err() 超时检查已完成。
 			promptCancel()
@@ -1629,6 +1650,8 @@ func (s *Service) PromptWithExecution(ctx context.Context, sessionID, prompt str
 			//（前端 parseToolCalls 本就按 id 合并，历史只需终态）。
 			pendingToolUpdates := map[string]models.Message{}
 			var toolUpdateOrder []string
+			// pendingToolMeta 同窗口攒批工具调用记录的增量（状态/退出码等），随 flush 一并落库
+			pendingToolMeta := map[string]*toolCallMeta{}
 			flushToolUpdates := func() {
 				if len(toolUpdateOrder) == 0 {
 					return
@@ -1641,9 +1664,11 @@ func (s *Service) PromptWithExecution(ctx context.Context, sessionID, prompt str
 					if task.ID != 0 {
 						_ = s.runningTasks.UpdateLastSeq(task.ID, m.Sequence)
 					}
+					s.applyToolCallMeta(session.ID, id, pendingToolMeta[id])
 				}
 				pendingToolUpdates = map[string]models.Message{}
 				toolUpdateOrder = nil
+				pendingToolMeta = map[string]*toolCallMeta{}
 			}
 			flushPending := func() {
 				flushThoughts()
@@ -1691,6 +1716,15 @@ func (s *Service) PromptWithExecution(ctx context.Context, sessionID, prompt str
 							toolUpdateOrder = append(toolUpdateOrder, id)
 						}
 						pendingToolUpdates[id] = msg
+						if u.ToolCallUpdate != nil && s.toolCallRecords != nil {
+							// 合并本条增量到记录攒批；内嵌 terminal content 时立即写关联，
+							// 保证终端退出回调能按 terminal_id 命中记录（每终端仅一次，低频）
+							if pendingToolMeta[id] == nil {
+								pendingToolMeta[id] = &toolCallMeta{}
+							}
+							mergeToolCallDelta(pendingToolMeta[id], u.ToolCallUpdate)
+							s.linkToolCallTerminal(session.ID, u.ToolCallUpdate)
+						}
 					} else if msg.Kind == models.MessageKindUsageUpdate || msg.Kind == models.MessageKindSessionInfoUpdate {
 						// 用量/会话信息是高频心跳：只推前端，不落库、不阻塞 out。
 						// 逐条 Create + 阻塞 out 会拖慢本循环，导致 ACP 订阅 buffer 满并丢弃
@@ -1704,6 +1738,10 @@ func (s *Service) PromptWithExecution(ctx context.Context, sessionID, prompt str
 						// 非高频类型：先 flush 攒批，再同步落库本条
 						flushPending()
 						persistMsg(msg)
+						if u.ToolCall != nil {
+							// 工具调用历史：创建记录（shell 类解析 rawInput 命令/目录）
+							s.recordToolCallStart(session, snapshotCwd, u.ToolCall)
+						}
 					}
 				case pn, ok := <-permCh:
 					if !ok {

@@ -7,8 +7,9 @@ import BrowserPanel from '../components/BrowserPanel'
 import DocWorkspace, { type DocEditMode } from '../components/DocWorkspace'
 import WorkspaceFileEditor from '../components/WorkspaceFileEditor'
 import FileExplorer from '../components/FileExplorer'
+import GitPanel from '../components/GitPanel'
 import { useFileViewer } from '../context/FileViewerContext'
-import { Folder, SquareTerminal, Pencil, Bug, MessageSquare, BookOpenText, Globe } from 'lucide-react'
+import { Folder, SquareTerminal, Pencil, Bug, MessageSquare, BookOpenText, Globe, GitBranch } from 'lucide-react'
 import type { PanelDef, PanelCtx } from './types'
 import ChatPanel from './ChatPanel'
 
@@ -200,12 +201,17 @@ function renderBrowser(ctx: PanelCtx) {
   return <BrowserPanel ctx={ctx} />
 }
 
+function renderGit(ctx: PanelCtx) {
+  return <GitPanel cwd={ctx.cwd || ''} />
+}
+
 /** 面板注册表。新增面板在此加一条；新增模式只需在 MODES 引用面板 id。 */
 export const PANELS: PanelDef[] = [
   { id: 'chat', titleKey: 'panel.chat', icon: <MessageSquare size={14} />, render: renderChat },
   { id: 'files', titleKey: 'panel.files', icon: <Folder size={14} />, render: renderFiles },
   { id: 'terminal', titleKey: 'panel.terminal', icon: <SquareTerminal size={14} />, render: renderTerminal },
   { id: 'changes', titleKey: 'panel.changes', icon: <Pencil size={14} />, render: renderChanges },
+  { id: 'git', titleKey: 'panel.git', icon: <GitBranch size={14} />, render: renderGit },
   { id: 'debug', titleKey: 'panel.debug', icon: <Bug size={14} />, render: renderDebug },
   { id: 'browser', titleKey: 'panel.browser', icon: <Globe size={14} />, render: renderBrowser },
   { id: 'doc-preview', titleKey: 'panel.docPreview', icon: <BookOpenText size={14} />, render: renderDocPreview },

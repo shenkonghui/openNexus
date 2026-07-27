@@ -11,6 +11,10 @@ services:
     volumes:
       - ./data:/root/.openNexus
       - opennexus-npm-cache:/root/.npm
+      # 挂载宿主机 root/home：容器内 agent 可直接访问宿主机用户目录，工作区路径与宿主机一致
+      # （更具体的 /root/.openNexus、/root/.npm 挂载会叠加在其上，互不影响）
+      - /root:/root
+      - /home:/home
     environment:
       - SERVER_MODE=release
       - SERVER_PORT=8080

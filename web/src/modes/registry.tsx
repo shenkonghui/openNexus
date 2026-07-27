@@ -23,8 +23,8 @@ export const MODES: ModeDef[] = [
     layout: split('row', [
       // 左：AI 对话
       leaf('chat', 1),
-      // 右：合并为单一标签组（文档预览并入其中）
-      tabs(['files', 'terminal', 'changes', 'debug', 'browser', 'doc-preview'], 1.3, 'terminal'),
+      // 右：单一标签组。默认仅展示文件/终端/改动，其余（Git/调试/浏览器/文档）通过「+」按需打开
+      tabs(['files', 'terminal', 'changes'], 1.3, 'terminal', ['git', 'debug', 'browser', 'doc-preview']),
     ]),
   },
 ]

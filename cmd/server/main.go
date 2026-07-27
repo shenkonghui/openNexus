@@ -262,6 +262,14 @@ func main() {
 		tmSvc.RecoverAll(cwds)
 	}
 	tmH := handlers.NewTaskManagerHandler(tmSvc, agentRouter)
+	// prompt 流结束时回调任务管理，同步 tasks.json 中会话登记任务的状态
+	//（登记条目不经过编排器，无此回调则完成后永远显示执行中）。
+	acpSvc.SetPromptFinishedNotifier(tmSvc)
+
+	// 工具调用历史：ACP 流与终端桥接双路记录，供「工具调用记录」页面查询
+	toolCallRepo := repository.NewToolCallRecordRepository(db)
+	acpSvc.SetToolCallRecordRepo(toolCallRepo)
+	toolCallH := handlers.NewToolCallHandler(toolCallRepo)
 
 	noteRepo := repository.NewNoteRepository(db)
 	noteSettingsRepo := repository.NewNoteSettingsRepository(db)
@@ -327,7 +335,7 @@ func main() {
 	subAgentH := handlers.NewSubAgentHandler(noteSettingsRepo, cfg.Agents.MCP.ConfigPath, publicBase)
 	subAgentH.SyncAllSubagentMCP()
 
-	engine := router.Setup(authSvc, jwtSvc, agentRouter, agentCfgH, registryH, schedTaskH, noteH, taskSettingsH, agentPrefsH, configH, mcpH, logH, debugH, subAgentH, tmH, permSettingsH, tmSvc, cfg.Agents.Skills, cfg.Agents.Commands, cfg.Agents.Rules, cfg.Agents.SubAgents, cfg.Agents.Selector, cfg.Server.Mode, cfg.Server.WebDist, cfg.Auth.AutoLogin)
+	engine := router.Setup(authSvc, jwtSvc, agentRouter, agentCfgH, registryH, schedTaskH, noteH, taskSettingsH, agentPrefsH, configH, mcpH, logH, debugH, subAgentH, tmH, permSettingsH, toolCallH, tmSvc, cfg.Agents.Skills, cfg.Agents.Commands, cfg.Agents.Rules, cfg.Agents.SubAgents, cfg.Agents.Selector, cfg.Server.Mode, cfg.Server.WebDist, cfg.Auth.AutoLogin)
 	engine.Any("/mcp/notes", gin.WrapH(notesmcp.Handler(noteRepo, noteSettingsRepo)))
 	engine.Any("/mcp/notes/*path", gin.WrapH(notesmcp.Handler(noteRepo, noteSettingsRepo)))
 	// taskmanager MCP server：主 agent 通过 MCP 工具管理工作区任务（tasks.json）。

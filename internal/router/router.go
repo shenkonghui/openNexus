@@ -16,7 +16,7 @@ import (
 	"opennexus/internal/services"
 )
 
-func Setup(authSvc *services.AuthService, jwtSvc *services.JWTService, agentRouter *agent.Router, agentCfgH *handlers.AgentConfigHandler, registryH *handlers.RegistryHandler, schedTaskH *handlers.ScheduledTaskHandler, noteH *handlers.NoteHandler, taskSettingsH *handlers.TaskSettingsHandler, agentPrefsH *handlers.AgentPrefsHandler, configH *handlers.ConfigHandler, mcpH *handlers.MCPHandler, logH *handlers.LogHandler, debugH *handlers.DebugHandler, subAgentH *handlers.SubAgentHandler, tmH *handlers.TaskManagerHandler, permSettingsH *handlers.PermissionSettingsHandler, tmSvc *services.TaskManagerService, skillsCfg config.SkillsConfig, commandsCfg config.CommandsConfig, rulesCfg config.RulesConfig, subAgentsCfg config.SubAgentsConfig, selectorCfg config.SelectorConfig, mode, webDist string, autoLogin bool) *gin.Engine {
+func Setup(authSvc *services.AuthService, jwtSvc *services.JWTService, agentRouter *agent.Router, agentCfgH *handlers.AgentConfigHandler, registryH *handlers.RegistryHandler, schedTaskH *handlers.ScheduledTaskHandler, noteH *handlers.NoteHandler, taskSettingsH *handlers.TaskSettingsHandler, agentPrefsH *handlers.AgentPrefsHandler, configH *handlers.ConfigHandler, mcpH *handlers.MCPHandler, logH *handlers.LogHandler, debugH *handlers.DebugHandler, subAgentH *handlers.SubAgentHandler, tmH *handlers.TaskManagerHandler, permSettingsH *handlers.PermissionSettingsHandler, toolCallH *handlers.ToolCallHandler, tmSvc *services.TaskManagerService, skillsCfg config.SkillsConfig, commandsCfg config.CommandsConfig, rulesCfg config.RulesConfig, subAgentsCfg config.SubAgentsConfig, selectorCfg config.SelectorConfig, mode, webDist string, autoLogin bool) *gin.Engine {
 	gin.SetMode(mode)
 	r := gin.New()
 	r.Use(gin.Recovery())
@@ -182,6 +182,13 @@ func Setup(authSvc *services.AuthService, jwtSvc *services.JWTService, agentRout
 			protected.POST("/filesystem/create", fsHandler.CreateEntry)
 			protected.DELETE("/filesystem/entry", fsHandler.DeleteEntry)
 
+			// Git 只读查询（Git 管理面板：worktree 提交记录与文件 diff）
+			gitH := handlers.NewGitHandler()
+			protected.GET("/git/log", gitH.Log)
+			protected.GET("/git/status", gitH.Status)
+			protected.GET("/git/commit-files", gitH.CommitFiles)
+			protected.GET("/git/diff", gitH.Diff)
+
 			// 内置浏览器：抓取网页并提取正文，供任务对话框引用
 			protected.GET("/browser/fetch", browserH.Fetch)
 
@@ -237,6 +244,11 @@ func Setup(authSvc *services.AuthService, jwtSvc *services.JWTService, agentRout
 			{
 				tasks.GET("/settings", taskSettingsH.GetSettings)
 				tasks.PUT("/settings", taskSettingsH.UpdateSettings)
+			}
+
+			// 工具调用历史（「工具调用记录」页面）
+			if toolCallH != nil {
+				protected.GET("/tool-calls", toolCallH.List)
 			}
 
 			// 全局权限规则设置（yolo / 白名单 / 黑名单）

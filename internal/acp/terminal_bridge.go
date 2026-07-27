@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -122,6 +123,16 @@ type TerminalBridge struct {
 
 	// resolve 把 ACP SessionId 映射为 DB session ID（0 表示未知，事件不路由）。
 	resolve func(acp.SessionId) uint
+
+	// onExit 可选：命令退出时回调（工具调用记录回填退出码）。SetOnExit 注入；nil 则跳过。
+	onExit func(dbID uint, terminalID, command, cwd string, exitCode *int, signal *string)
+}
+
+// SetOnExit 注入命令退出回调（在广播 exit 事件后同 goroutine 调用）。
+func (b *TerminalBridge) SetOnExit(fn func(dbID uint, terminalID, command, cwd string, exitCode *int, signal *string)) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.onExit = fn
 }
 
 // NewTerminalBridge 创建 TerminalBridge。resolve 可为 nil（此时事件不路由到前端）。
@@ -150,6 +161,26 @@ func findShell() string {
 		}
 	}
 	return "/bin/sh"
+}
+
+// EnsureUTF8Locale 保证环境变量中包含 UTF-8 locale，否则 shell 行编辑与程序输出会按
+// 单字节处理多字节字符（如中文），导致终端乱码。已有 UTF-8 设置时不做修改；
+// 追加的 LC_ALL 优先级最高，可覆盖继承到的非 UTF-8 值（如 LANG=C）。
+func EnsureUTF8Locale(env []string) []string {
+	for _, e := range env {
+		if strings.HasPrefix(e, "LC_ALL=") || strings.HasPrefix(e, "LANG=") {
+			v := strings.ToUpper(e)
+			if strings.Contains(v, "UTF-8") || strings.Contains(v, "UTF8") {
+				return env
+			}
+		}
+	}
+	// Debian/musl 内置 C.UTF-8；macOS 无 C.UTF-8，用 en_US.UTF-8。
+	loc := "C.UTF-8"
+	if runtime.GOOS == "darwin" {
+		loc = "en_US.UTF-8"
+	}
+	return append(env, "LANG="+loc, "LC_ALL="+loc)
 }
 
 // startProcess 启动命令，优先 PTY（保留彩色输出，stdout/stderr 合并）；
@@ -189,7 +220,8 @@ func (b *TerminalBridge) Create(ctx context.Context, params acp.CreateTerminalRe
 	if params.Cwd != nil && *params.Cwd != "" {
 		cmd.Dir = *params.Cwd
 	}
-	env := append(os.Environ(), "TERM=xterm-256color")
+	// UTF-8 locale 兼平台兼容；agent 显式传入的 LANG/LC_ALL 在后，优先生效
+	env := append(EnsureUTF8Locale(os.Environ()), "TERM=xterm-256color")
 	for _, e := range params.Env {
 		env = append(env, e.Name+"="+e.Value)
 	}
@@ -281,6 +313,13 @@ func (b *TerminalBridge) pump(term *bridgeTerminal, reader *os.File) {
 
 	slog.Debug("ACP terminal 命令退出", "terminal", term.id, "exit_code", exitCode, "signal", sig)
 	b.broadcast(term.dbID, TerminalEvent{Type: TerminalEventExit, TerminalID: term.id, ExitCode: exitCode, Signal: sig})
+
+	b.mu.Lock()
+	onExit := b.onExit
+	b.mu.Unlock()
+	if onExit != nil {
+		onExit(term.dbID, term.id, term.display, term.cwd, exitCode, sig)
+	}
 }
 
 // get 按 terminalId 查找终端。

@@ -623,7 +623,17 @@ func (s *TaskManagerService) RegisterSessionTask(cwd string, sess *models.Sessio
 	}
 	for i := range def.Tasks {
 		if existing := def.Tasks[i].DBSessionID; existing != nil && *existing == sess.ID {
-			return nil // 已登记，跳过
+			// 已登记：不新增条目，但本次又发起了新 prompt，非运行态时刷新回 running
+			//（编排器/SendPrompt 自管的运行中任务不动），结束后由 PromptFinished 收尾。
+			if !models.IsTaskRunning(def.Tasks[i].Status) {
+				now := time.Now()
+				def.Tasks[i].Status = models.TaskStatusRunning
+				def.Tasks[i].StartedAt = &now
+				def.Tasks[i].FinishedAt = nil
+				def.Tasks[i].Error = ""
+				return store.Save(def)
+			}
+			return nil
 		}
 	}
 	title := strings.TrimSpace(sess.Title)
@@ -646,6 +656,56 @@ func (s *TaskManagerService) RegisterSessionTask(cwd string, sess *models.Sessio
 	}
 	def.Tasks = append(def.Tasks, task)
 	return store.Save(def)
+}
+
+// PromptFinished 实现 acp.PromptFinishedNotifier：会话 prompt 流结束时同步 tasks.json
+// 中登记条目的状态。会话登记的任务（RegisterSessionTask）不经过编排器 runTask，
+// 其运行态只能由本回调收尾，否则完成后永远显示“执行中”。
+// 编排器/SendPrompt 正在管理的任务（taskCtx 存活）由其自身收尾，这里跳过避免竞争。
+func (s *TaskManagerService) PromptFinished(dbSessionID uint, runStatus string) {
+	if dbSessionID == 0 || s.exec == nil {
+		return
+	}
+	sess, err := s.exec.GetSessionByDBID(dbSessionID)
+	if err != nil || sess == nil || sess.WorkspaceID == nil {
+		return
+	}
+	ws, err := s.exec.FindWorkspaceByID(*sess.WorkspaceID)
+	if err != nil || ws == nil || strings.TrimSpace(ws.Cwd) == "" {
+		return
+	}
+	cwd := ws.Cwd
+	def, err := s.storeFor(cwd).Load()
+	if err != nil {
+		return
+	}
+	taskID := ""
+	for i := range def.Tasks {
+		if id := def.Tasks[i].DBSessionID; id != nil && *id == dbSessionID {
+			taskID = def.Tasks[i].ID
+			break
+		}
+	}
+	if taskID == "" {
+		return
+	}
+	s.mu.Lock()
+	_, live := s.taskCtx[cwd+":"+taskID]
+	s.mu.Unlock()
+	if live {
+		return
+	}
+	status := models.TaskStatusDone
+	if runStatus != models.RunningTaskStatusDone {
+		status = models.TaskStatusInterrupt
+	}
+	now := time.Now()
+	s.updateTask(cwd, taskID, func(t *models.TaskManagerTask) {
+		if models.IsTaskRunning(t.Status) {
+			t.Status = status
+			t.FinishedAt = &now
+		}
+	})
 }
 
 // firstLine 取 prompt 首行并截断到 maxLen 字符，用于任务标题兜底。
