@@ -8,26 +8,26 @@ import (
 	"opennexus/internal/models"
 )
 
-// mockOrchExecutor 捕获传入 RunSessionTask 的 cfg，用于断言父会话透传。
-type mockOrchExecutor struct {
+// mockTMExecutor 捕获传入 RunSessionTask 的 cfg，用于断言父会话透传。
+type mockTMExecutor struct {
 	lastCfg acp.SessionTaskConfig
 	result  acp.SessionTaskResult
 }
 
-func (m *mockOrchExecutor) RunSessionTask(_ context.Context, cfg acp.SessionTaskConfig) (acp.SessionTaskResult, error) {
+func (m *mockTMExecutor) RunSessionTask(_ context.Context, cfg acp.SessionTaskConfig) (acp.SessionTaskResult, error) {
 	m.lastCfg = cfg
 	return m.result, nil
 }
 
-func (m *mockOrchExecutor) FindWorkspaceByID(_ uint) (*models.Workspace, error) {
+func (m *mockTMExecutor) FindWorkspaceByID(_ uint) (*models.Workspace, error) {
 	return &models.Workspace{}, nil
 }
 
-func (m *mockOrchExecutor) GetSessionByDBID(_ uint) (*models.Session, error) {
+func (m *mockTMExecutor) GetSessionByDBID(_ uint) (*models.Session, error) {
 	return nil, nil
 }
 
-func (m *mockOrchExecutor) DefaultAgentType() string {
+func (m *mockTMExecutor) DefaultAgentType() string {
 	return "mock-agent"
 }
 
@@ -35,15 +35,15 @@ func (m *mockOrchExecutor) DefaultAgentType() string {
 // 且不再携带 ParentSessionID（编排管理会话概念已取消）。
 func TestExecuteTaskUsesManualSource(t *testing.T) {
 	cwd := t.TempDir()
-	mock := &mockOrchExecutor{result: acp.SessionTaskResult{Success: true, SessionID: "s-uuid", DBSessionID: 99}}
-	svc := NewOrchestratorService(mock)
+	mock := &mockTMExecutor{result: acp.SessionTaskResult{Success: true, SessionID: "s-uuid", DBSessionID: 99}}
+	svc := NewTaskManagerService(mock)
 
 	// executeTask 需在 git 仓库内运行（创建 worktree 隔离）。
 	if err := svc.InitGitRepo(cwd); err != nil {
 		t.Fatalf("InitGitRepo: %v", err)
 	}
 
-	task := &models.OrchestrationTask{ID: "task1", Title: "T", Detail: "prompt", AgentType: "demo"}
+	task := &models.TaskManagerTask{ID: "task1", Title: "T", Detail: "prompt", AgentType: "demo"}
 	res, err := svc.executeTask(context.Background(), cwd, task, 5, 8)
 	if err != nil {
 		t.Fatalf("executeTask: %v", err)
@@ -61,13 +61,13 @@ func TestExecuteTaskUsesManualSource(t *testing.T) {
 
 func TestRecoverAll_MarksRunningAsInterrupt(t *testing.T) {
 	cwd := t.TempDir()
-	svc := NewOrchestratorService(&mockOrchExecutor{})
-	def := &models.OrchestrationDef{
+	svc := NewTaskManagerService(&mockTMExecutor{})
+	def := &models.TaskManagerDef{
 		MaxParallel: 1,
-		Tasks: []models.OrchestrationTask{
-			{ID: "a", Title: "A", Detail: "d", Status: models.OrchTaskStatusRunning},
-			{ID: "b", Title: "B", Detail: "d", Status: models.OrchTaskStatusQueued},
-			{ID: "c", Title: "C", Detail: "d", Status: models.OrchTaskStatusDone},
+		Tasks: []models.TaskManagerTask{
+			{ID: "a", Title: "A", Detail: "d", Status: models.TaskStatusRunning},
+			{ID: "b", Title: "B", Detail: "d", Status: models.TaskStatusQueued},
+			{ID: "c", Title: "C", Detail: "d", Status: models.TaskStatusDone},
 		},
 	}
 	if err := svc.Save(cwd, def); err != nil {
@@ -78,13 +78,13 @@ func TestRecoverAll_MarksRunningAsInterrupt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if got.Tasks[0].Status != models.OrchTaskStatusInterrupt {
+	if got.Tasks[0].Status != models.TaskStatusInterrupt {
 		t.Errorf("running → interrupt, got %q", got.Tasks[0].Status)
 	}
-	if got.Tasks[1].Status != models.OrchTaskStatusInterrupt {
+	if got.Tasks[1].Status != models.TaskStatusInterrupt {
 		t.Errorf("queued → interrupt, got %q", got.Tasks[1].Status)
 	}
-	if got.Tasks[2].Status != models.OrchTaskStatusDone {
+	if got.Tasks[2].Status != models.TaskStatusDone {
 		t.Errorf("done 应保持, got %q", got.Tasks[2].Status)
 	}
 }
@@ -92,15 +92,15 @@ func TestRecoverAll_MarksRunningAsInterrupt(t *testing.T) {
 func TestStart_RestartsStaleRunningAfterRestart(t *testing.T) {
 	// 模拟服务重启：tasks.json 仍为 running，但内存无 taskCtx；全部启动应重新排队。
 	cwd := t.TempDir()
-	mock := &mockOrchExecutor{result: acp.SessionTaskResult{Success: true, SessionID: "s1", DBSessionID: 1}}
-	svc := NewOrchestratorService(mock)
+	mock := &mockTMExecutor{result: acp.SessionTaskResult{Success: true, SessionID: "s1", DBSessionID: 1}}
+	svc := NewTaskManagerService(mock)
 	if err := svc.InitGitRepo(cwd); err != nil {
 		t.Fatalf("InitGitRepo: %v", err)
 	}
-	def := &models.OrchestrationDef{
+	def := &models.TaskManagerDef{
 		MaxParallel: 1,
-		Tasks: []models.OrchestrationTask{
-			{ID: "stale", Title: "S", Detail: "prompt", AgentType: "demo", Status: models.OrchTaskStatusRunning},
+		Tasks: []models.TaskManagerTask{
+			{ID: "stale", Title: "S", Detail: "prompt", AgentType: "demo", Status: models.TaskStatusRunning},
 		},
 	}
 	if err := svc.Save(cwd, def); err != nil {
@@ -117,7 +117,7 @@ func TestStart_RestartsStaleRunningAfterRestart(t *testing.T) {
 		run.wg.Wait()
 	}
 	got, _ := svc.Load(cwd)
-	if got.Tasks[0].Status != models.OrchTaskStatusDone {
+	if got.Tasks[0].Status != models.TaskStatusDone {
 		t.Fatalf("残留 running 应被重新执行至 done，实际 %q err=%q", got.Tasks[0].Status, got.Tasks[0].Error)
 	}
 }
@@ -126,7 +126,7 @@ func TestStart_RestartsStaleRunningAfterRestart(t *testing.T) {
 // 字段含 db_session_id/session_id/status=running/started_at，task.id 为会话 DB 主键字符串。
 func TestRegisterSessionTask_NewManualSession(t *testing.T) {
 	cwd := t.TempDir()
-	svc := NewOrchestratorService(&mockOrchExecutor{})
+	svc := NewTaskManagerService(&mockTMExecutor{})
 	sess := &models.Session{
 		ID:         123,
 		SessionID:  "acp-uuid-123",
@@ -158,7 +158,7 @@ func TestRegisterSessionTask_NewManualSession(t *testing.T) {
 	if tk.AgentType != "mock-agent" || tk.ModelValue != "gpt-4o" {
 		t.Errorf("agent/model 不匹配: %+v", tk)
 	}
-	if tk.Status != models.OrchTaskStatusRunning {
+	if tk.Status != models.TaskStatusRunning {
 		t.Errorf("status = %q, want running", tk.Status)
 	}
 	if tk.DBSessionID == nil || *tk.DBSessionID != 123 {
@@ -175,7 +175,7 @@ func TestRegisterSessionTask_NewManualSession(t *testing.T) {
 // TestRegisterSessionTask_DedupByDBSessionID 验证按 db_session_id 去重：重复登记不新增条目。
 func TestRegisterSessionTask_DedupByDBSessionID(t *testing.T) {
 	cwd := t.TempDir()
-	svc := NewOrchestratorService(&mockOrchExecutor{})
+	svc := NewTaskManagerService(&mockTMExecutor{})
 	sess := &models.Session{ID: 55, SessionID: "s-55", AgentType: "a", Source: models.SessionSourceManual}
 	if err := svc.RegisterSessionTask(cwd, sess, "first"); err != nil {
 		t.Fatalf("首次登记: %v", err)
@@ -195,7 +195,7 @@ func TestRegisterSessionTask_DedupByDBSessionID(t *testing.T) {
 // TestRegisterSessionTask_SkipsNonManual 验证 scheduled/classify/子会话不登记。
 func TestRegisterSessionTask_SkipsNonManual(t *testing.T) {
 	cwd := t.TempDir()
-	svc := NewOrchestratorService(&mockOrchExecutor{})
+	svc := NewTaskManagerService(&mockTMExecutor{})
 	parent := uint(7)
 	cases := []struct {
 		name string
@@ -220,7 +220,7 @@ func TestRegisterSessionTask_SkipsNonManual(t *testing.T) {
 
 // TestRegisterSessionTask_EmptyInputs 验证空 cwd / nil sess 不报错。
 func TestRegisterSessionTask_EmptyInputs(t *testing.T) {
-	svc := NewOrchestratorService(&mockOrchExecutor{})
+	svc := NewTaskManagerService(&mockTMExecutor{})
 	if err := svc.RegisterSessionTask("", &models.Session{ID: 1, Source: models.SessionSourceManual}, "p"); err != nil {
 		t.Fatalf("空 cwd 应无操作: %v", err)
 	}

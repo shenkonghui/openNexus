@@ -65,6 +65,8 @@
   --config-control-height: 30px;
   --config-control-width: 110px;
   --config-control-font: 12px;
+  /* 顶栏统一高度（含下边框）：左侧侧栏顶栏与右侧页面顶栏共用，保证两侧对齐 */
+  --topbar-height: 39px;
 }
 
 /* ===== 浅色主题 ===== */

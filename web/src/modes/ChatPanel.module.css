@@ -158,6 +158,45 @@
   white-space: nowrap;
 }
 
+/* 会话级 YOLO 开关：与 configBar 其它控件风格一致的幽灵按钮 */
+.yoloBtn {
+  height: var(--config-control-height);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 8px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: var(--config-control-font);
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+  white-space: nowrap;
+}
+
+.yoloBtn:hover:not(:disabled) {
+  background: var(--bg-muted);
+  color: var(--text-primary);
+}
+
+.yoloBtn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.yoloBtnOn {
+  color: var(--accent);
+  border-color: var(--accent-border);
+  background: var(--accent-subtle);
+}
+
+.yoloBtnOn:hover:not(:disabled) {
+  color: var(--accent);
+  background: var(--accent-subtle);
+}
+
 .bottomArea {
   flex-shrink: 0;
 }

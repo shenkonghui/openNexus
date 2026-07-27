@@ -4,6 +4,7 @@ import type {
   Message,
   AgentCommand,
   ConfigOption,
+  ConfigOptionValue,
   SessionMode,
   AgentSkill,
   Execution,
@@ -75,6 +76,12 @@ export interface PanelCtx {
   onSelectModel: (value: string) => void
   probing: boolean
 
+  // agent+模型 合并下拉（新建任务页）：各 agent 的模型列表、显示过滤正则与组合选择回调。
+  // 可选：未提供时 ChatPanel 回退到 onSelectAgent + onSelectModel。
+  agentModelsMap?: Record<string, ConfigOptionValue[]>
+  agentModelFilters?: string[]
+  onSelectAgentModel?: (agentType: string, modelValue: string) => void
+
   // 权限
   pendingPermission: PermissionRequestPayload | null
   permissionResponding: boolean
@@ -112,6 +119,11 @@ export interface PanelCtx {
 
   // 会话来源标记（classify 会话隐藏输入框）
   source?: string
+
+  // 会话级 YOLO 自动放行工具调用
+  yoloEnabled?: boolean
+  yoloSaving?: boolean
+  onToggleYolo?: () => void
 }
 
 /** 面板注册项 */

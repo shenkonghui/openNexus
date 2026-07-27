@@ -29,24 +29,26 @@
   border-bottom: 1px solid var(--border);
 }
 
-/* 首页模式（任务列表/新建任务）：单行横排 */
+/* 首页模式（任务列表/新建任务）：单行横排，高度与左侧侧栏顶栏一致 */
 .headerSingle {
   flex-direction: row;
   align-items: center;
   justify-content: space-between;
-  padding: 12px 24px;
+  min-height: var(--topbar-height);
+  padding: 4px 24px;
 }
 
 .headerSingle .sessionInfo {
   padding: 0;
 }
 
-/* 系统级顶栏：工作区管理、新建任务、用户 */
+/* 系统级顶栏：工作区管理、新建任务、用户；高度与左侧侧栏顶栏一致 */
 .sysBar {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 10px 24px;
+  min-height: var(--topbar-height);
+  padding: 4px 24px;
   border-bottom: 1px solid var(--border);
 }
 
@@ -85,7 +87,7 @@
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 8px 24px;
+  padding: 4px 24px;
 }
 
 .agentType {
@@ -131,42 +133,6 @@
   gap: 8px;
   align-items: center;
   margin-left: auto;
-}
-
-.yoloBtn {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 5px 10px;
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--text-secondary);
-  background: var(--bg-surface);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  cursor: pointer;
-  transition: background 0.15s, color 0.15s, border-color 0.15s;
-}
-
-.yoloBtn:hover:not(:disabled) {
-  background: var(--bg-hover);
-  color: var(--text-primary);
-}
-
-.yoloBtn:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-}
-
-.yoloBtnOn {
-  color: var(--accent);
-  border-color: var(--accent-border);
-  background: var(--accent-subtle);
-}
-
-.yoloBtnOn:hover:not(:disabled) {
-  color: var(--accent);
-  background: var(--accent-subtle);
 }
 
 .fileBtn {

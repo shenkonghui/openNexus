@@ -53,10 +53,10 @@ export const MODES: ModeDef[] = [
     ]),
   },
   {
-    // 编排模式：layout 仅占位，实际由 ChatPage 拦截渲染 OrchestrationView（不走 LayoutRenderer）。
-    // 不是任务类型：不出现在 TaskModeSwitch；唯一入口为侧边栏「任务编排」。
-    id: 'orchestration',
-    titleKey: 'taskMode.orchestration',
+    // 任务管理模式：layout 仅占位，实际由 ChatPage 拦截渲染 TaskManagerView（不走 LayoutRenderer）。
+    // 不是任务类型：不出现在 TaskModeSwitch；唯一入口为侧边栏「任务管理」。
+    id: 'taskmanager',
+    titleKey: 'taskMode.taskmanager',
     icon: <Network size={14} />,
     sessionKind: 'primary',
     configBar: 'none',

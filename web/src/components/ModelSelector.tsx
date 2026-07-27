@@ -9,6 +9,8 @@ interface ModelSelectorProps {
   options: ConfigOption[]
   onApply: (configId: string, value: string) => void
   disabled?: boolean
+  /** 隐藏模型下拉（模型已合并进 AgentModelSelector 时只保留「更多选项」） */
+  hideModel?: boolean
 }
 
 function optionLabel(opt: ConfigOption, name: string, description?: string): string {
@@ -45,7 +47,7 @@ function ConfigItem({ opt, onApply, disabled }: { opt: ConfigOption; onApply: (i
 }
 
 // ModelSelector：默认只显示模型，其余配置收进「更多选项」下拉
-export default function ModelSelector({ options, onApply, disabled }: ModelSelectorProps) {
+export default function ModelSelector({ options, onApply, disabled, hideModel }: ModelSelectorProps) {
   const { t } = useTranslation()
   const [moreOpen, setMoreOpen] = useState(false)
   const moreRef = useRef<HTMLDivElement>(null)
@@ -61,7 +63,7 @@ export default function ModelSelector({ options, onApply, disabled }: ModelSelec
   }, [])
 
   const selectable = options.filter((o) => o.type === 'select' && o.options.length > 0 && o.category !== 'mode')
-  const modelOpt = selectable.find((o) => o.category === 'model')
+  const modelOpt = hideModel ? undefined : selectable.find((o) => o.category === 'model')
   const others = selectable.filter((o) => o.category !== 'model')
 
   if (!modelOpt && others.length === 0) return null

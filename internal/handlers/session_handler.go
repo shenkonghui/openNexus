@@ -75,7 +75,7 @@ type SessionStore interface {
 }
 
 // SessionTaskRegistrar 把新建会话登记到工作区 cwd 下的 tasks.json，
-// 使任务编排视图统一展示所有任务/对话。由 *services.OrchestratorService 实现。
+// 使任务编排视图统一展示所有任务/对话。由 *services.TaskManagerService 实现。
 type SessionTaskRegistrar interface {
 	RegisterSessionTask(cwd string, sess *models.Session, prompt string) error
 }
@@ -809,12 +809,13 @@ func (h *SessionHandler) Prompt(c *gin.Context) {
 			return
 		}
 	}
-	// 首次发送（pending 会话从未激活过）：把该会话登记到工作区 tasks.json，
-	// 使"新建对话"与编排任务统一在 tasks.json 中可见。仅 manual 与顶级 orchestration 会话登记，
-	// 子会话/定时/分类会话由各自引擎管理，不在此重复登记。失败仅记录日志，不阻断 prompt。
-	if sess.Status == models.SessionStatusPending {
-		h.registerToTasks(c, sess, req.Prompt)
-	}
+	// 把会话登记到工作区 tasks.json，使"新建对话"与编排任务统一在 tasks.json 中可见。
+	// 不能用 pending 状态判断"首次发送"：首发前的 setConfigOption/切模式等调用会经
+	// 自动恢复把 pending 会话提前激活为 active，导致登记被跳过。registrar 按
+	// db_session_id 幂等去重，每次 prompt 调用均安全；仅 manual 顶级会话登记
+	// （registrar 内部过滤），子会话/定时/分类会话由各自引擎管理。
+	// 失败仅记录日志，不阻断 prompt。
+	h.registerToTasks(c, sess, req.Prompt)
 	ch, err := h.store.Prompt(c.Request.Context(), sess.SessionID, req.Prompt)
 	if err != nil {
 		writeSessionError(c, err)

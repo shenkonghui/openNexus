@@ -18,8 +18,8 @@ interface TaskModeSwitchProps {
   disabled?: boolean
 }
 
-/** 任务类型可选模式：不含「编排」（编排走侧边栏「任务编排」独立页）。 */
-const TASK_TYPE_MODES = MODES.filter((m) => m.id !== 'orchestration')
+/** 任务类型可选模式：不含「任务管理」（任务管理走侧边栏「任务管理」独立页）。 */
+const TASK_TYPE_MODES = MODES.filter((m) => m.id !== 'taskmanager')
 
 /**
  * 模式切换器：下拉框形式，选项为编码/文档等任务类型。

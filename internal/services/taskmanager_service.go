@@ -2,12 +2,10 @@ package services
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"os"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -18,8 +16,8 @@ import (
 	"opennexus/internal/models"
 )
 
-// OrchestratorExecutor 是编排器执行任务所需的 agent 能力子集（*agent.Router 实现该接口）。
-type OrchestratorExecutor interface {
+// TaskManagerExecutor 是编排器执行任务所需的 agent 能力子集（*agent.Router 实现该接口）。
+type TaskManagerExecutor interface {
 	RunSessionTask(ctx context.Context, cfg acp.SessionTaskConfig) (acp.SessionTaskResult, error)
 	FindWorkspaceByID(id uint) (*models.Workspace, error)
 	// GetSessionByDBID 按 DB 主键查会话，用于继承父编排会话的 agent 类型。
@@ -28,14 +26,16 @@ type OrchestratorExecutor interface {
 	DefaultAgentType() string
 }
 
-// OrchestratorService 管理任务编排：读写 tasks.json、按并发上限调度任务、
+// TaskManagerService 管理任务管理：读写工作区管理数据目录中的 tasks.json、按并发上限调度任务、
 // 基于 git worktree 隔离每个任务的工作目录，并复用 RunSessionTask 创建持久会话执行。
-type OrchestratorService struct {
-	exec OrchestratorExecutor
+type TaskManagerService struct {
+	exec TaskManagerExecutor
 
-	mu      sync.Mutex                    // 保护 defs/运行态
-	runs    map[string]*orchRun           // cwd -> 运行态（含信号量、cancel）
-	taskCtx map[string]context.CancelFunc // cwd:taskID -> 取消函数
+	mu       sync.Mutex                    // 保护运行态
+	stores   map[string]*TaskStore         // cwd -> 文件 store
+	storesMu sync.Mutex                    // 保护 stores
+	runs     map[string]*orchRun           // cwd -> 运行态（含信号量、cancel）
+	taskCtx  map[string]context.CancelFunc // cwd:taskID -> 取消函数
 }
 
 type orchRun struct {
@@ -45,28 +45,31 @@ type orchRun struct {
 	wg          sync.WaitGroup // 等待所有任务结束
 }
 
-// tasksFileName 是 cwd 下编排定义文件名。
-const tasksFileName = "tasks.json"
-
-// NewOrchestratorService 创建编排服务。
-func NewOrchestratorService(exec OrchestratorExecutor) *OrchestratorService {
-	return &OrchestratorService{
+// NewTaskManagerService 创建编排服务。
+func NewTaskManagerService(exec TaskManagerExecutor) *TaskManagerService {
+	return &TaskManagerService{
 		exec:    exec,
+		stores:  make(map[string]*TaskStore),
 		runs:    make(map[string]*orchRun),
 		taskCtx: make(map[string]context.CancelFunc),
 	}
 }
 
-// tasksPath 返回 cwd 下 tasks.json 的绝对路径。
-func tasksPath(cwd string) string {
-	return filepath.Join(cwd, tasksFileName)
+// storeFor 返回指定 cwd 的 TaskStore，按 cwd 缓存避免同一目录多个锁。
+func (s *TaskManagerService) storeFor(cwd string) *TaskStore {
+	s.storesMu.Lock()
+	defer s.storesMu.Unlock()
+	if s.stores[cwd] == nil {
+		s.stores[cwd] = NewTaskStore(cwd)
+	}
+	return s.stores[cwd]
 }
 
 // ErrNotGitRepo 表示编排 cwd 不是 git 仓库，需先初始化。
 var ErrNotGitRepo = errors.New("当前工作目录不是 git 仓库，请先初始化")
 
 // IsGitRepo 报告 cwd 是否为 git 仓库（编排任务需在 git 仓库内运行，以便隔离 worktree）。
-func (s *OrchestratorService) IsGitRepo(cwd string) bool {
+func (s *TaskManagerService) IsGitRepo(cwd string) bool {
 	if cwd == "" {
 		return false
 	}
@@ -77,7 +80,7 @@ func (s *OrchestratorService) IsGitRepo(cwd string) bool {
 }
 
 // InitGitRepo 在 cwd 初始化 git 仓库（含初始提交），并确保 .worktrees 目录存在。
-func (s *OrchestratorService) InitGitRepo(cwd string) error {
+func (s *TaskManagerService) InitGitRepo(cwd string) error {
 	if cwd == "" {
 		return fmt.Errorf("cwd 不能为空")
 	}
@@ -94,124 +97,38 @@ func (s *OrchestratorService) InitGitRepo(cwd string) error {
 	return nil
 }
 
-// Load 读取 cwd 下的 tasks.json。文件不存在时返回空定义（max_parallel 取默认值）。
-func (s *OrchestratorService) Load(cwd string) (*models.OrchestrationDef, error) {
+// Load 读取 cwd 对应管理数据目录下的 tasks.json。文件不存在时返回空定义（max_parallel 取默认值）。
+func (s *TaskManagerService) Load(cwd string) (*models.TaskManagerDef, error) {
 	if cwd == "" {
 		return nil, fmt.Errorf("cwd 不能为空")
 	}
-	data, err := os.ReadFile(tasksPath(cwd))
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return &models.OrchestrationDef{MaxParallel: models.DefaultMaxParallel, Tasks: []models.OrchestrationTask{}}, nil
-		}
-		return nil, fmt.Errorf("读取 tasks.json: %w", err)
-	}
-	var def models.OrchestrationDef
-	if err := json.Unmarshal(data, &def); err != nil {
-		return nil, fmt.Errorf("解析 tasks.json: %w", err)
-	}
-	if def.MaxParallel <= 0 {
-		def.MaxParallel = 1
-	}
-	if def.Tasks == nil {
-		def.Tasks = []models.OrchestrationTask{}
-	}
-	// 兜底：任务缺省状态置为 pending；归一化常见别名（如 AI 手写 tasks.json 可能用 completed）；
-	// 优先级缺省 p1。
-	for i := range def.Tasks {
-		t := &def.Tasks[i]
-		t.Status = models.NormalizeOrchTaskStatus(t.Status)
-		t.Priority = models.NormalizeOrchTaskPriority(t.Priority)
-	}
-	return &def, nil
+	return s.storeFor(cwd).Load()
 }
 
-// Save 将编排定义写回 cwd 下 tasks.json（原子写）。
-func (s *OrchestratorService) Save(cwd string, def *models.OrchestrationDef) error {
+// Save 将编排定义写回 cwd 对应管理数据目录下的 tasks.json（原子写）。
+func (s *TaskManagerService) Save(cwd string, def *models.TaskManagerDef) error {
 	if cwd == "" {
 		return fmt.Errorf("cwd 不能为空")
 	}
-	if def == nil {
-		def = &models.OrchestrationDef{}
-	}
-	if def.MaxParallel <= 0 {
-		def.MaxParallel = 1
-	}
-	if def.Tasks == nil {
-		def.Tasks = []models.OrchestrationTask{}
-	}
-	for i := range def.Tasks {
-		def.Tasks[i].Priority = models.NormalizeOrchTaskPriority(def.Tasks[i].Priority)
-	}
-	data, err := json.MarshalIndent(def, "", "  ")
-	if err != nil {
-		return fmt.Errorf("序列化 tasks.json: %w", err)
-	}
-	tmp := tasksPath(cwd) + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
-		return fmt.Errorf("写入 tasks.json: %w", err)
-	}
-	return os.Rename(tmp, tasksPath(cwd))
+	return s.storeFor(cwd).Save(def)
 }
 
 // UpsertTask 新增或更新（按 id 匹配）单个任务，并写回文件。
-func (s *OrchestratorService) UpsertTask(cwd string, task models.OrchestrationTask) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	def, err := s.Load(cwd)
-	if err != nil {
-		return err
-	}
-	if task.Status == "" {
-		task.Status = models.OrchTaskStatusPending
-	}
-	incomingPri := strings.TrimSpace(task.Priority)
-	found := false
-	for i := range def.Tasks {
-		if def.Tasks[i].ID == task.ID {
-			// 保留运行时字段（session/状态/时间戳），仅更新可编辑字段
-			cur := def.Tasks[i]
-			task.SessionID = cur.SessionID
-			task.DBSessionID = cur.DBSessionID
-			task.Status = cur.Status
-			task.WorktreePath = cur.WorktreePath
-			task.StartedAt = cur.StartedAt
-			task.FinishedAt = cur.FinishedAt
-			task.Error = cur.Error
-			if task.Branch == "" {
-				task.Branch = cur.Branch
-			}
-			// 未传 priority 时保留原值，避免更新其它字段时被重置为 p1
-			if incomingPri == "" {
-				task.Priority = cur.Priority
-			} else {
-				task.Priority = models.NormalizeOrchTaskPriority(incomingPri)
-			}
-			def.Tasks[i] = task
-			found = true
-			break
-		}
-	}
-	if !found {
-		task.Priority = models.NormalizeOrchTaskPriority(incomingPri)
-		def.Tasks = append(def.Tasks, task)
-	}
-	return s.Save(cwd, def)
+func (s *TaskManagerService) UpsertTask(cwd string, task models.TaskManagerTask) error {
+	return s.storeFor(cwd).UpsertTask(task)
 }
 
 // DeleteTask 删除指定任务。若任务正在运行则先取消，并尝试清理其 worktree。
-func (s *OrchestratorService) DeleteTask(cwd, taskID string) error {
+func (s *TaskManagerService) DeleteTask(cwd, taskID string) error {
 	s.mu.Lock()
-	def, err := s.Load(cwd)
+	defer s.mu.Unlock()
+
+	def, err := s.storeFor(cwd).Load()
 	if err != nil {
-		s.mu.Unlock()
 		return err
 	}
-	var (
-		idx    = -1
-		wtPath string
-		branch string
-	)
+	idx := -1
+	var wtPath, branch string
 	for i := range def.Tasks {
 		if def.Tasks[i].ID == taskID {
 			idx = i
@@ -221,7 +138,6 @@ func (s *OrchestratorService) DeleteTask(cwd, taskID string) error {
 		}
 	}
 	if idx < 0 {
-		s.mu.Unlock()
 		return fmt.Errorf("任务 %s 不存在", taskID)
 	}
 	// 取消运行中的任务
@@ -233,36 +149,29 @@ func (s *OrchestratorService) DeleteTask(cwd, taskID string) error {
 		}
 	}
 	def.Tasks = append(def.Tasks[:idx], def.Tasks[idx+1:]...)
-	err = s.Save(cwd, def)
-	s.mu.Unlock()
-	return err
+	return s.storeFor(cwd).Save(def)
 }
 
 // SetMaxParallel 更新并发上限。若当前有运行态且新值更小，已启动的任务不受影响，
 // 新任务按新上限排队。
-func (s *OrchestratorService) SetMaxParallel(cwd string, maxParallel int) error {
+func (s *TaskManagerService) SetMaxParallel(cwd string, maxParallel int) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	def, err := s.Load(cwd)
-	if err != nil {
-		return err
-	}
 	if maxParallel <= 0 {
 		maxParallel = 1
 	}
-	def.MaxParallel = maxParallel
 	if r, ok := s.runs[cwd]; ok {
 		// 重建信号量（仅影响尚未获取槽位的等待者）
 		newSem := make(chan struct{}, maxParallel)
 		r.sem = newSem
 		r.maxParallel = maxParallel
 	}
-	return s.Save(cwd, def)
+	return s.storeFor(cwd).SetMaxParallel(maxParallel)
 }
 
 // Start 启动任务。taskID 为空时启动全部 pending/failed/canceled/interrupt 任务，
 // 否则仅启动指定任务。已在运行的不会重复启动。
-func (s *OrchestratorService) Start(ctx context.Context, cwd string, workspaceID uint, userID uint, taskID string) error {
+func (s *TaskManagerService) Start(ctx context.Context, cwd string, workspaceID uint, userID uint, taskID string) error {
 	// 编排任务基于 git worktree 隔离，要求 cwd 为 git 仓库；非仓库时自动初始化（含初始提交），
 	// 免去用户手动 git init 的步骤。
 	if !s.IsGitRepo(cwd) {
@@ -270,7 +179,8 @@ func (s *OrchestratorService) Start(ctx context.Context, cwd string, workspaceID
 			return err
 		}
 	}
-	def, err := s.Load(cwd)
+	store := s.storeFor(cwd)
+	def, err := store.Load()
 	if err != nil {
 		return err
 	}
@@ -288,13 +198,13 @@ func (s *OrchestratorService) Start(ctx context.Context, cwd string, workspaceID
 	s.mu.Unlock()
 
 	// 收集待启动任务
-	var targets []models.OrchestrationTask
+	var targets []models.TaskManagerTask
 	for i := range def.Tasks {
 		t := &def.Tasks[i]
 		if taskID != "" && t.ID != taskID {
 			continue
 		}
-		if models.IsOrchTaskRunning(t.Status) {
+		if models.IsTaskRunning(t.Status) {
 			// 仅跳过内存中确实在跑的任务；服务重启后 tasks.json 残留的
 			// running/queued 无 taskCtx，必须允许重新排队，否则「全部启动」会空转。
 			taskKey := cwd + ":" + t.ID
@@ -305,11 +215,11 @@ func (s *OrchestratorService) Start(ctx context.Context, cwd string, workspaceID
 				continue
 			}
 		}
-		if t.Status == models.OrchTaskStatusDone && taskID == "" {
+		if t.Status == models.TaskStatusDone && taskID == "" {
 			continue // 全部启动时跳过已完成；显式单任务启动可重跑
 		}
 		// 重置为 queued
-		t.Status = models.OrchTaskStatusQueued
+		t.Status = models.TaskStatusQueued
 		t.Error = ""
 		targets = append(targets, *t)
 	}
@@ -318,10 +228,10 @@ func (s *OrchestratorService) Start(ctx context.Context, cwd string, workspaceID
 	}
 	// 高优先级先抢并发槽位（p0 > p1 > p2）
 	sort.SliceStable(targets, func(i, j int) bool {
-		return models.OrchTaskPriorityRank(targets[i].Priority) < models.OrchTaskPriorityRank(targets[j].Priority)
+		return models.TaskPriorityRank(targets[i].Priority) < models.TaskPriorityRank(targets[j].Priority)
 	})
 	// 持久化 queued 状态
-	if err := s.Save(cwd, def); err != nil {
+	if err := store.Save(def); err != nil {
 		return fmt.Errorf("写入排队状态: %w", err)
 	}
 
@@ -334,7 +244,7 @@ func (s *OrchestratorService) Start(ctx context.Context, cwd string, workspaceID
 }
 
 // runTask 执行单个任务：获取槽位 → 创建 worktree → 运行会话 → 更新状态。
-func (s *OrchestratorService) runTask(run *orchRun, t *models.OrchestrationTask, workspaceID, userID uint) {
+func (s *TaskManagerService) runTask(run *orchRun, t *models.TaskManagerTask, workspaceID, userID uint) {
 	defer run.wg.Done()
 
 	// 创建任务级 ctx，便于 Stop 取消
@@ -363,8 +273,8 @@ func (s *OrchestratorService) runTask(run *orchRun, t *models.OrchestrationTask,
 
 	// 已获得槽位，真正进入运行态
 	now := time.Now()
-	s.updateTask(run.cwd, t.ID, func(task *models.OrchestrationTask) {
-		task.Status = models.OrchTaskStatusRunning
+	s.updateTask(run.cwd, t.ID, func(task *models.TaskManagerTask) {
+		task.Status = models.TaskStatusRunning
 		task.StartedAt = &now
 		task.Error = ""
 	})
@@ -372,7 +282,7 @@ func (s *OrchestratorService) runTask(run *orchRun, t *models.OrchestrationTask,
 	result, runErr := s.executeTask(ctx, run.cwd, t, workspaceID, userID)
 
 	fin := time.Now()
-	s.updateTask(run.cwd, t.ID, func(task *models.OrchestrationTask) {
+	s.updateTask(run.cwd, t.ID, func(task *models.TaskManagerTask) {
 		task.FinishedAt = &fin
 		task.SessionID = result.SessionID
 		if result.DBSessionID > 0 {
@@ -380,21 +290,21 @@ func (s *OrchestratorService) runTask(run *orchRun, t *models.OrchestrationTask,
 			task.DBSessionID = &dbID
 		}
 		if runErr != nil {
-			task.Status = models.OrchTaskStatusFailed
+			task.Status = models.TaskStatusFailed
 			task.Error = runErr.Error()
 			return
 		}
 		if !result.Success {
-			task.Status = models.OrchTaskStatusFailed
+			task.Status = models.TaskStatusFailed
 			task.Error = result.Error
 			return
 		}
-		task.Status = models.OrchTaskStatusDone
+		task.Status = models.TaskStatusDone
 	})
 }
 
 // executeTask 创建 worktree 并调用 RunSessionTask 执行任务。
-func (s *OrchestratorService) executeTask(ctx context.Context, cwd string, t *models.OrchestrationTask, workspaceID, userID uint) (acp.SessionTaskResult, error) {
+func (s *TaskManagerService) executeTask(ctx context.Context, cwd string, t *models.TaskManagerTask, workspaceID, userID uint) (acp.SessionTaskResult, error) {
 	// 解析仓库根（worktree add 需在公共 git 仓库下执行）
 	repoRoot := cwd
 	if root, err := acp.GitRoot(cwd); err == nil {
@@ -419,7 +329,7 @@ func (s *OrchestratorService) executeTask(ctx context.Context, cwd string, t *mo
 	}
 
 	// 记录 branch/worktreePath
-	s.updateTask(cwd, t.ID, func(task *models.OrchestrationTask) {
+	s.updateTask(cwd, t.ID, func(task *models.TaskManagerTask) {
 		task.Branch = branch
 		task.WorktreePath = wtPath
 	})
@@ -432,7 +342,7 @@ func (s *OrchestratorService) executeTask(ctx context.Context, cwd string, t *mo
 		// 回写解析结果，使 UI 显示实际使用的 agent，并让后续重跑保持一致。
 		if agentType != "" {
 			resolved := agentType
-			s.updateTask(cwd, t.ID, func(task *models.OrchestrationTask) {
+			s.updateTask(cwd, t.ID, func(task *models.TaskManagerTask) {
 				task.AgentType = resolved
 			})
 		}
@@ -450,7 +360,7 @@ func (s *OrchestratorService) executeTask(ctx context.Context, cwd string, t *mo
 		// 会话落库后立即回写 db_session_id/session_id，使前端启动后能马上导航到该会话
 		//（无需等 RunSessionTask 阻塞返回）。
 		OnSessionCreated: func(dbID uint, sid string) {
-			s.updateTask(cwd, t.ID, func(task *models.OrchestrationTask) {
+			s.updateTask(cwd, t.ID, func(task *models.TaskManagerTask) {
 				task.SessionID = sid
 				if dbID > 0 {
 					d := dbID
@@ -466,10 +376,11 @@ func (s *OrchestratorService) executeTask(ctx context.Context, cwd string, t *mo
 }
 
 // Stop 停止任务。taskID 为空时停止该 cwd 下全部运行中/排队中任务。
-func (s *OrchestratorService) Stop(cwd, taskID string) error {
+func (s *TaskManagerService) Stop(cwd, taskID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	def, err := s.Load(cwd)
+	store := s.storeFor(cwd)
+	def, err := store.Load()
 	if err != nil {
 		return err
 	}
@@ -478,20 +389,20 @@ func (s *OrchestratorService) Stop(cwd, taskID string) error {
 		if taskID != "" && t.ID != taskID {
 			continue
 		}
-		if !models.IsOrchTaskRunning(t.Status) {
+		if !models.IsTaskRunning(t.Status) {
 			continue
 		}
 		s.cancelLocked(cwd, t.ID)
 		now := time.Now()
-		t.Status = models.OrchTaskStatusCanceled
+		t.Status = models.TaskStatusCanceled
 		t.FinishedAt = &now
 		t.Error = "用户手动停止"
 	}
-	return s.Save(cwd, def)
+	return store.Save(def)
 }
 
 // cancelLocked 取消指定任务（必须在持有 s.mu 时调用）。
-func (s *OrchestratorService) cancelLocked(cwd, taskID string) {
+func (s *TaskManagerService) cancelLocked(cwd, taskID string) {
 	key := cwd + ":" + taskID
 	if cancel, ok := s.taskCtx[key]; ok {
 		cancel()
@@ -500,38 +411,25 @@ func (s *OrchestratorService) cancelLocked(cwd, taskID string) {
 }
 
 // markCanceled 在 ctx 提前结束（如排队时被停止）时更新状态。
-func (s *OrchestratorService) markCanceled(cwd, taskID, reason string) {
+func (s *TaskManagerService) markCanceled(cwd, taskID, reason string) {
 	now := time.Now()
-	s.updateTask(cwd, taskID, func(task *models.OrchestrationTask) {
-		if models.IsOrchTaskRunning(task.Status) {
-			task.Status = models.OrchTaskStatusCanceled
+	s.updateTask(cwd, taskID, func(task *models.TaskManagerTask) {
+		if models.IsTaskRunning(task.Status) {
+			task.Status = models.TaskStatusCanceled
 			task.FinishedAt = &now
 			task.Error = reason
 		}
 	})
 }
 
-// updateTask 加载 → 修改指定任务 → 写回。修改函数在 nil 任务（未找到）时不执行。
-func (s *OrchestratorService) updateTask(cwd, taskID string, mutate func(*models.OrchestrationTask)) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	def, err := s.Load(cwd)
-	if err != nil {
-		slog.Warn("updateTask 加载 tasks.json 失败", "cwd", cwd, "err", err)
-		return
-	}
-	for i := range def.Tasks {
-		if def.Tasks[i].ID == taskID {
-			mutate(&def.Tasks[i])
-			break
-		}
-	}
-	if err := s.Save(cwd, def); err != nil {
-		slog.Warn("updateTask 写回 tasks.json 失败", "cwd", cwd, "err", err)
+// updateTask 修改指定任务后写回；未找到时 mutate 不执行。
+func (s *TaskManagerService) updateTask(cwd, taskID string, mutate func(*models.TaskManagerTask)) {
+	if err := s.storeFor(cwd).UpdateTaskStatus(taskID, mutate); err != nil {
+		slog.Warn("updateTask 更新 tasks.json 失败", "cwd", cwd, "err", err)
 	}
 }
 
-// RegisterSessionTask 把一个已存在的会话作为任务登记到 cwd 下的 tasks.json。
+// RegisterSessionTask 把一个已存在的会话作为任务登记到 cwd 对应的 tasks.json。
 // 用于将"新建对话"与 tasks.json 强关联：用户手动新建会话首次发送 prompt 时调用，
 // 使所有任务/对话统一在 tasks.json 中可见，便于任务视图集中管理。
 //
@@ -543,7 +441,7 @@ func (s *OrchestratorService) updateTask(cwd, taskID string, mutate func(*models
 // 去重：按 db_session_id 检查，若 tasks.json 已存在相同 db_session_id 的任务则跳过，
 // 避免重复发送导致重复条目。task.id 采用会话 DB 主键的字符串形式，
 // 与自定义字符串 id 命名空间基本不冲突。
-func (s *OrchestratorService) RegisterSessionTask(cwd string, sess *models.Session, prompt string) error {
+func (s *TaskManagerService) RegisterSessionTask(cwd string, sess *models.Session, prompt string) error {
 	if cwd == "" || sess == nil {
 		return nil
 	}
@@ -555,7 +453,8 @@ func (s *OrchestratorService) RegisterSessionTask(cwd string, sess *models.Sessi
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	def, err := s.Load(cwd)
+	store := s.storeFor(cwd)
+	def, err := store.Load()
 	if err != nil {
 		return fmt.Errorf("加载 tasks.json: %w", err)
 	}
@@ -570,20 +469,20 @@ func (s *OrchestratorService) RegisterSessionTask(cwd string, sess *models.Sessi
 	}
 	now := time.Now()
 	dbID := sess.ID
-	task := models.OrchestrationTask{
+	task := models.TaskManagerTask{
 		ID:          strconv.FormatUint(uint64(sess.ID), 10),
 		Title:       title,
 		Detail:      prompt,
 		AgentType:   sess.AgentType,
 		ModelValue:  sess.ModelValue,
-		Priority:    models.OrchTaskPriorityP1,
-		Status:      models.OrchTaskStatusRunning,
+		Priority:    models.TaskPriorityP1,
+		Status:      models.TaskStatusRunning,
 		SessionID:   sess.SessionID,
 		DBSessionID: &dbID,
 		StartedAt:   &now,
 	}
 	def.Tasks = append(def.Tasks, task)
-	return s.Save(cwd, def)
+	return store.Save(def)
 }
 
 // firstLine 取 prompt 首行并截断到 maxLen 字符，用于任务标题兜底。
@@ -601,21 +500,21 @@ func firstLine(prompt string, maxLen int) string {
 
 // RecoverAll 在服务启动时调用，将所有 cwd 的 running/queued 状态重置为 interrupt。
 // 遍历由外部提供的 cwd 列表（通常来自各 workspace 的 cwd）。
-func (s *OrchestratorService) RecoverAll(cwds []string) {
+func (s *TaskManagerService) RecoverAll(cwds []string) {
 	for _, cwd := range cwds {
-		def, err := s.Load(cwd)
+		def, err := s.storeFor(cwd).Load()
 		if err != nil {
 			continue
 		}
 		changed := false
 		for i := range def.Tasks {
-			if models.IsOrchTaskRunning(def.Tasks[i].Status) {
-				def.Tasks[i].Status = models.OrchTaskStatusInterrupt
+			if models.IsTaskRunning(def.Tasks[i].Status) {
+				def.Tasks[i].Status = models.TaskStatusInterrupt
 				changed = true
 			}
 		}
 		if changed {
-			if err := s.Save(cwd, def); err != nil {
+			if err := s.storeFor(cwd).Save(def); err != nil {
 				slog.Warn("RecoverAll 写回失败", "cwd", cwd, "err", err)
 			}
 		}

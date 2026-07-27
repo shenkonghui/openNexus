@@ -64,8 +64,8 @@ export default function App() {
           <Route path="/workspaces/:wid/sessions/:sid" element={<ChatPage />} />
           <Route path="/sessions/:id" element={<SessionRedirect />} />
           <Route path="/scheduled-tasks" element={<ScheduledTasksPage />} />
-          <Route path="/orchestration" element={<ChatPage />} />
-          <Route path="/workspaces/:wid/orchestration" element={<ChatPage />} />
+          <Route path="/taskmanager" element={<ChatPage />} />
+          <Route path="/workspaces/:wid/taskmanager" element={<ChatPage />} />
           <Route path="/notes" element={<NotesPage />} />
           <Route path="/docs/:folderId/*" element={<DocRedirect />} />
           <Route path="/profile" element={<ProfilePage />} />

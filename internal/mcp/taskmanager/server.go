@@ -1,7 +1,8 @@
-// Package orchestrationmcp 提供 opennexus-task MCP server，让主 agent 通过 MCP 工具
-// 管理工作区下的任务编排（tasks.json）：新增/更新/删除任务、启停任务、调整并发上限、列出现状。
+// Package taskmanagermcp 提供 opennexus-task MCP server，让主 agent 通过 MCP 工具
+// 管理工作区下的任务管理（tasks.json）：新增/更新/删除任务、启停任务、调整并发上限、列出现状。
 //
-// 编排任务持久化于工作区 cwd 下的 tasks.json，由调度器读取并基于 git worktree 隔离执行每个任务。
+// 编排任务持久化于工作区管理数据目录中的 tasks.json（与 agent 工作目录分离），
+// 由调度器读取并基于 git worktree 隔离执行每个任务。
 // 本 server 从原 opennexus-subagent 抽离而来，作为独立 MCP server 对外暴露。
 //
 // 暴露 7 个工具：
@@ -14,7 +15,7 @@
 //   - list_tasks： 列出编排任务现状
 //
 // 鉴权复用 opennexus-notes 的 Bearer token 体系（用户级共享一个 token）。
-package orchestrationmcp
+package taskmanagermcp
 
 import (
 	"context"
@@ -37,22 +38,22 @@ type WorkspaceResolver interface {
 	FindWorkspaceByID(id uint) (*models.Workspace, error)
 }
 
-// OrchestratorTaskCreator 由 *services.OrchestratorService 实现，
+// TaskManagerTaskCreator 由 *services.TaskManagerService 实现，
 // 用于通过 MCP 工具管理编排任务（创建/更新/删除/启停/调整并发）。
-type OrchestratorTaskCreator interface {
-	UpsertTask(cwd string, task models.OrchestrationTask) error
+type TaskManagerTaskCreator interface {
+	UpsertTask(cwd string, task models.TaskManagerTask) error
 	DeleteTask(cwd, taskID string) error
 	SetMaxParallel(cwd string, maxParallel int) error
 	Stop(cwd, taskID string) error
 	Start(ctx context.Context, cwd string, workspaceID uint, userID uint, taskID string) error
-	Load(cwd string) (*models.OrchestrationDef, error)
+	Load(cwd string) (*models.TaskManagerDef, error)
 }
 
-// Handler 返回带 Bearer 鉴权的 orchestration MCP Streamable HTTP Handler。
+// Handler 返回带 Bearer 鉴权的 taskmanager MCP Streamable HTTP Handler。
 //
 // prefsRepo 用于解析"继承父 agent"：任务不指定 agent 后端时取用户最近使用的 agent 类型。
 // wsResolver / orchCreator 用于编排工具（可传 nil 禁用）。
-func Handler(settings *repository.NoteSettingsRepository, prefsRepo *repository.UserAgentPrefsRepository, wsResolver WorkspaceResolver, orchCreator OrchestratorTaskCreator) http.Handler {
+func Handler(settings *repository.NoteSettingsRepository, prefsRepo *repository.UserAgentPrefsRepository, wsResolver WorkspaceResolver, orchCreator TaskManagerTaskCreator) http.Handler {
 	inner := mcp.NewStreamableHTTPHandler(func(r *http.Request) *mcp.Server {
 		return newServer(prefsRepo, wsResolver, orchCreator)
 	}, &mcp.StreamableHTTPOptions{Stateless: true})
@@ -67,7 +68,7 @@ func Handler(settings *repository.NoteSettingsRepository, prefsRepo *repository.
 	})
 }
 
-func newServer(prefsRepo *repository.UserAgentPrefsRepository, wsResolver WorkspaceResolver, orchCreator OrchestratorTaskCreator) *mcp.Server {
+func newServer(prefsRepo *repository.UserAgentPrefsRepository, wsResolver WorkspaceResolver, orchCreator TaskManagerTaskCreator) *mcp.Server {
 	srv := mcp.NewServer(&mcp.Implementation{Name: "opennexus-task", Version: "1.0.0"}, nil)
 
 	// addToolSafe 注册单个工具，并 recover mcp.AddTool 的 panic。
@@ -80,7 +81,7 @@ func newServer(prefsRepo *repository.UserAgentPrefsRepository, wsResolver Worksp
 	addTool := func(name string, register func()) {
 		defer func() {
 			if r := recover(); r != nil {
-				log.Printf("orchestration MCP: 跳过工具 %s（注册失败）: %v", name, r)
+				log.Printf("taskmanager MCP: 跳过工具 %s（注册失败）: %v", name, r)
 			}
 		}()
 		register()
@@ -89,9 +90,9 @@ func newServer(prefsRepo *repository.UserAgentPrefsRepository, wsResolver Worksp
 	addTool("create_task", func() {
 		mcp.AddTool(srv, &mcp.Tool{
 			Name:        "create_task",
-			Description: "在当前工作区的任务编排（tasks.json）中新增一个编排任务。任务默认 status=pending、priority=p1，可由编排调度器启动（基于 git worktree 隔离执行）。这是管理编排任务的首选方式（结构化、自带校验），优先于手写 tasks.json。",
-		}, func(ctx context.Context, _ *mcp.CallToolRequest, in createOrchTaskIn) (*mcp.CallToolResult, createOrchTaskOut, error) {
-			return handleCreateOrchTask(ctx, prefsRepo, wsResolver, orchCreator, in)
+			Description: "在当前工作区的任务管理（tasks.json）中新增一个编排任务。任务默认 status=pending、priority=p1，可由编排调度器启动（基于 git worktree 隔离执行）。这是管理编排任务的首选方式（结构化、自带校验），优先于手写 tasks.json。",
+		}, func(ctx context.Context, _ *mcp.CallToolRequest, in createTaskIn) (*mcp.CallToolResult, createTaskOut, error) {
+			return handleCreateTask(ctx, prefsRepo, wsResolver, orchCreator, in)
 		})
 	})
 
@@ -99,8 +100,8 @@ func newServer(prefsRepo *repository.UserAgentPrefsRepository, wsResolver Worksp
 		mcp.AddTool(srv, &mcp.Tool{
 			Name:        "update_task",
 			Description: "更新编排任务的可编辑字段（title/detail/agent_type/model_value/priority/depends_on）。按 task_id 匹配；运行时字段（status/session_id/worktree 等）保持不变。",
-		}, func(ctx context.Context, _ *mcp.CallToolRequest, in updateOrchTaskIn) (*mcp.CallToolResult, updateOrchTaskOut, error) {
-			return handleUpdateOrchTask(ctx, prefsRepo, wsResolver, orchCreator, in)
+		}, func(ctx context.Context, _ *mcp.CallToolRequest, in updateTaskIn) (*mcp.CallToolResult, updateTaskOut, error) {
+			return handleUpdateTask(ctx, prefsRepo, wsResolver, orchCreator, in)
 		})
 	})
 
@@ -108,8 +109,8 @@ func newServer(prefsRepo *repository.UserAgentPrefsRepository, wsResolver Worksp
 		mcp.AddTool(srv, &mcp.Tool{
 			Name:        "delete_task",
 			Description: "按 task_id 删除编排任务。若任务正在运行会先停止并清理其 worktree。",
-		}, func(ctx context.Context, _ *mcp.CallToolRequest, in deleteOrchTaskIn) (*mcp.CallToolResult, deleteOrchTaskOut, error) {
-			return handleDeleteOrchTask(ctx, wsResolver, orchCreator, in)
+		}, func(ctx context.Context, _ *mcp.CallToolRequest, in deleteTaskIn) (*mcp.CallToolResult, deleteTaskOut, error) {
+			return handleDeleteTask(ctx, wsResolver, orchCreator, in)
 		})
 	})
 
@@ -117,8 +118,8 @@ func newServer(prefsRepo *repository.UserAgentPrefsRepository, wsResolver Worksp
 		mcp.AddTool(srv, &mcp.Tool{
 			Name:        "start_task",
 			Description: "启动编排任务。task_id 留空则启动全部待执行（pending/failed/canceled/interrupt）任务，否则仅启动指定任务。任务在其专属 git worktree 内执行。",
-		}, func(ctx context.Context, _ *mcp.CallToolRequest, in startOrchTaskIn) (*mcp.CallToolResult, startOrchTaskOut, error) {
-			return handleStartOrchTask(ctx, wsResolver, orchCreator, in)
+		}, func(ctx context.Context, _ *mcp.CallToolRequest, in startTaskIn) (*mcp.CallToolResult, startTaskOut, error) {
+			return handleStartTask(ctx, wsResolver, orchCreator, in)
 		})
 	})
 
@@ -126,8 +127,8 @@ func newServer(prefsRepo *repository.UserAgentPrefsRepository, wsResolver Worksp
 		mcp.AddTool(srv, &mcp.Tool{
 			Name:        "stop_task",
 			Description: "停止编排任务。task_id 留空则停止全部运行中/排队中任务，否则仅停止指定任务。",
-		}, func(ctx context.Context, _ *mcp.CallToolRequest, in stopOrchTaskIn) (*mcp.CallToolResult, stopOrchTaskOut, error) {
-			return handleStopOrchTask(ctx, wsResolver, orchCreator, in)
+		}, func(ctx context.Context, _ *mcp.CallToolRequest, in stopTaskIn) (*mcp.CallToolResult, stopTaskOut, error) {
+			return handleStopTask(ctx, wsResolver, orchCreator, in)
 		})
 	})
 
@@ -135,8 +136,8 @@ func newServer(prefsRepo *repository.UserAgentPrefsRepository, wsResolver Worksp
 		mcp.AddTool(srv, &mcp.Tool{
 			Name:        "set_max_parallel",
 			Description: "设置编排并发上限 max_parallel（范围为 1~16，值为 1 时串行执行）。影响后续任务的并发调度。",
-		}, func(ctx context.Context, _ *mcp.CallToolRequest, in setOrchMaxParallelIn) (*mcp.CallToolResult, setOrchMaxParallelOut, error) {
-			return handleSetOrchMaxParallel(ctx, wsResolver, orchCreator, in)
+		}, func(ctx context.Context, _ *mcp.CallToolRequest, in setMaxParallelIn) (*mcp.CallToolResult, setMaxParallelOut, error) {
+			return handleSetMaxParallel(ctx, wsResolver, orchCreator, in)
 		})
 	})
 
@@ -144,8 +145,8 @@ func newServer(prefsRepo *repository.UserAgentPrefsRepository, wsResolver Worksp
 		mcp.AddTool(srv, &mcp.Tool{
 			Name:        "list_tasks",
 			Description: "列出当前工作区编排的所有任务（含 id/title/status/priority/agent_type/branch/cwd 等运行时状态），用于了解现状后再决定增删改或调度。",
-		}, func(ctx context.Context, _ *mcp.CallToolRequest, in listOrchTasksIn) (*mcp.CallToolResult, listOrchTasksOut, error) {
-			return handleListOrchTasks(ctx, wsResolver, orchCreator, in)
+		}, func(ctx context.Context, _ *mcp.CallToolRequest, in listTasksIn) (*mcp.CallToolResult, listTasksOut, error) {
+			return handleListTasks(ctx, wsResolver, orchCreator, in)
 		})
 	})
 
@@ -179,8 +180,8 @@ func resolveInheritedAgentType(prefsRepo *repository.UserAgentPrefsRepository, u
 	return last, nil
 }
 
-// resolveOrchCwd 校验工作区归属并返回 (uid, workspaceID, cwd)。所有编排工具共用此解析逻辑。
-func resolveOrchCwd(ctx context.Context, wsResolver WorkspaceResolver, workspaceID uint) (uint, uint, string, error) {
+// resolveTaskCwd 校验工作区归属并返回 (uid, workspaceID, cwd)。所有编排工具共用此解析逻辑。
+func resolveTaskCwd(ctx context.Context, wsResolver WorkspaceResolver, workspaceID uint) (uint, uint, string, error) {
 	uid, ok := userIDFrom(ctx)
 	if !ok {
 		return 0, 0, "", fmt.Errorf("未认证")
@@ -206,7 +207,7 @@ func resolveOrchCwd(ctx context.Context, wsResolver WorkspaceResolver, workspace
 
 // ====== create_task ======
 
-type createOrchTaskIn struct {
+type createTaskIn struct {
 	Title       string   `json:"title" jsonschema:"任务标题"`
 	Detail      string   `json:"detail" jsonschema:"任务详情，即发给 agent 的 prompt"`
 	AgentType   string   `json:"agent_type,omitempty" jsonschema:"执行任务的 agent 类型，留空则继承用户最近使用的 agent"`
@@ -216,59 +217,59 @@ type createOrchTaskIn struct {
 	WorkspaceID uint     `json:"workspace_id,omitempty" jsonschema:"工作区 ID，留空则使用默认工作区"`
 }
 
-type createOrchTaskOut struct {
+type createTaskOut struct {
 	TaskID string `json:"task_id"`
 	Title  string `json:"title"`
 }
 
-// handleCreateOrchTask 在指定工作区的 tasks.json 中新增一个编排任务（status=pending）。
-func handleCreateOrchTask(ctx context.Context, prefsRepo *repository.UserAgentPrefsRepository, wsResolver WorkspaceResolver, orchCreator OrchestratorTaskCreator, in createOrchTaskIn) (*mcp.CallToolResult, createOrchTaskOut, error) {
-	uid, _, cwd, err := resolveOrchCwd(ctx, wsResolver, in.WorkspaceID)
+// handleCreateTask 在指定工作区的管理数据目录 tasks.json 中新增一个编排任务（status=pending）。
+func handleCreateTask(ctx context.Context, prefsRepo *repository.UserAgentPrefsRepository, wsResolver WorkspaceResolver, orchCreator TaskManagerTaskCreator, in createTaskIn) (*mcp.CallToolResult, createTaskOut, error) {
+	uid, _, cwd, err := resolveTaskCwd(ctx, wsResolver, in.WorkspaceID)
 	if err != nil {
-		return nil, createOrchTaskOut{}, err
+		return nil, createTaskOut{}, err
 	}
 	if orchCreator == nil {
-		return nil, createOrchTaskOut{}, fmt.Errorf("编排任务创建未配置")
+		return nil, createTaskOut{}, fmt.Errorf("编排任务创建未配置")
 	}
 
 	title := strings.TrimSpace(in.Title)
 	detail := strings.TrimSpace(in.Detail)
 	if title == "" {
-		return nil, createOrchTaskOut{}, fmt.Errorf("title 必填")
+		return nil, createTaskOut{}, fmt.Errorf("title 必填")
 	}
 	if detail == "" {
-		return nil, createOrchTaskOut{}, fmt.Errorf("detail 必填")
+		return nil, createTaskOut{}, fmt.Errorf("detail 必填")
 	}
 
 	// agent_type：显式指定优先，否则继承父 agent
 	agentType, err := resolveAgentType(prefsRepo, uid, in.AgentType)
 	if err != nil {
-		return nil, createOrchTaskOut{}, err
+		return nil, createTaskOut{}, err
 	}
 
-	// 生成简短唯一 id（与前端 OrchestrationTaskDialog 一致：t + base36）
+	// 生成简短唯一 id（与前端 TaskManagerTaskDialog 一致：t + base36）
 	taskID := "t" + strconv.FormatInt(time.Now().UnixNano(), 36)
 
-	task := models.OrchestrationTask{
+	task := models.TaskManagerTask{
 		ID:         taskID,
 		Title:      title,
 		Detail:     detail,
 		AgentType:  agentType,
 		ModelValue: strings.TrimSpace(in.ModelValue),
-		Priority:   models.NormalizeOrchTaskPriority(in.Priority),
-		Status:     models.OrchTaskStatusPending,
+		Priority:   models.NormalizeTaskPriority(in.Priority),
+		Status:     models.TaskStatusPending,
 		DependsOn:  in.DependsOn,
 	}
 	if err := orchCreator.UpsertTask(cwd, task); err != nil {
-		return nil, createOrchTaskOut{}, fmt.Errorf("创建编排任务失败: %w", err)
+		return nil, createTaskOut{}, fmt.Errorf("创建编排任务失败: %w", err)
 	}
 
-	return nil, createOrchTaskOut{TaskID: taskID, Title: title}, nil
+	return nil, createTaskOut{TaskID: taskID, Title: title}, nil
 }
 
 // ====== update_task ======
 
-type updateOrchTaskIn struct {
+type updateTaskIn struct {
 	TaskID      string   `json:"task_id" jsonschema:"要更新的任务 id"`
 	Title       string   `json:"title,omitempty" jsonschema:"新标题，留空则不修改"`
 	Detail      string   `json:"detail,omitempty" jsonschema:"新任务详情(prompt)，留空则不修改"`
@@ -279,30 +280,30 @@ type updateOrchTaskIn struct {
 	WorkspaceID uint     `json:"workspace_id,omitempty" jsonschema:"工作区 ID"`
 }
 
-type updateOrchTaskOut struct {
+type updateTaskOut struct {
 	TaskID  string `json:"task_id"`
 	Updated bool   `json:"updated"`
 }
 
-func handleUpdateOrchTask(ctx context.Context, prefsRepo *repository.UserAgentPrefsRepository, wsResolver WorkspaceResolver, orchCreator OrchestratorTaskCreator, in updateOrchTaskIn) (*mcp.CallToolResult, updateOrchTaskOut, error) {
-	uid, _, cwd, err := resolveOrchCwd(ctx, wsResolver, in.WorkspaceID)
+func handleUpdateTask(ctx context.Context, prefsRepo *repository.UserAgentPrefsRepository, wsResolver WorkspaceResolver, orchCreator TaskManagerTaskCreator, in updateTaskIn) (*mcp.CallToolResult, updateTaskOut, error) {
+	uid, _, cwd, err := resolveTaskCwd(ctx, wsResolver, in.WorkspaceID)
 	if err != nil {
-		return nil, updateOrchTaskOut{}, err
+		return nil, updateTaskOut{}, err
 	}
 	if orchCreator == nil {
-		return nil, updateOrchTaskOut{}, fmt.Errorf("编排任务创建未配置")
+		return nil, updateTaskOut{}, fmt.Errorf("编排任务创建未配置")
 	}
 	taskID := strings.TrimSpace(in.TaskID)
 	if taskID == "" {
-		return nil, updateOrchTaskOut{}, fmt.Errorf("task_id 必填")
+		return nil, updateTaskOut{}, fmt.Errorf("task_id 必填")
 	}
 
 	// 先加载现有任务，保留运行时字段，仅覆盖传入的非空字段
 	def, err := orchCreator.Load(cwd)
 	if err != nil {
-		return nil, updateOrchTaskOut{}, fmt.Errorf("读取 tasks.json: %w", err)
+		return nil, updateTaskOut{}, fmt.Errorf("读取 tasks.json: %w", err)
 	}
-	var found *models.OrchestrationTask
+	var found *models.TaskManagerTask
 	for i := range def.Tasks {
 		if def.Tasks[i].ID == taskID {
 			found = &def.Tasks[i]
@@ -310,7 +311,7 @@ func handleUpdateOrchTask(ctx context.Context, prefsRepo *repository.UserAgentPr
 		}
 	}
 	if found == nil {
-		return nil, updateOrchTaskOut{}, fmt.Errorf("任务不存在: %s", taskID)
+		return nil, updateTaskOut{}, fmt.Errorf("任务不存在: %s", taskID)
 	}
 	t := *found
 	if strings.TrimSpace(in.Title) != "" {
@@ -322,7 +323,7 @@ func handleUpdateOrchTask(ctx context.Context, prefsRepo *repository.UserAgentPr
 	if strings.TrimSpace(in.AgentType) != "" {
 		// 校验 agent 类型存在性（继承解析会校验）
 		if _, rerr := resolveAgentType(prefsRepo, uid, in.AgentType); rerr != nil {
-			return nil, updateOrchTaskOut{}, rerr
+			return nil, updateTaskOut{}, rerr
 		}
 		t.AgentType = strings.TrimSpace(in.AgentType)
 	}
@@ -330,138 +331,138 @@ func handleUpdateOrchTask(ctx context.Context, prefsRepo *repository.UserAgentPr
 		t.ModelValue = strings.TrimSpace(in.ModelValue)
 	}
 	if strings.TrimSpace(in.Priority) != "" {
-		t.Priority = models.NormalizeOrchTaskPriority(in.Priority)
+		t.Priority = models.NormalizeTaskPriority(in.Priority)
 	}
 	if in.DependsOn != nil {
 		t.DependsOn = in.DependsOn
 	}
 	// UpsertTask 会保留运行时字段（session/状态/时间戳/worktree）
 	if err := orchCreator.UpsertTask(cwd, t); err != nil {
-		return nil, updateOrchTaskOut{}, fmt.Errorf("更新编排任务失败: %w", err)
+		return nil, updateTaskOut{}, fmt.Errorf("更新编排任务失败: %w", err)
 	}
-	return nil, updateOrchTaskOut{TaskID: taskID, Updated: true}, nil
+	return nil, updateTaskOut{TaskID: taskID, Updated: true}, nil
 }
 
 // ====== delete_task ======
 
-type deleteOrchTaskIn struct {
+type deleteTaskIn struct {
 	TaskID      string `json:"task_id" jsonschema:"要删除的任务 id"`
 	WorkspaceID uint   `json:"workspace_id,omitempty" jsonschema:"工作区 ID"`
 }
 
-type deleteOrchTaskOut struct {
+type deleteTaskOut struct {
 	TaskID  string `json:"task_id"`
 	Deleted bool   `json:"deleted"`
 }
 
-func handleDeleteOrchTask(ctx context.Context, wsResolver WorkspaceResolver, orchCreator OrchestratorTaskCreator, in deleteOrchTaskIn) (*mcp.CallToolResult, deleteOrchTaskOut, error) {
-	_, _, cwd, err := resolveOrchCwd(ctx, wsResolver, in.WorkspaceID)
+func handleDeleteTask(ctx context.Context, wsResolver WorkspaceResolver, orchCreator TaskManagerTaskCreator, in deleteTaskIn) (*mcp.CallToolResult, deleteTaskOut, error) {
+	_, _, cwd, err := resolveTaskCwd(ctx, wsResolver, in.WorkspaceID)
 	if err != nil {
-		return nil, deleteOrchTaskOut{}, err
+		return nil, deleteTaskOut{}, err
 	}
 	if orchCreator == nil {
-		return nil, deleteOrchTaskOut{}, fmt.Errorf("编排任务创建未配置")
+		return nil, deleteTaskOut{}, fmt.Errorf("编排任务创建未配置")
 	}
 	taskID := strings.TrimSpace(in.TaskID)
 	if taskID == "" {
-		return nil, deleteOrchTaskOut{}, fmt.Errorf("task_id 必填")
+		return nil, deleteTaskOut{}, fmt.Errorf("task_id 必填")
 	}
 	if err := orchCreator.DeleteTask(cwd, taskID); err != nil {
-		return nil, deleteOrchTaskOut{}, fmt.Errorf("删除编排任务失败: %w", err)
+		return nil, deleteTaskOut{}, fmt.Errorf("删除编排任务失败: %w", err)
 	}
-	return nil, deleteOrchTaskOut{TaskID: taskID, Deleted: true}, nil
+	return nil, deleteTaskOut{TaskID: taskID, Deleted: true}, nil
 }
 
 // ====== start_task ======
 
-type startOrchTaskIn struct {
+type startTaskIn struct {
 	TaskID      string `json:"task_id,omitempty" jsonschema:"要启动的任务 id，留空则启动全部待执行任务"`
 	WorkspaceID uint   `json:"workspace_id,omitempty" jsonschema:"工作区 ID"`
 }
 
-type startOrchTaskOut struct {
+type startTaskOut struct {
 	Started bool   `json:"started"`
 	TaskID  string `json:"task_id,omitempty"`
 }
 
-func handleStartOrchTask(ctx context.Context, wsResolver WorkspaceResolver, orchCreator OrchestratorTaskCreator, in startOrchTaskIn) (*mcp.CallToolResult, startOrchTaskOut, error) {
-	uid, wsID, cwd, err := resolveOrchCwd(ctx, wsResolver, in.WorkspaceID)
+func handleStartTask(ctx context.Context, wsResolver WorkspaceResolver, orchCreator TaskManagerTaskCreator, in startTaskIn) (*mcp.CallToolResult, startTaskOut, error) {
+	uid, wsID, cwd, err := resolveTaskCwd(ctx, wsResolver, in.WorkspaceID)
 	if err != nil {
-		return nil, startOrchTaskOut{}, err
+		return nil, startTaskOut{}, err
 	}
 	if orchCreator == nil {
-		return nil, startOrchTaskOut{}, fmt.Errorf("编排任务创建未配置")
+		return nil, startTaskOut{}, fmt.Errorf("编排任务创建未配置")
 	}
 	taskID := strings.TrimSpace(in.TaskID)
 	if err := orchCreator.Start(ctx, cwd, wsID, uid, taskID); err != nil {
-		return nil, startOrchTaskOut{}, fmt.Errorf("启动编排任务失败: %w", err)
+		return nil, startTaskOut{}, fmt.Errorf("启动编排任务失败: %w", err)
 	}
-	return nil, startOrchTaskOut{Started: true, TaskID: taskID}, nil
+	return nil, startTaskOut{Started: true, TaskID: taskID}, nil
 }
 
 // ====== stop_task ======
 
-type stopOrchTaskIn struct {
+type stopTaskIn struct {
 	TaskID      string `json:"task_id,omitempty" jsonschema:"要停止的任务 id，留空则停止全部运行中任务"`
 	WorkspaceID uint   `json:"workspace_id,omitempty" jsonschema:"工作区 ID"`
 }
 
-type stopOrchTaskOut struct {
+type stopTaskOut struct {
 	Stopped bool   `json:"stopped"`
 	TaskID  string `json:"task_id,omitempty"`
 }
 
-func handleStopOrchTask(ctx context.Context, wsResolver WorkspaceResolver, orchCreator OrchestratorTaskCreator, in stopOrchTaskIn) (*mcp.CallToolResult, stopOrchTaskOut, error) {
-	_, _, cwd, err := resolveOrchCwd(ctx, wsResolver, in.WorkspaceID)
+func handleStopTask(ctx context.Context, wsResolver WorkspaceResolver, orchCreator TaskManagerTaskCreator, in stopTaskIn) (*mcp.CallToolResult, stopTaskOut, error) {
+	_, _, cwd, err := resolveTaskCwd(ctx, wsResolver, in.WorkspaceID)
 	if err != nil {
-		return nil, stopOrchTaskOut{}, err
+		return nil, stopTaskOut{}, err
 	}
 	if orchCreator == nil {
-		return nil, stopOrchTaskOut{}, fmt.Errorf("编排任务创建未配置")
+		return nil, stopTaskOut{}, fmt.Errorf("编排任务创建未配置")
 	}
 	taskID := strings.TrimSpace(in.TaskID)
 	if err := orchCreator.Stop(cwd, taskID); err != nil {
-		return nil, stopOrchTaskOut{}, fmt.Errorf("停止编排任务失败: %w", err)
+		return nil, stopTaskOut{}, fmt.Errorf("停止编排任务失败: %w", err)
 	}
-	return nil, stopOrchTaskOut{Stopped: true, TaskID: taskID}, nil
+	return nil, stopTaskOut{Stopped: true, TaskID: taskID}, nil
 }
 
 // ====== set_max_parallel ======
 
-type setOrchMaxParallelIn struct {
+type setMaxParallelIn struct {
 	MaxParallel int  `json:"max_parallel" jsonschema:"并发上限，范围 1~16，值为 1 时串行执行"`
 	WorkspaceID uint `json:"workspace_id,omitempty" jsonschema:"工作区 ID"`
 }
 
-type setOrchMaxParallelOut struct {
+type setMaxParallelOut struct {
 	MaxParallel int `json:"max_parallel"`
 }
 
-func handleSetOrchMaxParallel(ctx context.Context, wsResolver WorkspaceResolver, orchCreator OrchestratorTaskCreator, in setOrchMaxParallelIn) (*mcp.CallToolResult, setOrchMaxParallelOut, error) {
-	_, _, cwd, err := resolveOrchCwd(ctx, wsResolver, in.WorkspaceID)
+func handleSetMaxParallel(ctx context.Context, wsResolver WorkspaceResolver, orchCreator TaskManagerTaskCreator, in setMaxParallelIn) (*mcp.CallToolResult, setMaxParallelOut, error) {
+	_, _, cwd, err := resolveTaskCwd(ctx, wsResolver, in.WorkspaceID)
 	if err != nil {
-		return nil, setOrchMaxParallelOut{}, err
+		return nil, setMaxParallelOut{}, err
 	}
 	if orchCreator == nil {
-		return nil, setOrchMaxParallelOut{}, fmt.Errorf("编排任务创建未配置")
+		return nil, setMaxParallelOut{}, fmt.Errorf("编排任务创建未配置")
 	}
 	if in.MaxParallel < 1 || in.MaxParallel > 16 {
-		return nil, setOrchMaxParallelOut{}, fmt.Errorf("max_parallel 范围 1~16")
+		return nil, setMaxParallelOut{}, fmt.Errorf("max_parallel 范围 1~16")
 	}
 	if err := orchCreator.SetMaxParallel(cwd, in.MaxParallel); err != nil {
-		return nil, setOrchMaxParallelOut{}, fmt.Errorf("设置并发上限失败: %w", err)
+		return nil, setMaxParallelOut{}, fmt.Errorf("设置并发上限失败: %w", err)
 	}
-	return nil, setOrchMaxParallelOut{MaxParallel: in.MaxParallel}, nil
+	return nil, setMaxParallelOut{MaxParallel: in.MaxParallel}, nil
 }
 
 // ====== list_tasks ======
 
-type listOrchTasksIn struct {
+type listTasksIn struct {
 	WorkspaceID uint `json:"workspace_id,omitempty" jsonschema:"工作区 ID"`
 }
 
-// orchTaskSummary 是返回给 agent 的任务摘要（精简字段，避免泄露内部细节）。
-type orchTaskSummary struct {
+// taskSummary 是返回给 agent 的任务摘要（精简字段，避免泄露内部细节）。
+type taskSummary struct {
 	ID         string   `json:"id"`
 	Title      string   `json:"title"`
 	Status     string   `json:"status"`
@@ -474,30 +475,30 @@ type orchTaskSummary struct {
 	Error      string   `json:"error,omitempty"`
 }
 
-type listOrchTasksOut struct {
+type listTasksOut struct {
 	MaxParallel int               `json:"max_parallel"`
-	Tasks       []orchTaskSummary `json:"tasks"`
+	Tasks       []taskSummary `json:"tasks"`
 }
 
-func handleListOrchTasks(ctx context.Context, wsResolver WorkspaceResolver, orchCreator OrchestratorTaskCreator, in listOrchTasksIn) (*mcp.CallToolResult, listOrchTasksOut, error) {
-	_, _, cwd, err := resolveOrchCwd(ctx, wsResolver, in.WorkspaceID)
+func handleListTasks(ctx context.Context, wsResolver WorkspaceResolver, orchCreator TaskManagerTaskCreator, in listTasksIn) (*mcp.CallToolResult, listTasksOut, error) {
+	_, _, cwd, err := resolveTaskCwd(ctx, wsResolver, in.WorkspaceID)
 	if err != nil {
-		return nil, listOrchTasksOut{}, err
+		return nil, listTasksOut{}, err
 	}
 	if orchCreator == nil {
-		return nil, listOrchTasksOut{}, fmt.Errorf("编排任务创建未配置")
+		return nil, listTasksOut{}, fmt.Errorf("编排任务创建未配置")
 	}
 	def, err := orchCreator.Load(cwd)
 	if err != nil {
-		return nil, listOrchTasksOut{}, fmt.Errorf("读取 tasks.json: %w", err)
+		return nil, listTasksOut{}, fmt.Errorf("读取 tasks.json: %w", err)
 	}
-	tasks := make([]orchTaskSummary, 0, len(def.Tasks))
+	tasks := make([]taskSummary, 0, len(def.Tasks))
 	for _, t := range def.Tasks {
-		tasks = append(tasks, orchTaskSummary{
+		tasks = append(tasks, taskSummary{
 			ID: t.ID, Title: t.Title, Status: t.Status, Priority: t.Priority, AgentType: t.AgentType,
 			ModelValue: t.ModelValue, Branch: t.Branch, Cwd: t.WorktreePath,
 			DependsOn: t.DependsOn, Error: t.Error,
 		})
 	}
-	return nil, listOrchTasksOut{MaxParallel: def.MaxParallel, Tasks: tasks}, nil
+	return nil, listTasksOut{MaxParallel: def.MaxParallel, Tasks: tasks}, nil
 }

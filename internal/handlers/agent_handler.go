@@ -58,6 +58,9 @@ type AgentHandler struct {
 	cmdLister      AgentCommandLister
 	modeLister     AgentModeLister
 	statusLister   AgentStatusLister
+	// selectorFilters 是 config.yaml 中 agents.selector.filters 的正则列表，
+	// 随 GET /agents 透出，由前端对 agent+模型 合并下拉项做显示过滤。
+	selectorFilters []string
 }
 
 // NewAgentHandler 创建 AgentHandler。各依赖可为 nil。
@@ -75,6 +78,11 @@ func NewAgentHandler(lister AgentLister, prober AgentModelProber, cfgProber Agen
 	return h
 }
 
+// SetSelectorFilters 设置 agent+模型 合并下拉的显示过滤正则（来自配置文件）。
+func (h *AgentHandler) SetSelectorFilters(filters []string) {
+	h.selectorFilters = filters
+}
+
 // agentItem 是对外暴露的 agent 描述（隐藏 Backend 等内部字段）。
 type agentItem struct {
 	Type        string `json:"type"`
@@ -83,6 +91,7 @@ type agentItem struct {
 }
 
 // List GET /api/v1/agents — 列出可用 agent 类型。
+// selector_filters 是配置的 agent+模型 显示过滤正则（匹配串 "agentType/modelValue"）。
 func (h *AgentHandler) List(c *gin.Context) {
 	descs := h.lister.ListAgents()
 	items := make([]agentItem, 0, len(descs))
@@ -93,7 +102,11 @@ func (h *AgentHandler) List(c *gin.Context) {
 			Description: d.Description,
 		})
 	}
-	Success(c, http.StatusOK, gin.H{"agents": items})
+	filters := h.selectorFilters
+	if filters == nil {
+		filters = []string{}
+	}
+	Success(c, http.StatusOK, gin.H{"agents": items, "selector_filters": filters})
 }
 
 // Status GET /api/v1/agents/status — 返回所有 agent 类型的 ACP 连接状态。

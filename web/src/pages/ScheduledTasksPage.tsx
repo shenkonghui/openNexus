@@ -37,7 +37,7 @@ export default function ScheduledTasksPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [showForm, setShowForm] = useState(false)
-  const [editingId, setEditingId] = useState<number | null>(null)
+  const [editingId, setEditingId] = useState<string | null>(null)
   const [form, setForm] = useState<FormState>({
     name: '', agent_type: '', prompt: '', cron_expr: '*/5 * * * *',
     enabled: true, preset: '每 5 分钟', model_value: '', timeout_minutes: 5,

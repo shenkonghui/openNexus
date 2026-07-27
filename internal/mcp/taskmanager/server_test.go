@@ -1,4 +1,4 @@
-package orchestrationmcp
+package taskmanagermcp
 
 import (
 	"testing"
@@ -23,12 +23,12 @@ func TestNewServerDoesNotPanic(t *testing.T) {
 	}
 }
 
-// TestOrchestrationJSONSchemaTagsValid 校验所有编排工具输入结构都能成功推断 schema。
+// TestTaskManagerJSONSchemaTagsValid 校验所有编排工具输入结构都能成功推断 schema。
 // jsonschema-go 的 forType 在遇到形如 "WORD=" 的 tag（第一个 '=' 前不含空白）时会返回
 // "tag must not begin with 'WORD='" 错误，进而让 mcp.AddTool panic。
 // 历史上 set_max_parallel 的 tag "并发上限，1=串行，范围 1~16" 触发该规则，
 // 导致 AddTool panic → 整个 MCP server 对外 500 → 工具全部消失。此处做回归保护。
-func TestOrchestrationJSONSchemaTagsValid(t *testing.T) {
+func TestTaskManagerJSONSchemaTagsValid(t *testing.T) {
 	check := func(t *testing.T, err error) {
 		t.Helper()
 		if err != nil {
@@ -36,11 +36,11 @@ func TestOrchestrationJSONSchemaTagsValid(t *testing.T) {
 		}
 	}
 
-	t.Run("createOrchTaskIn", func(t *testing.T) { _, err := jsonschema.For[createOrchTaskIn](nil); check(t, err) })
-	t.Run("updateOrchTaskIn", func(t *testing.T) { _, err := jsonschema.For[updateOrchTaskIn](nil); check(t, err) })
-	t.Run("deleteOrchTaskIn", func(t *testing.T) { _, err := jsonschema.For[deleteOrchTaskIn](nil); check(t, err) })
-	t.Run("startOrchTaskIn", func(t *testing.T) { _, err := jsonschema.For[startOrchTaskIn](nil); check(t, err) })
-	t.Run("stopOrchTaskIn", func(t *testing.T) { _, err := jsonschema.For[stopOrchTaskIn](nil); check(t, err) })
-	t.Run("setOrchMaxParallelIn", func(t *testing.T) { _, err := jsonschema.For[setOrchMaxParallelIn](nil); check(t, err) })
-	t.Run("listOrchTasksIn", func(t *testing.T) { _, err := jsonschema.For[listOrchTasksIn](nil); check(t, err) })
+	t.Run("createTaskIn", func(t *testing.T) { _, err := jsonschema.For[createTaskIn](nil); check(t, err) })
+	t.Run("updateTaskIn", func(t *testing.T) { _, err := jsonschema.For[updateTaskIn](nil); check(t, err) })
+	t.Run("deleteTaskIn", func(t *testing.T) { _, err := jsonschema.For[deleteTaskIn](nil); check(t, err) })
+	t.Run("startTaskIn", func(t *testing.T) { _, err := jsonschema.For[startTaskIn](nil); check(t, err) })
+	t.Run("stopTaskIn", func(t *testing.T) { _, err := jsonschema.For[stopTaskIn](nil); check(t, err) })
+	t.Run("setMaxParallelIn", func(t *testing.T) { _, err := jsonschema.For[setMaxParallelIn](nil); check(t, err) })
+	t.Run("listTasksIn", func(t *testing.T) { _, err := jsonschema.For[listTasksIn](nil); check(t, err) })
 }

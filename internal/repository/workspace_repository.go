@@ -48,6 +48,16 @@ func (r *WorkspaceRepository) FindByUserIDAndCwd(userID uint, cwd string) (*mode
 	return &ws, nil
 }
 
+// FindByCwd 按 cwd 查找工作区（不限制用户，用于定时任务从文件路径反查）。
+func (r *WorkspaceRepository) FindByCwd(cwd string) (*models.Workspace, error) {
+	var ws models.Workspace
+	err := r.db.Where("cwd = ?", cwd).First(&ws).Error
+	if err != nil {
+		return nil, err
+	}
+	return &ws, nil
+}
+
 func (r *WorkspaceRepository) Update(id uint, updates map[string]interface{}) error {
 	return r.db.Model(&models.Workspace{}).Where("id = ?", id).Updates(updates).Error
 }

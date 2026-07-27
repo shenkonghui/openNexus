@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"fmt"
+	"log/slog"
 	"math/rand"
 	"net/http"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"opennexus/internal/models"
+	"opennexus/internal/workspacemeta"
 )
 
 // WorkspaceStore 暴露 workspace 相关能力。
@@ -227,6 +229,15 @@ func (h *WorkspaceHandler) Delete(c *gin.Context) {
 		Fail(c, http.StatusInternalServerError, "INTERNAL", err.Error())
 		return
 	}
+	// 同步清理该工作区的管理数据目录（tasks.json、执行记录、上传文件等）；
+	// 失败仅记日志，不影响删除结果。回退模式（meta 目录即 cwd）下不清理，避免误删工作目录。
+	if cwd := strings.TrimSpace(ws.Cwd); cwd != "" {
+		if metaDir := workspacemeta.DirFor(cwd); metaDir != cwd {
+			if err := os.RemoveAll(metaDir); err != nil {
+				slog.Warn("清理工作区管理数据目录失败", "dir", metaDir, "err", err)
+			}
+		}
+	}
 	Success(c, http.StatusOK, struct{}{})
 }
 
@@ -292,7 +303,7 @@ func (h *WorkspaceHandler) Save(c *gin.Context) {
 }
 
 // Upload POST /api/v1/workspaces/:id/uploads （multipart/form-data）
-// 接收前端拖拽的文件,落盘到 workspace.Cwd/.uploads/ 子目录,返回落盘后的绝对路径。
+// 接收前端拖拽的文件,落盘到工作区管理数据目录的 uploads/ 子目录,返回落盘后的绝对路径。
 // 用于"远程运行"场景下把浏览器端文件接入对话——前端拿到绝对路径后以 @<path> 引用,
 // 复用与本地场景相同的 @ 引用协议(后端无需感知附件概念)。
 //
@@ -317,9 +328,9 @@ func (h *WorkspaceHandler) Upload(c *gin.Context) {
 		Fail(c, http.StatusBadRequest, "NO_CWD", "工作区未配置目录")
 		return
 	}
-	// 落盘到 .uploads/ 子目录,避免污染工作区根目录。
+	// 落盘到工作区管理数据目录的 uploads/ 下，与 agent 工作目录分离，避免污染用户仓库。
 	// 额外按上传时间建一层日期目录,便于清理与隔离。
-	uploadDir := filepath.Join(cwd, ".uploads", time.Now().Format("20060102"))
+	uploadDir := filepath.Join(workspacemeta.UploadsDirFor(cwd), time.Now().Format("20060102"))
 	if err := os.MkdirAll(uploadDir, 0o755); err != nil {
 		Fail(c, http.StatusInternalServerError, "INTERNAL", "创建上传目录失败: "+err.Error())
 		return

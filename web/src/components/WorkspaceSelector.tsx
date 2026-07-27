@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { listWorkspaces, createWorkspace, deleteWorkspace, updateWorkspace, saveWorkspace } from '../api/workspaces'
 import type { Workspace } from '../types'
 import CreateWorkspaceDialog from './CreateWorkspaceDialog'
-import { ChevronUp, ChevronDown, Folder, Clock, Plus, MoreHorizontal } from 'lucide-react'
+import { ChevronUp, ChevronDown, Folder, Building2, Clock, Plus, MoreHorizontal } from 'lucide-react'
 import styles from './WorkspaceSelector.module.css'
 
 interface Props {
@@ -11,11 +11,15 @@ interface Props {
   onChange: (id: number) => void
   onRefresh?: () => void
   onError?: (message: string) => void
-  /** sidebar：侧边栏底部形态，无边框占满宽度、下拉向上弹出 */
-  variant?: 'header' | 'sidebar'
+  /** sidebar：侧边栏底部形态，无边框占满宽度、下拉向上弹出
+   *  compact：图标按钮形态，默认向下弹出，可在底部传 menuUp 向上弹出
+   *  topbar：顶部栏形态，flex 占满剩余空间、显示完整名称、下拉向下 */
+  variant?: 'header' | 'sidebar' | 'compact' | 'topbar'
+  /** 是否向上弹出下拉菜单；未指定时 sidebar 默认向上，其余默认向下 */
+  menuUp?: boolean
 }
 
-export default function WorkspaceSelector({ value, onChange, onRefresh, onError, variant = 'header' }: Props) {
+export default function WorkspaceSelector({ value, onChange, onRefresh, onError, variant = 'header', menuUp }: Props) {
   const { t } = useTranslation()
   const [workspaces, setWorkspaces] = useState<(Workspace & { session_count?: number })[]>([])
   const [open, setOpen] = useState(false)
@@ -111,15 +115,26 @@ export default function WorkspaceSelector({ value, onChange, onRefresh, onError,
   }
 
   return (
-    <div className={`${styles.container} ${variant === 'sidebar' ? styles.containerSidebar : ''}`} ref={ref}>
-      <button type="button" className={`${styles.trigger} ${variant === 'sidebar' ? styles.triggerSidebar : ''}`} onClick={() => setOpen((v) => !v)} title={t('workspace.title')}>
-        <span className={styles.icon}>{current?.mode === 'temporary' ? <Clock size={14} /> : <Folder size={14} />}</span>
-        <span className={styles.label}>{displayName(current?.name || t('workspace.default'))}</span>
-        <span className={styles.arrow}>{open ? <ChevronUp size={12} /> : <ChevronDown size={12} />}</span>
-      </button>
+    <div className={`${styles.container} ${variant === 'sidebar' ? styles.containerSidebar : ''} ${variant === 'compact' ? styles.containerCompact : ''} ${variant === 'topbar' ? styles.containerTopbar : ''}`} ref={ref}>
+      {variant === 'compact' ? (
+        <button
+          type="button"
+          className={`${styles.triggerCompact} ${open ? styles.triggerCompactActive : ''}`}
+          onClick={() => setOpen((v) => !v)}
+          title={displayName(current?.name || t('workspace.default'))}
+        >
+          {current?.mode === 'temporary' ? <Clock size={15} /> : <Building2 size={15} />}
+        </button>
+      ) : (
+        <button type="button" className={`${styles.trigger} ${variant === 'sidebar' ? styles.triggerSidebar : ''} ${variant === 'topbar' ? styles.triggerTopbar : ''}`} onClick={() => setOpen((v) => !v)} title={t('workspace.title')}>
+          <span className={styles.icon}>{current?.mode === 'temporary' ? <Clock size={14} /> : <Folder size={14} />}</span>
+          <span className={styles.label}>{displayName(current?.name || t('workspace.default'))}</span>
+          <span className={styles.arrow}>{open ? <ChevronUp size={12} /> : <ChevronDown size={12} />}</span>
+        </button>
+      )}
 
       {open && (
-        <div className={`${styles.dropdown} ${variant === 'sidebar' ? styles.dropdownUp : ''}`}>
+        <div className={`${styles.dropdown} ${(menuUp ?? variant === 'sidebar') ? styles.dropdownUp : ''}`}>
           {workspaces.length === 0 ? (
             <div className={styles.item}><span className={styles.itemName}>{t('workspace.empty')}</span></div>
           ) : workspaces.map((ws) => (

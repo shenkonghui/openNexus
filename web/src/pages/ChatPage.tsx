@@ -11,16 +11,17 @@ import { getAgentPrefs, patchAgentPrefs } from '../api/agentPrefs'
 import { WORKSPACE_STORAGE_KEY, useCurrentWorkspace } from '../hooks/useCurrentWorkspace'
 import { applyPrefsToConfigs, configsFromProbe, takeLegacyLocalAgentPrefs } from '../utils/agentPrefs'
 import { streamPrompt, subscribeStream, streamResumeTask, isTimeoutError, isSessionInactiveError } from '../api/sse'
-import { tasksUrl, newTaskUrl, sessionUrl, isNewTaskPath, isOrchestrationPath } from '../utils/routes'
-import type { Session, Message, AgentCommand, ConfigOption, SessionMode, AgentSkill, Execution, Agent, PermissionRequestPayload, RunningTask, AgentPrefs } from '../types'
+import { tasksUrl, newTaskUrl, sessionUrl, isNewTaskPath, isTaskManagerPath } from '../utils/routes'
+import type { Session, Message, AgentCommand, ConfigOption, ConfigOptionValue, SessionMode, AgentSkill, Execution, Agent, PermissionRequestPayload, RunningTask, AgentPrefs } from '../types'
 import { parsePermissionRequest } from '../utils/permission'
 import AppLayout, { SidebarToggleButton } from '../components/AppLayout'
+import WorkspaceSelector from '../components/WorkspaceSelector'
 import ErrorBanner from '../components/ErrorBanner'
 import LoadingSpinner from '../components/LoadingSpinner'
 import { type ConvState as ConvStatusState } from '../components/ConvStatusBar'
 import TaskModeSwitch, { type TaskMode } from '../components/TaskModeSwitch'
-import OrchestrationView from '../components/OrchestrationView'
-import { Plus, PanelRightClose, PanelRightOpen, Zap } from 'lucide-react'
+import TaskManagerView from '../components/TaskManagerView'
+import { PanelRightClose, PanelRightOpen } from 'lucide-react'
 import { useFileViewer } from '../context/FileViewerContext'
 import { saveLastDoc, loadDocFolders, loadDocSession, saveDocSession, clearDocSession, TASK_MODE_KEY, LAST_DOC_KEY_PREFIX, type DocTarget } from '../utils/docs'
 import { docEditSystemPrompt, docSessionTitle } from '../utils/docPrompt'
@@ -31,8 +32,8 @@ import styles from './ChatPage.module.css'
 
 // navigate 时携带的 state：initialPrompt/createdSession 用于新建会话跳转；
 // doc 用于侧边栏点击文档时，切到文档模式并打开指定文档。
-// taskMode 用于外部入口（如任务编排）强制指定顶层模式；draftPrompt 用于新建任务页预填输入框。
-type NavigateState = { initialPrompt?: string; createdSession?: Session; doc?: DocTarget; taskMode?: TaskMode; draftPrompt?: string; orchSessionId?: number }
+// taskMode 用于外部入口（如任务管理）强制指定顶层模式；draftPrompt 用于新建任务页预填输入框。
+type NavigateState = { initialPrompt?: string; createdSession?: Session; doc?: DocTarget; taskMode?: TaskMode; draftPrompt?: string; tmSessionId?: number }
 
 type ConvState = ConvStatusState
 
@@ -62,32 +63,32 @@ export default function ChatPage() {
 
   // 顶层 UI 模式（与 ACP SessionMode 正交）。localStorage 记忆，默认 coding。
   // 模式来自 registry；未识别的值回退到首个模式。
-  // navState.taskMode 优先：从任务编排等入口打开时强制指定（如“默认编程模式”）。
-  // 编排深链接（/orchestration）：检测路径初始化为编排模式。
-  // 编排不是「新建任务」可选类型：非编排路径下忽略持久化的 orchestration，回退 coding。
+  // navState.taskMode 优先：从任务管理等入口打开时强制指定（如“默认编程模式”）。
+  // 任务管理深链接（/taskmanager）：检测路径初始化为任务管理模式。
+  // 任务管理不是「新建任务」可选类型：非任务管理路径下忽略持久化的 taskmanager，回退 coding。
   const [taskMode, setTaskMode] = useState<TaskMode>(() => {
     if (navState?.taskMode) return navState.taskMode
-    if (isOrchestrationPath(location.pathname)) return 'orchestration'
+    if (isTaskManagerPath(location.pathname)) return 'taskmanager'
     const stored = localStorage.getItem(TASK_MODE_KEY) || 'coding'
-    return stored === 'orchestration' ? 'coding' : stored
+    return stored === 'taskmanager' ? 'coding' : stored
   })
   const handleTaskModeChange = useCallback((m: TaskMode) => {
     setTaskMode(m)
     localStorage.setItem(TASK_MODE_KEY, m)
   }, [])
 
-  // 编排深链接 ↔ 其他路径：ChatPage 同实例复用时需随 pathname 同步 taskMode。
-  // 进入编排路径 → 强制 orchestration；离开后若仍停在 orchestration → 回退 coding，
-  // 否则「新建任务」仍会命中编排分支，顶栏锁死为「编排」。
+  // 任务管理深链接 ↔ 其他路径：ChatPage 同实例复用时需随 pathname 同步 taskMode。
+  // 进入任务管理路径 → 强制 taskmanager；离开后若仍停在 taskmanager → 回退 coding，
+  // 否则「新建任务」仍会命中任务管理分支，顶栏锁死为「任务管理」。
   useEffect(() => {
-    if (isOrchestrationPath(location.pathname)) {
-      if (taskMode !== 'orchestration') {
-        setTaskMode('orchestration')
-        localStorage.setItem(TASK_MODE_KEY, 'orchestration')
+    if (isTaskManagerPath(location.pathname)) {
+      if (taskMode !== 'taskmanager') {
+        setTaskMode('taskmanager')
+        localStorage.setItem(TASK_MODE_KEY, 'taskmanager')
       }
       return
     }
-    if (taskMode === 'orchestration') {
+    if (taskMode === 'taskmanager') {
       setTaskMode('coding')
       localStorage.setItem(TASK_MODE_KEY, 'coding')
     }
@@ -184,7 +185,7 @@ export default function ChatPage() {
   const [session, setSession] = useState<Session | null>(null)
   const [messages, setMessages] = useState<Message[]>([])
   const [restoreRefreshKey, setRestoreRefreshKey] = useState(0)
-  // navState.draftPrompt 优先：从任务编排打开未运行任务时，用任务详情预填新建任务输入框。
+  // navState.draftPrompt 优先：从任务管理打开未运行任务时，用任务详情预填新建任务输入框。
   const [restoreInput, setRestoreInput] = useState<string | undefined>(() => navState?.draftPrompt)
   // 侧边栏点击编排任务会 navigate 到新建任务页并带 taskMode/draftPrompt。当目标就是当前路由时
   // （navigate 不重新挂载组件），仅靠上面的初始化不会生效，表现为“点击无反应”。这里以 location.key
@@ -290,6 +291,11 @@ export default function ChatPage() {
   const [selectedModel, setSelectedModel] = useState('')
   const [probeConfigs, setProbeConfigs] = useState<ConfigOption[]>([])
   const [probing, setProbing] = useState(false)
+  // agent+模型 合并下拉：各 agent 探测到的模型列表与配置的显示过滤正则（config.yaml agents.selector.filters）
+  const [agentModelsMap, setAgentModelsMap] = useState<Record<string, ConfigOptionValue[]>>({})
+  const [selectorFilters, setSelectorFilters] = useState<string[]>([])
+  // 合并下拉选中「另一 agent 的某模型」时暂存目标模型，待该 agent 探测完成后应用
+  const pendingModelRef = useRef('')
   const [creating, setCreating] = useState(false)
   // 新建任务页：YOLO 草稿，创建会话时写入
   const [yoloDraft, setYoloDraft] = useState(false)
@@ -406,6 +412,7 @@ export default function ChatPage() {
         getAgentPrefs().catch(() => ({ data: { last_agent_type: '', prefs: {} } as AgentPrefs })),
       ])
       setAgents(agentsResp.data.agents || [])
+      setSelectorFilters(agentsResp.data.selector_filters || [])
       setWorkspaceCwd(wsResp?.data.workspace?.cwd || '')
 
       let prefs = prefsResp.data
@@ -487,6 +494,15 @@ export default function ChatPage() {
       .catch((err) => setError(err instanceof Error ? err.message : t('common.failed')))
   }
 
+  // 会话详情页直接打开时 loadHomeData 不执行，这里单独拉一次 selector 过滤正则，
+  // 使会话页的 agent+模型 下拉也能应用 config.yaml 的显示过滤。
+  const filtersLoadedRef = useRef(false)
+  useEffect(() => {
+    if (!user || !hasSession || filtersLoadedRef.current) return
+    filtersLoadedRef.current = true
+    listAgents().then((r) => setSelectorFilters(r.data.selector_filters || [])).catch(() => {})
+  }, [user, hasSession])
+
   // 监听 agent 变化，探测 config options（新建页与文档模式都需要预探供模型选择）
   useEffect(() => {
     if (hasSession || (!isCreateMode && !isDocMode) || !selectedAgent) {
@@ -500,10 +516,18 @@ export default function ChatPage() {
       .then((r) => {
         if (!alive) return
         const opts = r.data.config_options || []
-        const applied = applyPrefsToConfigs(opts, agentPrefsRef.current.prefs[selectedAgent])
-        setProbeConfigs(applied)
+        let applied = applyPrefsToConfigs(opts, agentPrefsRef.current.prefs[selectedAgent])
         const modelOpt = applied.find((o) => o.category === 'model')
-        setSelectedModel(modelOpt?.current_value || '')
+        // 合并下拉选中的目标模型优先于探测/偏好默认值（仅在该模型确实存在时）
+        const pending = pendingModelRef.current
+        pendingModelRef.current = ''
+        let nextModel = modelOpt?.current_value || ''
+        if (pending && modelOpt?.options.some((v) => v.value === pending)) {
+          nextModel = pending
+          applied = applied.map((o) => (o.category === 'model' ? { ...o, current_value: pending } : o))
+        }
+        setProbeConfigs(applied)
+        setSelectedModel(nextModel)
       })
       .catch((err) => {
         if (!alive) return
@@ -522,6 +546,44 @@ export default function ChatPage() {
     if (hasSession || (!isCreateMode && !isDocMode) || !selectedAgent) return
     preconnectAgent(selectedAgent, workspaceCwd)
   }, [selectedAgent, workspaceCwd, hasSession, isCreateMode, isDocMode])
+
+  // 新建页：并行探测全部 agent 的模型列表，供 agent+模型 合并下拉展示全部组合。
+  // probeAgentConfigs 有前端缓存，当前选中 agent 的探测与上方 effect 共享结果，不会重复请求。
+  useEffect(() => {
+    if (hasSession || (!isCreateMode && !isDocMode) || agents.length === 0) return
+    let alive = true
+    for (const a of agents) {
+      probeAgentConfigs(a.type)
+        .then((r) => {
+          if (!alive) return
+          const modelOpt = (r.data.config_options || []).find((o) => o.category === 'model')
+          setAgentModelsMap((prev) => ({ ...prev, [a.type]: modelOpt?.options || [] }))
+        })
+        .catch(() => {
+          // 探测失败：记为空列表，下拉中退化为 agent 级单项（使用默认模型）
+          if (alive) setAgentModelsMap((prev) => (a.type in prev ? prev : { ...prev, [a.type]: [] }))
+        })
+    }
+    return () => { alive = false }
+  }, [agents, hasSession, isCreateMode, isDocMode])
+
+  // agent+模型 合并下拉的选择回调：同 agent 切模型直接应用；
+  // 跨 agent 切换时暂存目标模型，待该 agent 探测完成后应用（见上方 probe effect）。
+  function handleSelectAgentModel(agentType: string, modelValue: string) {
+    if (!agentType) return
+    if (agentType !== selectedAgent) {
+      pendingModelRef.current = modelValue
+      setSelectedAgent(agentType)
+      schedulePrefsPatch(modelValue
+        ? { last_agent_type: agentType, agent_type: agentType, configs: { model: modelValue } }
+        : { last_agent_type: agentType })
+      return
+    }
+    if (!modelValue || modelValue === selectedModel) return
+    setSelectedModel(modelValue)
+    setProbeConfigs((prev) => prev.map((o) => (o.category === 'model' ? { ...o, current_value: modelValue } : o)))
+    schedulePrefsPatch({ last_agent_type: agentType, agent_type: agentType, configs: { model: modelValue } })
+  }
 
   // 新建任务页：加载 agent 级 slash command / mode（探测完成后刷新）
   useEffect(() => {
@@ -630,9 +692,9 @@ export default function ChatPage() {
   // 等待 workspace 数据加载完成后再判断，避免在 sessions 尚未就绪时误跳到新建任务页。
   useEffect(() => {
     if (!user || hasSession || isCreateMode) return
-    // 编排页：路径已是 /orchestration 但 taskMode 可能尚未同步（同实例路由切换），
+    // 任务管理页：路径已是 /taskmanager 但 taskMode 可能尚未同步（同实例路由切换），
     // 必须按路径短路，否则会被下方「跳最近任务」抢走，表现为点编排进不去。
-    if (taskMode === 'orchestration' || isOrchestrationPath(location.pathname)) return
+    if (taskMode === 'taskmanager' || isTaskManagerPath(location.pathname)) return
     if (wsLoading || !workspaceId) return
     // 切换工作区时新会话为异步加载：sessions 尚未与当前 workspace 匹配时暂不跳转，
     // 否则会用旧工作区的会话跳回原工作区，表现为“无法切换工作区”。
@@ -1101,25 +1163,6 @@ export default function ChatPage() {
     setDocConvState('idle')
   }
 
-  // 文档模式「新建」：清空当前工作区共享的文档会话与历史，下次发送时重建新会话。
-  // 与编码模式的新建任务对应，使顶部栏在不同任务下保持一致。
-  function handleNewDocSession() {
-    if (workspaceId) clearDocSession(workspaceId)
-    docAbortRef.current?.abort()
-    docAbortRef.current = null
-    clearDocPermissions()
-    setDocSession(null)
-    setDocMessages([])
-    setDocModes([])
-    setDocConfigOptions([])
-    setDocCurrentModeId('')
-    lastDocPathRef.current = ''
-    // 已恢复标记指向当前工作区，避免恢复 effect 又拉回旧会话
-    docRestoredWorkspaceRef.current = workspaceId ?? null
-    setDocConvState('idle')
-    setError('')
-  }
-
   // 文档对话框模式选择（编码对话框形式）：会话未创建时仅本地记录，已创建则下发。
   async function handleDocSetMode(modeId: string) {
     if (!modeId || modeId === docCurrentModeId) return
@@ -1383,9 +1426,9 @@ export default function ChatPage() {
   if (authLoading) return <LoadingSpinner text={t('common.loading')} />
   if (!user) return null
 
-  // ============ 编排模式：在任务界面内管理编排任务（不走 LayoutRenderer，与 docs 特判并列） ============
-  // 以路径为准：同实例从会话页切到 /orchestration 时 taskMode 可能尚未同步，不能只看 state。
-  if (isOrchestrationPath(location.pathname)) {
+  // ============ 任务管理模式：在任务界面内管理编排任务（不走 LayoutRenderer，与 docs 特判并列） ============
+  // 以路径为准：同实例从会话页切到 /taskmanager 时 taskMode 可能尚未同步，不能只看 state。
+  if (isTaskManagerPath(location.pathname)) {
     return (
       <AppLayout sidebarProps={{ sessions, workspaceId, onDelete: handleDeleteSession, onRename: handleRenameSession, onWorkspaceChange: handleWorkspaceChange, onWorkspaceRefresh: handleWorkspaceRefresh }}>
         <div className={styles.main}>
@@ -1393,15 +1436,21 @@ export default function ChatPage() {
             <div className={styles.sysBar}>
               <SidebarToggleButton />
               {/* 编排是侧边栏独立页，不是任务类型；顶栏显示页标题，不走 TaskModeSwitch */}
-              <span className={styles.agentType}>{t('nav.orchestration')}</span>
+              <span className={styles.agentType}>{t('nav.taskmanager')}</span>
               <div className={styles.actions}>
+                <WorkspaceSelector
+                  variant="header"
+                  value={workspaceId ?? 0}
+                  onChange={handleWorkspaceChange}
+                  onRefresh={handleWorkspaceRefresh}
+                />
               </div>
             </div>
           </div>
           <div className={styles.content}>
             {error && <ErrorBanner message={error} onClose={() => setError('')} />}
             <div className={styles.layoutBody}>
-              <OrchestrationView workspaceId={workspaceId} cwd={workspaceCwd} agents={agents} restoreSessionId={navState?.orchSessionId} onError={setError} />
+              <TaskManagerView workspaceId={workspaceId} cwd={workspaceCwd} agents={agents} restoreSessionId={navState?.tmSessionId} onError={setError} />
             </div>
           </div>
         </div>
@@ -1451,6 +1500,9 @@ export default function ChatPage() {
           },
           selectedModel,
           probeConfigs,
+          agentModelsMap,
+          agentModelFilters: selectorFilters,
+          onSelectAgentModel: handleSelectAgentModel,
           onSelectModel: (val) => {
             setSelectedModel(val)
             setProbeConfigs((prev) => prev.map((o) => (o.category === 'model' ? { ...o, current_value: val } : o)))
@@ -1476,6 +1528,9 @@ export default function ChatPage() {
           onDocContentChange: () => {},
           docReloadKey,
           onCloseDoc: handleCloseDoc,
+          yoloEnabled,
+          yoloSaving,
+          onToggleYolo: handleToggleYolo,
           // 文档对话列复用编码对话框形式（模式/模型选择器），仅空态文案不同
           ...({
             __chatConfig: {
@@ -1509,6 +1564,7 @@ export default function ChatPage() {
           selectedModel: '',
           probeConfigs: [],
           onSelectModel: () => {},
+          agentModelFilters: selectorFilters,
           probing: false,
           pendingPermission,
           permissionResponding,
@@ -1526,6 +1582,9 @@ export default function ChatPage() {
           docTarget: null,
           docContent: '',
           onDocContentChange: () => {},
+          yoloEnabled,
+          yoloSaving,
+          onToggleYolo: handleToggleYolo,
           ...({
             __chatConfig: {
               configBar: 'coding',
@@ -1541,14 +1600,20 @@ export default function ChatPage() {
           <div className={styles.header}>
             <div className={styles.sysBar}>
               <SidebarToggleButton />
-              {/* 无编码会话（新建任务 / 文档待选）时可切换编码·文档；已有会话后锁定。编排走侧边栏。 */}
+              {/* 无编码会话（新建任务 / 文档待选）时可切换编码·文档；已有会话后锁定。任务管理走侧边栏。 */}
               <TaskModeSwitch
                 value={taskMode}
                 onChange={handleTaskModeChange}
                 disabled={hasSession}
               />
-              {canTogglePanels && (
-                <div className={styles.centerToggle}>
+              <div className={styles.actions}>
+                <WorkspaceSelector
+                  variant="header"
+                  value={workspaceId ?? 0}
+                  onChange={handleWorkspaceChange}
+                  onRefresh={handleWorkspaceRefresh}
+                />
+                {canTogglePanels && (
                   <button
                     type="button"
                     className={styles.iconBtn}
@@ -1557,27 +1622,7 @@ export default function ChatPage() {
                   >
                     {leftHidden ? <PanelRightOpen size={16} /> : <PanelRightClose size={16} />}
                   </button>
-                </div>
-              )}
-              <div className={styles.actions}>
-                <button
-                  type="button"
-                  className={`${styles.yoloBtn} ${yoloEnabled ? styles.yoloBtnOn : ''}`}
-                  onClick={handleToggleYolo}
-                  disabled={yoloSaving}
-                  title={t('session.yoloHint')}
-                >
-                  <Zap size={14} />
-                  {yoloEnabled ? t('session.yoloOn') : t('session.yoloOff')}
-                </button>
-                <button
-                  type="button"
-                  className={styles.newTaskBtn}
-                  onClick={() => (isDocs ? handleNewDocSession() : navigate(newTaskUrl(workspaceId)))}
-                  title={t('session.newSession')}
-                >
-                  <Plus size={16} />
-                </button>
+                )}
               </div>
             </div>
           </div>
@@ -1661,6 +1706,9 @@ export default function ChatPage() {
       onSelectAgent: (val) => { setSelectedAgent(val); if (val) schedulePrefsPatch({ last_agent_type: val }) },
       selectedModel,
       probeConfigs,
+      agentModelsMap,
+      agentModelFilters: selectorFilters,
+      onSelectAgentModel: handleSelectAgentModel,
       onSelectModel: (val) => {
         setSelectedModel(val)
         setProbeConfigs((prev) => prev.map((o) => (o.category === 'model' ? { ...o, current_value: val } : o)))
@@ -1682,7 +1730,11 @@ export default function ChatPage() {
       docTarget: null,
       docContent: '',
       onDocContentChange: () => {},
-      // 新建任务页的输入框采用受控值，支持从任务编排入口预填（draftPrompt）。
+      // 新建任务页：YOLO 草稿，创建会话时写入
+      yoloEnabled,
+      yoloSaving,
+      onToggleYolo: handleToggleYolo,
+      // 新建任务页的输入框采用受控值，支持从任务管理入口预填（draftPrompt）。
       restoreInput,
       onRestoreInputChange: setRestoreInput,
       // 统一配置栏：Agent + 模式 + 模型（与会话详情页共用同一套内置 configBar）
@@ -1711,11 +1763,17 @@ export default function ChatPage() {
           <div className={`${styles.header} ${styles.headerSingle}`}>
             <div className={styles.sessionInfo}>
               <SidebarToggleButton />
-              {/* 新建任务可选编码/文档；编排走侧边栏「任务编排」 */}
+              {/* 新建任务可选编码/文档；任务管理走侧边栏「任务管理」 */}
               <TaskModeSwitch value={taskMode} onChange={handleTaskModeChange} />
             </div>
-            {canTogglePanels && (
-              <div className={styles.centerToggle}>
+            <div className={styles.actions}>
+              <WorkspaceSelector
+                variant="header"
+                value={workspaceId ?? 0}
+                onChange={handleWorkspaceChange}
+                onRefresh={handleWorkspaceRefresh}
+              />
+              {canTogglePanels && (
                 <button
                   type="button"
                   className={styles.iconBtn}
@@ -1724,20 +1782,7 @@ export default function ChatPage() {
                 >
                   {leftHidden ? <PanelRightOpen size={16} /> : <PanelRightClose size={16} />}
                 </button>
-              </div>
-            )}
-            <div className={styles.actions}>
-              <button
-                type="button"
-                className={`${styles.yoloBtn} ${yoloEnabled ? styles.yoloBtnOn : ''}`}
-                onClick={handleToggleYolo}
-                disabled={yoloSaving}
-                title={t('session.yoloHint')}
-              >
-                <Zap size={14} />
-                {yoloEnabled ? t('session.yoloOn') : t('session.yoloOff')}
-              </button>
-              <button type="button" className={styles.newTaskBtn} onClick={() => navigate(newTaskUrl(workspaceId))} title={t('session.newSession')}><Plus size={16} /></button>
+              )}
             </div>
           </div>
 

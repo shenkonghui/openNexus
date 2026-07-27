@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-func TestOrchestrationDef_NumericTaskID(t *testing.T) {
+func TestTaskManagerDef_NumericTaskID(t *testing.T) {
 	data := []byte(`{
   "max_parallel": 3,
   "parent_session_id": 84,
@@ -14,7 +14,7 @@ func TestOrchestrationDef_NumericTaskID(t *testing.T) {
     {"id": 2, "title": "b", "detail": "d", "status": "pending"}
   ]
 }`)
-	var def OrchestrationDef
+	var def TaskManagerDef
 	if err := json.Unmarshal(data, &def); err != nil {
 		t.Fatalf("unmarshal failed: %v", err)
 	}
@@ -27,27 +27,27 @@ func TestOrchestrationDef_NumericTaskID(t *testing.T) {
 	if len(def.Tasks[0].DependsOn) != 2 || def.Tasks[0].DependsOn[0] != "3" || def.Tasks[0].DependsOn[1] != "t4" {
 		t.Errorf("task0 depends_on = %v, want [3 t4]", def.Tasks[0].DependsOn)
 	}
-	if got := def.Tasks[0].Priority; got != OrchTaskPriorityP2 {
-		t.Errorf("task0 priority = %q, want %q", got, OrchTaskPriorityP2)
+	if got := def.Tasks[0].Priority; got != TaskPriorityP2 {
+		t.Errorf("task0 priority = %q, want %q", got, TaskPriorityP2)
 	}
 }
 
-func TestNormalizeOrchTaskPriority(t *testing.T) {
+func TestNormalizeTaskPriority(t *testing.T) {
 	cases := []struct {
 		in, want string
 	}{
-		{"", OrchTaskPriorityP1},
-		{"p0", OrchTaskPriorityP0},
-		{"P0", OrchTaskPriorityP0},
-		{"0", OrchTaskPriorityP0},
-		{"p1", OrchTaskPriorityP1},
-		{"2", OrchTaskPriorityP2},
-		{"p2", OrchTaskPriorityP2},
-		{"x", OrchTaskPriorityP1},
+		{"", TaskPriorityP1},
+		{"p0", TaskPriorityP0},
+		{"P0", TaskPriorityP0},
+		{"0", TaskPriorityP0},
+		{"p1", TaskPriorityP1},
+		{"2", TaskPriorityP2},
+		{"p2", TaskPriorityP2},
+		{"x", TaskPriorityP1},
 	}
 	for _, c := range cases {
-		if got := NormalizeOrchTaskPriority(c.in); got != c.want {
-			t.Errorf("NormalizeOrchTaskPriority(%q) = %q, want %q", c.in, got, c.want)
+		if got := NormalizeTaskPriority(c.in); got != c.want {
+			t.Errorf("NormalizeTaskPriority(%q) = %q, want %q", c.in, got, c.want)
 		}
 	}
 }

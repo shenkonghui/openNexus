@@ -23,10 +23,10 @@ export function sessionUrl(sessionId: number, workspaceId?: number | null): stri
   return `/sessions/${sessionId}`
 }
 
-// 任务编排页
-export function orchestrationUrl(workspaceId?: number | null): string {
-  if (workspaceId) return `/workspaces/${workspaceId}/orchestration`
-  return '/orchestration'
+// 任务管理页
+export function taskManagerUrl(workspaceId?: number | null): string {
+  if (workspaceId) return `/workspaces/${workspaceId}/taskmanager`
+  return '/taskmanager'
 }
 
 // 判断当前路径是否为任务列表页（兼容新旧两种 URL）
@@ -41,7 +41,7 @@ export function isNewTaskPath(pathname: string, workspaceId?: number | null): bo
   return pathname === '/new'
 }
 
-// 判断当前路径是否为任务编排页（兼容新旧两种 URL）
-export function isOrchestrationPath(pathname: string): boolean {
-  return pathname === '/orchestration' || /^\/workspaces\/\d+\/orchestration$/.test(pathname)
+// 判断当前路径是否为任务管理页（兼容新旧两种 URL）
+export function isTaskManagerPath(pathname: string): boolean {
+  return pathname === '/taskmanager' || /^\/workspaces\/\d+\/taskmanager$/.test(pathname)
 }

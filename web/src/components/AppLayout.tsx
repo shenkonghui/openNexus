@@ -63,8 +63,8 @@ export function SidebarToggleButton() {
 }
 
 interface AppLayoutProps {
-  // 透传给 SessionSidebar 的 props（onCollapse 由本组件自动注入，不可外部覆盖）
-  sidebarProps: Omit<ComponentProps<typeof SessionSidebar>, 'onCollapse'>
+  // 透传给 SessionSidebar 的 props（onCollapse / yolo 相关由本组件自动注入，不可外部覆盖）
+  sidebarProps: Omit<ComponentProps<typeof SessionSidebar>, 'onCollapse' | 'yoloEnabled' | 'yoloSaving' | 'onToggleYolo'>
   children: ReactNode
 }
 
@@ -211,6 +211,7 @@ export default function AppLayout({ sidebarProps, children }: AppLayoutProps) {
               <Link to={newTaskUrl(workspaceId)} className={styles.logo} title={t('session.newSession')}>
                 <NexusLogoIcon size={22} />
               </Link>
+
               <div className={styles.viewSwitch} role="tablist" aria-label={t('sidebar.menuTab') + '/' + t('sidebar.filesTab')}>
                 <button
                   type="button"
@@ -244,7 +245,7 @@ export default function AppLayout({ sidebarProps, children }: AppLayoutProps) {
             </div>
             <div className={styles.sidebarBody}>
               <div className={styles.viewPane} style={{ display: view === 'menu' ? 'flex' : 'none' }}>
-                <SessionSidebar {...sidebarProps} hideLogo />
+                <SessionSidebar {...sidebarProps} hideLogo yoloEnabled={globalYolo} yoloSaving={yoloBusy} onToggleYolo={handleToggleGlobalYolo} />
               </div>
               <div className={styles.viewPane} style={{ display: view === 'files' ? 'flex' : 'none' }}>
                 {cwd ? (
@@ -253,21 +254,6 @@ export default function AppLayout({ sidebarProps, children }: AppLayoutProps) {
                   <div className={styles.filesEmpty}>{t('sidebar.noWorkspace')}</div>
                 )}
               </div>
-            </div>
-            {/* 左下角全局 YOLO 拨动开关 */}
-            <div className={styles.yoloBar}>
-              <span className={`${styles.yoloLabel} ${globalYolo ? styles.yoloLabelOn : ''}`}>YOLO</span>
-              <button
-                type="button"
-                role="switch"
-                aria-checked={globalYolo}
-                className={`${styles.yoloSwitch} ${globalYolo ? styles.yoloSwitchOn : ''}`}
-                onClick={handleToggleGlobalYolo}
-                disabled={yoloBusy}
-                title={t('sidebar.yoloHint')}
-              >
-                <span className={styles.yoloKnob} />
-              </button>
             </div>
           </div>
         )}

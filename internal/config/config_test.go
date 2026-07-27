@@ -159,6 +159,24 @@ func TestValidate_WorkspaceSessionDir_Default(t *testing.T) {
 	}
 }
 
+func TestValidate_WorkspaceMetaDir_Default(t *testing.T) {
+	cfg := &Config{
+		JWT:    JWTConfig{Secret: "this-is-a-very-long-jwt-secret-key-32+bytes!"},
+		Agents: AgentsConfig{Workspace: WorkspaceConfig{DefaultMode: "external"}},
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate 错误: %v", err)
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatalf("获取主目录失败: %v", err)
+	}
+	expected := filepath.Join(home, ".openNexus", "workspaces")
+	if cfg.Agents.Workspace.MetaDir != expected {
+		t.Errorf("MetaDir = %q, 期望 %q", cfg.Agents.Workspace.MetaDir, expected)
+	}
+}
+
 func TestValidate_DatabasePath_Default(t *testing.T) {
 	cfg := &Config{
 		JWT:    JWTConfig{Secret: "this-is-a-very-long-jwt-secret-key-32+bytes!"},
@@ -304,6 +322,21 @@ func TestValidate_WorkspaceSessionDir_EnvOverride(t *testing.T) {
 	}
 	if cfg.Agents.Workspace.SessionDir != "/custom/session-dir" {
 		t.Errorf("SessionDir 未被环境变量覆盖: %q", cfg.Agents.Workspace.SessionDir)
+	}
+}
+
+func TestValidate_WorkspaceMetaDir_EnvOverride(t *testing.T) {
+	t.Setenv("JWT_SECRET", "env-secret-from-env-var-long-enough")
+	t.Setenv("AGENTS_WORKSPACE_META_DIR", "/custom/meta-dir")
+	cfg, err := Load("testdata/config_test.yaml")
+	if err != nil {
+		t.Fatalf("Load 错误: %v", err)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate 错误: %v", err)
+	}
+	if cfg.Agents.Workspace.MetaDir != "/custom/meta-dir" {
+		t.Errorf("MetaDir 未被环境变量覆盖: %q", cfg.Agents.Workspace.MetaDir)
 	}
 }
 

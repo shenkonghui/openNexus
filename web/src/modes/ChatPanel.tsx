@@ -6,10 +6,11 @@ import PromptInput from '../components/PromptInput'
 import ConvStatusBar from '../components/ConvStatusBar'
 import PermissionDialog from '../components/PermissionDialog'
 import ModelSelector from '../components/ModelSelector'
+import AgentModelSelector from '../components/AgentModelSelector'
 import SessionModeSelector from '../components/SessionModeSelector'
 import ContextStats from '../components/ContextStats'
 import WorktreePicker from '../components/WorktreePicker'
-import { BookOpenText, Code2, FolderGit2 } from 'lucide-react'
+import { BookOpenText, Code2, FolderGit2, Zap } from 'lucide-react'
 import type { PanelCtx, ConfigBarKind } from './types'
 import styles from './ChatPanel.module.css'
 
@@ -62,39 +63,57 @@ export default function ChatPanel({
         ? t(placeholderKey)
         : t('session.promptPlaceholder')
 
-  // 统一配置栏：Agent + 模式 + 模型，所有模式复用同一套控件。
+  // 统一配置栏：Agent·模型 合并下拉 + 模式 + 其余配置，所有模式复用同一套控件。
   // 数据源优先用会话级 configOptions（会话详情页，可切换运行时配置），
   // 回退到 probeConfigs（新建任务页，探测出的配置）。
   const builtInConfigBar = configBar !== 'none' ? (() => {
     // 配置选项：会话级 configOptions（会话详情页）或 probeConfigs（新建任务页，已映射为 configOptions）
     const cfgOpts = ctx.configOptions.length > 0 ? ctx.configOptions : ctx.probeConfigs
     const onApplyCfg = ctx.onSetConfigOption
-    // Agent：新建任务页可选（有 agents 列表且 onSelectAgent 非空），会话详情页只读显示
+    // Agent：新建任务页可选（有 agents 列表），会话详情页锁定为当前 agent（仅可切模型）
     const hasAgentSelect = ctx.agents.length > 0 && ctx.session === null
-    const agentValue = hasAgentSelect ? ctx.selectedAgent : (ctx.session?.agent_type || '')
-    const agentDisplay = hasAgentSelect
-      ? ctx.agents.find((a) => a.type === ctx.selectedAgent)?.display_name || ''
-      : (ctx.session?.agent_type || '')
+    const modelOpt = cfgOpts.find((o) => o.category === 'model' && o.type === 'select' && o.options.length > 0)
+    // 合并下拉数据源：
+    // - 新建任务页：全部 agent + 各 agent 探测到的模型（agentModelsMap）；无 map 时退化为当前 agent 的探测模型
+    // - 会话详情页：仅当前 agent，模型来自会话级 model config option
+    const sessionAgentType = ctx.session?.agent_type || ''
+    const comboAgents = hasAgentSelect
+      ? ctx.agents
+      : sessionAgentType
+        ? [{ type: sessionAgentType, display_name: sessionAgentType }]
+        : []
+    const comboSelectedAgent = hasAgentSelect ? ctx.selectedAgent : sessionAgentType
+    const comboSelectedModel = hasAgentSelect ? ctx.selectedModel : (modelOpt?.current_value || '')
+    const comboModels = hasAgentSelect
+      ? (ctx.agentModelsMap ?? (ctx.selectedAgent && modelOpt ? { [ctx.selectedAgent]: modelOpt.options } : {}))
+      : (sessionAgentType && modelOpt ? { [sessionAgentType]: modelOpt.options } : {})
+    const handleComboSelect = (agentType: string, modelValue: string) => {
+      if (hasAgentSelect) {
+        if (ctx.onSelectAgentModel) {
+          ctx.onSelectAgentModel(agentType, modelValue)
+        } else {
+          ctx.onSelectAgent(agentType)
+          if (modelValue) ctx.onSelectModel(modelValue)
+        }
+      } else if (modelOpt && modelValue) {
+        // 会话详情页：agent 锁定，切换组合等价于切换模型 config option
+        onApplyCfg(modelOpt.id, modelValue)
+      }
+    }
 
     return (
       <div className={styles.configBar}>
         <div className={styles.configOptions}>
-          {/* Agent */}
-          {hasAgentSelect ? (
-            <select
-              className={styles.configSelect}
-              value={agentValue}
-              onChange={(e) => ctx.onSelectAgent(e.target.value)}
-              disabled={ctx.sending || ctx.probing}
-            >
-              {ctx.agents.length === 0 && <option value="">{t('docMode.noAgent')}</option>}
-              {ctx.agents.map((agent) => (
-                <option key={agent.type} value={agent.type}>{agent.display_name}</option>
-              ))}
-            </select>
-          ) : agentDisplay ? (
-            <span className={styles.configReadonly}>{agentDisplay}</span>
-          ) : null}
+          {/* Agent·模型 合并下拉（支持 config.yaml 正则过滤组合） */}
+          <AgentModelSelector
+            agents={comboAgents}
+            modelsByAgent={comboModels}
+            filters={ctx.agentModelFilters || []}
+            selectedAgent={comboSelectedAgent}
+            selectedModel={comboSelectedModel}
+            onSelect={handleComboSelect}
+            disabled={ctx.sending || ctx.probing}
+          />
 
           {/* 模式：统一用 SessionModeSelector */}
           <SessionModeSelector
@@ -104,11 +123,12 @@ export default function ChatPanel({
             disabled={ctx.sending}
           />
 
-          {/* 模型（及其它配置项）：用统一的 ModelSelector 渲染 */}
+          {/* 其余配置项（模型已合并进上方下拉，此处只剩「更多选项」） */}
           <ModelSelector
             options={cfgOpts}
             onApply={onApplyCfg}
             disabled={ctx.sending || ctx.probing}
+            hideModel
           />
 
           {/* 工作目录：仅新建任务页（无会话）可选，可选择已存在的 worktree/目录作为本次任务 cwd */}
@@ -124,6 +144,20 @@ export default function ChatPanel({
               <span className={styles.cwdBtnLabel}>
                 {cwdBaseName(ctx.selectedCwd || ctx.cwd) || t('session.selectWorktree')}
               </span>
+            </button>
+          )}
+
+          {/* 会话级 YOLO：放在任务配置栏末尾，开启时高亮 */}
+          {ctx.onToggleYolo && (
+            <button
+              type="button"
+              className={`${styles.yoloBtn} ${ctx.yoloEnabled ? styles.yoloBtnOn : ''}`}
+              onClick={ctx.onToggleYolo}
+              disabled={ctx.yoloSaving}
+              title={t('session.yoloHint')}
+            >
+              <Zap size={13} />
+              {ctx.yoloEnabled ? t('session.yoloOn') : t('session.yoloOff')}
             </button>
           )}
         </div>

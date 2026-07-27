@@ -14,19 +14,20 @@ import (
 )
 
 // legacyMCPNames 列出已下线的内置 MCP server 条目名，同步时从 mcp.json 清理残留。
-// opennexus-subagent 已删除（run_subagent 与原生 subagent 重叠，会话类工具并入编排体系）。
-var legacyMCPNames = []string{"opennexus-subagent"}
+// opennexus-subagent 已删除（run_subagent 与原生 subagent 重叠，会话类工具并入任务管理体系）。
+// opennexus-orchestration 是 orchestration→taskmanager 改名前留下的孤儿条目。
+var legacyMCPNames = []string{"opennexus-subagent", "opennexus-orchestration"}
 
-// OrchestrationMCPName 是 task MCP server 在 mcp.json 中的条目名。
-// 注：server 名为 opennexus-task（去 orchestration 概念），HTTP 路由仍为 /mcp/orchestration。
-const OrchestrationMCPName = "opennexus-task"
+// TaskManagerMCPName 是 task MCP server 在 mcp.json 中的条目名。
+// 注：server 名为 opennexus-task（与 taskmanager 概念解耦），HTTP 路由为 /mcp/taskmanager。
+const TaskManagerMCPName = "opennexus-task"
 
 // builtinMCPServers 列出需要同步到 mcp.json 的内置 MCP server 及其挂载路径。
 var builtinMCPServers = []struct {
 	Name string
 	Path string
 }{
-	{OrchestrationMCPName, "/mcp/orchestration"},
+	{TaskManagerMCPName, "/mcp/taskmanager"},
 }
 
 // SubAgentHandler 负责内置 MCP 条目的同步自愈。

@@ -16,13 +16,15 @@
   flex-direction: column;
 }
 
-/* 侧栏顶栏：Logo + 菜单/文件图标开关 + 折叠，同一行 */
+/* 侧栏顶栏：Logo + 菜单/文件图标开关 + 折叠，同一行。
+   高度由 --topbar-height 统一，与右侧页面顶栏（ChatPage sysBar）保持一致。 */
 .header {
   display: flex;
   align-items: center;
   gap: 4px;
   flex-shrink: 0;
-  padding: 8px 8px 8px 10px;
+  min-height: var(--topbar-height);
+  padding: 3px 8px 3px 10px;
   border-bottom: 1px solid var(--border);
   background: var(--bg-sidebar);
 }
@@ -128,68 +130,6 @@
   color: var(--text-muted);
   font-size: 12px;
   text-align: center;
-}
-
-/* 左下角全局 YOLO 拨动开关 */
-.yoloBar {
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 8px 12px;
-  border-top: 1px solid var(--border);
-  background: var(--bg-sidebar);
-}
-
-.yoloLabel {
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  color: var(--text-muted);
-  user-select: none;
-}
-
-.yoloLabelOn {
-  color: var(--warning, #d97706);
-}
-
-.yoloSwitch {
-  position: relative;
-  width: 36px;
-  height: 20px;
-  padding: 0;
-  border: none;
-  border-radius: 10px;
-  background: var(--bg-hover, rgba(0, 0, 0, 0.08));
-  cursor: pointer;
-  flex-shrink: 0;
-  transition: background 0.18s;
-}
-
-.yoloSwitch:disabled {
-  opacity: 0.6;
-  cursor: wait;
-}
-
-.yoloSwitchOn {
-  background: var(--warning, #d97706);
-}
-
-.yoloKnob {
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  width: 16px;
-  height: 16px;
-  border-radius: 50%;
-  background: #fff;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
-  transition: transform 0.18s;
-}
-
-.yoloSwitchOn .yoloKnob {
-  transform: translateX(16px);
 }
 
 /* 右侧主内容区：页面内容与文件编辑器共享 */

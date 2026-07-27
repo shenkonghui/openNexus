@@ -3,10 +3,10 @@ package models
 import "time"
 
 // 定时任务最近执行状态
+// 注：TaskStatusRunning / TaskStatusFailed 已统一在 taskmanager_task.go 定义（语义一致），
+// 此处仅保留定时任务独有的成功/跳过状态。
 const (
 	TaskStatusSuccess = "success"
-	TaskStatusRunning = "running"
-	TaskStatusFailed  = "failed"
 	TaskStatusSkipped = "skipped"
 )
 

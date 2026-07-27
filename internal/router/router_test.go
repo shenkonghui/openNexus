@@ -31,10 +31,10 @@ func (noopRegistrar) PreconnectAgent(string)                     {}
 // noopSchedulerMgr 是测试用的空 SchedulerManager。
 type noopSchedulerMgr struct{}
 
-func (noopSchedulerMgr) AddTask(*models.ScheduledTask) error    { return nil }
-func (noopSchedulerMgr) UpdateTask(*models.ScheduledTask) error { return nil }
-func (noopSchedulerMgr) RemoveTask(uint) error                  { return nil }
-func (noopSchedulerMgr) RunTask(uint) error                     { return nil }
+func (noopSchedulerMgr) AddTask(string, *models.TaskManagerTask) error    { return nil }
+func (noopSchedulerMgr) UpdateTask(string, *models.TaskManagerTask) error { return nil }
+func (noopSchedulerMgr) RemoveTask(string, string) error                    { return nil }
+func (noopSchedulerMgr) RunTask(string, string) error                       { return nil }
 
 func TestSetup_RegistersP5Routes(t *testing.T) {
 	db, err := database.Connect("file::memory:?cache=shared")
@@ -45,9 +45,8 @@ func TestSetup_RegistersP5Routes(t *testing.T) {
 	authSvc := services.NewAuthService(db, jwtSvc, 10)
 	agentRouter := agent.NewRouter(agent.NewRegistry(), nil)
 	agentCfgH := handlers.NewAgentConfigHandler(repository.NewAgentConfigRepository(db), noopRegistrar{})
-	schedTaskRepo := repository.NewScheduledTaskRepository(db)
-	execRepo := repository.NewTaskExecutionRepository(db)
-	schedTaskH := handlers.NewScheduledTaskHandler(schedTaskRepo, execRepo, noopSchedulerMgr{}, agentRouter, agentRouter)
+	wsRepo := repository.NewWorkspaceRepository(db)
+	schedTaskH := handlers.NewScheduledTaskHandler(wsRepo, noopSchedulerMgr{})
 
 	skillsCfg := config.SkillsConfig{UserDirs: []string{t.TempDir()}}
 	commandsCfg := config.CommandsConfig{UserDirs: []string{t.TempDir()}}
@@ -59,7 +58,7 @@ func TestSetup_RegistersP5Routes(t *testing.T) {
 	taskSettingsH := handlers.NewTaskSettingsHandler(taskSettingsRepo)
 	agentPrefsH := handlers.NewAgentPrefsHandler(repository.NewUserAgentPrefsRepository(db))
 	logH := handlers.NewLogHandler(logging.NewLogHub(0))
-	engine := Setup(authSvc, jwtSvc, agentRouter, agentCfgH, nil, schedTaskH, noteH, taskSettingsH, agentPrefsH, nil, nil, logH, nil, nil, nil, nil, nil, skillsCfg, commandsCfg, rulesCfg, config.SubAgentsConfig{}, gin.TestMode, "", false)
+	engine := Setup(authSvc, jwtSvc, agentRouter, agentCfgH, nil, schedTaskH, noteH, taskSettingsH, agentPrefsH, nil, nil, logH, nil, nil, nil, nil, nil, skillsCfg, commandsCfg, rulesCfg, config.SubAgentsConfig{}, config.SelectorConfig{}, gin.TestMode, "", false)
 
 	want := []string{
 		"GET /api/v1/agents",

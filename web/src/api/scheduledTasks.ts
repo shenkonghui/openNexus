@@ -25,13 +25,13 @@ export function listScheduledTasks(workspaceId?: number): Promise<{ data: { task
 }
 
 // 获取单个定时任务
-export function getScheduledTask(id: number): Promise<{ data: ScheduledTask }> {
-  return apiFetch(`/scheduled-tasks/${id}`)
+export function getScheduledTask(id: string): Promise<{ data: ScheduledTask }> {
+  return apiFetch(`/scheduled-tasks/${encodeURIComponent(id)}`)
 }
 
 // 更新定时任务
 export function updateScheduledTask(
-  id: number,
+  id: string,
   payload: Partial<{
     name: string
     agent_type: string
@@ -43,23 +43,23 @@ export function updateScheduledTask(
     timeout_minutes: number
   }>,
 ): Promise<{ data: ScheduledTask }> {
-  return apiFetch(`/scheduled-tasks/${id}`, {
+  return apiFetch(`/scheduled-tasks/${encodeURIComponent(id)}`, {
     method: 'PUT',
     body: JSON.stringify(payload),
   })
 }
 
 // 删除定时任务
-export function deleteScheduledTask(id: number): Promise<void> {
-  return apiFetch(`/scheduled-tasks/${id}`, { method: 'DELETE' })
+export function deleteScheduledTask(id: string): Promise<void> {
+  return apiFetch(`/scheduled-tasks/${encodeURIComponent(id)}`, { method: 'DELETE' })
 }
 
 // 手动触发一次执行
-export function runScheduledTask(id: number): Promise<void> {
-  return apiFetch(`/scheduled-tasks/${id}/run`, { method: 'POST' })
+export function runScheduledTask(id: string): Promise<void> {
+  return apiFetch(`/scheduled-tasks/${encodeURIComponent(id)}/run`, { method: 'POST' })
 }
 
 // 获取定时任务执行历史
-export function listExecutions(id: number): Promise<{ data: { executions: Execution[] } }> {
-  return apiFetch(`/scheduled-tasks/${id}/executions`)
+export function listExecutions(id: string): Promise<{ data: { executions: Execution[] } }> {
+  return apiFetch(`/scheduled-tasks/${encodeURIComponent(id)}/executions`)
 }

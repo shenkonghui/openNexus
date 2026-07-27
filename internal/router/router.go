@@ -16,7 +16,7 @@ import (
 	"opennexus/internal/services"
 )
 
-func Setup(authSvc *services.AuthService, jwtSvc *services.JWTService, agentRouter *agent.Router, agentCfgH *handlers.AgentConfigHandler, registryH *handlers.RegistryHandler, schedTaskH *handlers.ScheduledTaskHandler, noteH *handlers.NoteHandler, taskSettingsH *handlers.TaskSettingsHandler, agentPrefsH *handlers.AgentPrefsHandler, configH *handlers.ConfigHandler, mcpH *handlers.MCPHandler, logH *handlers.LogHandler, debugH *handlers.DebugHandler, subAgentH *handlers.SubAgentHandler, orchH *handlers.OrchestrationHandler, permSettingsH *handlers.PermissionSettingsHandler, orchSvc *services.OrchestratorService, skillsCfg config.SkillsConfig, commandsCfg config.CommandsConfig, rulesCfg config.RulesConfig, subAgentsCfg config.SubAgentsConfig, mode, webDist string, autoLogin bool) *gin.Engine {
+func Setup(authSvc *services.AuthService, jwtSvc *services.JWTService, agentRouter *agent.Router, agentCfgH *handlers.AgentConfigHandler, registryH *handlers.RegistryHandler, schedTaskH *handlers.ScheduledTaskHandler, noteH *handlers.NoteHandler, taskSettingsH *handlers.TaskSettingsHandler, agentPrefsH *handlers.AgentPrefsHandler, configH *handlers.ConfigHandler, mcpH *handlers.MCPHandler, logH *handlers.LogHandler, debugH *handlers.DebugHandler, subAgentH *handlers.SubAgentHandler, tmH *handlers.TaskManagerHandler, permSettingsH *handlers.PermissionSettingsHandler, tmSvc *services.TaskManagerService, skillsCfg config.SkillsConfig, commandsCfg config.CommandsConfig, rulesCfg config.RulesConfig, subAgentsCfg config.SubAgentsConfig, selectorCfg config.SelectorConfig, mode, webDist string, autoLogin bool) *gin.Engine {
 	gin.SetMode(mode)
 	r := gin.New()
 	r.Use(gin.Recovery())
@@ -48,6 +48,7 @@ func Setup(authSvc *services.AuthService, jwtSvc *services.JWTService, agentRout
 			protected.POST("/me/password", authHandler.ChangePassword)
 
 			agentH := handlers.NewAgentHandler(agentRouter, agentRouter, agentRouter, agentRouter)
+			agentH.SetSelectorFilters(selectorCfg.Filters)
 			protected.GET("/agents", agentH.List)
 			protected.GET("/agents/status", agentH.Status)
 			protected.GET("/agents/:type/models", agentH.Models)
@@ -73,10 +74,10 @@ func Setup(authSvc *services.AuthService, jwtSvc *services.JWTService, agentRout
 			}
 
 			sessionH := handlers.NewSessionHandler(agentRouter)
-			// 注入编排服务：新建会话首次发送 prompt 时同步登记到 tasks.json，
-			// 使"新建对话"与编排任务在 tasks.json 中统一可见。
-			if orchSvc != nil {
-				sessionH.SetTaskRegistrar(orchSvc)
+			// 注入任务管理服务：新建会话首次发送 prompt 时同步登记到 tasks.json，
+			// 使"新建对话"与任务在 tasks.json 中统一可见。
+			if tmSvc != nil {
+				sessionH.SetTaskRegistrar(tmSvc)
 			}
 			protected.POST("/sessions", sessionH.Create)
 			protected.GET("/sessions", sessionH.List)
@@ -112,7 +113,7 @@ func Setup(authSvc *services.AuthService, jwtSvc *services.JWTService, agentRout
 			protected.PUT("/workspaces/:id", workspaceH.Update)
 			protected.DELETE("/workspaces/:id", workspaceH.Delete)
 			protected.POST("/workspaces/:id/save", workspaceH.Save)
-			// 拖拽文件上传(落盘到 workspace.Cwd/.uploads/,返回绝对路径供 @ 引用)
+			// 拖拽文件上传(落盘到工作区管理数据目录的 uploads/,返回绝对路径供 @ 引用)
 			protected.POST("/workspaces/:id/uploads", workspaceH.Upload)
 
 			// 会话工作目录文件浏览与编辑（路径限制在 session cwd 内）
@@ -184,19 +185,19 @@ func Setup(authSvc *services.AuthService, jwtSvc *services.JWTService, agentRout
 			}
 
 			// 任务管理（基于 tasks.json + git worktree 隔离）
-			if orchH != nil {
-				orch := protected.Group("/orchestration")
+			if tmH != nil {
+				tm := protected.Group("/taskmanager")
 				{
-					orch.GET("", orchH.Get)
-					orch.PUT("", orchH.Save)
-					orch.GET("/status", orchH.Status)
-					orch.GET("/git-status", orchH.GitStatus)
-					orch.POST("/git-init", orchH.GitInit)
-					orch.POST("/start", orchH.Start)
-					orch.POST("/stop", orchH.Stop)
-					orch.PUT("/max-parallel", orchH.SetMaxParallel)
-					orch.POST("/tasks", orchH.UpsertTask)
-					orch.DELETE("/tasks/:task_id", orchH.DeleteTask)
+					tm.GET("", tmH.Get)
+					tm.PUT("", tmH.Save)
+					tm.GET("/status", tmH.Status)
+					tm.GET("/git-status", tmH.GitStatus)
+					tm.POST("/git-init", tmH.GitInit)
+					tm.POST("/start", tmH.Start)
+					tm.POST("/stop", tmH.Stop)
+					tm.PUT("/max-parallel", tmH.SetMaxParallel)
+					tm.POST("/tasks", tmH.UpsertTask)
+					tm.DELETE("/tasks/:task_id", tmH.DeleteTask)
 				}
 			}
 

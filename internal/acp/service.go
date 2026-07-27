@@ -22,6 +22,7 @@ import (
 	"opennexus/internal/logging"
 	"opennexus/internal/models"
 	"opennexus/internal/repository"
+	"opennexus/internal/workspacemeta"
 )
 
 var (
@@ -2178,7 +2179,7 @@ func sessionCwd(session *models.Session, workspaces *repository.WorkspaceReposit
 }
 
 // sessionAdditionalDirs 返回 ACP 会话的 additionalDirectories：
-// 工作区附加目录（次级）+ skills/commands/rules 目录。
+// 工作区附加目录（次级）+ skills/commands/rules 目录 + 上传文件目录。
 func (s *Service) sessionAdditionalDirs(session *models.Session, cwd string) []string {
 	var wsDirs []string
 	if session.WorkspaceID != nil {
@@ -2191,9 +2192,18 @@ func (s *Service) sessionAdditionalDirs(session *models.Session, cwd string) []s
 	} else {
 		slog.Warn("会话无 WorkspaceID，无法获取附加目录", "sessionID", session.SessionID)
 	}
+	// 上传文件已移出 cwd（落在工作区管理数据目录），存在时一并授权，
+	// 使 agent 能读取 @<绝对路径> 引用的上传文件。
+	var uploadDirs []string
+	if up := workspacemeta.UploadsDirFor(cwd); up != "" && !strings.HasPrefix(up, cwd+string(filepath.Separator)) {
+		if info, err := os.Stat(up); err == nil && info.IsDir() {
+			uploadDirs = append(uploadDirs, up)
+		}
+	}
 	result := MergeAdditionalDirectories(
 		wsDirs,
 		s.skillAdditionalDirs(cwd),
+		uploadDirs,
 	)
 	slog.Info("会话 AdditionalDirectories", "sessionID", session.SessionID, "total", len(result), "dirs", result)
 	return result

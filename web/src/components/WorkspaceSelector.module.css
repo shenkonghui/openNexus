@@ -47,6 +47,61 @@
   text-align: left;
 }
 
+/* 顶部栏变体：flex 占满 header 剩余空间，下拉向下 */
+.containerTopbar {
+  flex: 1;
+  min-width: 0;
+}
+
+.triggerTopbar {
+  width: 100%;
+  max-width: none;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 3px 6px;
+  background: transparent;
+}
+
+.triggerTopbar:hover {
+  background: var(--bg-hover);
+  border-color: var(--border);
+}
+
+.triggerTopbar .label {
+  flex: 1;
+  text-align: left;
+}
+
+/* compact 图标按钮：与 SessionSidebar footerIcon 同风格 */
+.containerCompact {
+  position: relative;
+}
+
+.triggerCompact {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 28px;
+  padding: 0;
+  color: var(--text-secondary);
+  border: none;
+  background: transparent;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.2s, color 0.2s;
+}
+
+.triggerCompact:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.triggerCompactActive {
+  background: var(--accent-subtle);
+  color: var(--accent);
+}
+
 .icon {
   flex-shrink: 0;
 }

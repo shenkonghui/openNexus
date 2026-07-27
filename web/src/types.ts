@@ -144,7 +144,7 @@ export interface Message {
 
 // 定时任务
 export interface ScheduledTask {
-  id: number;
+  id: string;
   name: string;
   agent_type: string;
   workspace_id?: number;
@@ -152,11 +152,11 @@ export interface ScheduledTask {
   prompt: string;
   cron_expr: string;
   enabled: boolean;
-  user_id: number;
+  user_id?: number;
   timeout_minutes: number;
   model_value: string;
   session_id: string;
-  db_session_id: number;
+  db_session_id: number | null;
   last_run_at: string | null;
   last_status: 'success' | 'running' | 'failed' | 'skipped' | '';
   last_error: string;

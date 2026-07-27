@@ -13,7 +13,7 @@ import type { Agent, Message, Session, AgentCommand, ConfigOption, SessionMode, 
 import type { ConvState } from './ConvStatusBar'
 import type { PanelCtx } from '../modes/types'
 import ChatPanel from '../modes/ChatPanel'
-import styles from './OrchestrationChatPanel.module.css'
+import styles from './TaskManagerChatPanel.module.css'
 
 interface Props {
   agents: Agent[]
@@ -28,10 +28,19 @@ interface Props {
   onTaskChanged: () => void
 }
 
+// 编排工具调用特征：MCP 工具名或直接读写 tasks.json。命中即认为任务定义可能已变更。
+const TM_TOOL_RE = /(create|update|delete|start|stop)_task|set_max_parallel|tasks\.json/i
+
+// 判断消息是否为编排相关的工具调用（tool_call / tool_call_update）。
+function isTMToolMessage(msg: Message): boolean {
+  if (msg.kind !== 'tool_call' && msg.kind !== 'tool_call_update') return false
+  return TM_TOOL_RE.test(msg.raw_json || '') || TM_TOOL_RE.test(msg.content || '')
+}
+
 // 注入到首条 prompt 前的系统引导，告知 agent 其职责与可用工具。
 function buildSystemPrelude(): string {
   return [
-    '你是任务编排助手。请根据用户需求管理当前工作区的任务编排。',
+    '你是任务管理助手。请根据用户需求管理当前工作区的任务管理。',
     '编排工具由 opennexus-task 这个 MCP 服务器提供，已自动注入会话，直接调用即可：',
     '- list_tasks：列出任务现状（先了解再操作）',
     '- create_task：新增任务（title/detail 必填，即发给 agent 的 prompt；自动生成 id 并置 pending；priority 可选 p0/p1/p2，默认 p1）',
@@ -50,14 +59,14 @@ function buildSystemPrelude(): string {
 }
 
 /**
- * OrchestrationChatPanel：嵌入编排页右栏的 AI 管理对话面板。
+ * TaskManagerChatPanel：嵌入编排页右栏的 AI 管理对话面板。
  * 用户用自然语言描述需求，Agent 通过编排 MCP 工具（或读写 tasks.json）
  * 增删改任务、启停、调整并发，完成后通过 onTaskChanged 通知编排页刷新任务列表。
  * 单个任务的对话在其独立的会话页（与普通任务页一致）进行，不在本面板内。
  *
  * 直接复用任务页的 ChatPanel（含配置栏/状态条/权限弹窗），构造最小 PanelCtx。
  */
-export default function OrchestrationChatPanel({
+export default function TaskManagerChatPanel({
   agents, workspaceId, cwd, defaultAgentType, restoreSessionId, onTaskChanged,
 }: Props) {
   const { t } = useTranslation()
@@ -88,6 +97,17 @@ export default function OrchestrationChatPanel({
   const pendingMessagesRef = useRef<Message[]>([])
   const flushRafRef = useRef<number | null>(null)
   const mountedRef = useRef(true)
+  // 流式过程中检测到编排工具调用时防抖刷新任务列表，使左栏实时同步，
+  // 而非等整轮对话结束才刷新（agent 建完任务后可能继续长时间执行其他步骤）。
+  const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  function scheduleTaskRefresh() {
+    if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current)
+    refreshTimerRef.current = setTimeout(() => {
+      refreshTimerRef.current = null
+      if (mountedRef.current) onTaskChanged()
+    }, 400)
+  }
 
   // ===== 消息批量 flush（照搬 ChatPage，避免每个 chunk 一次 re-render）=====
   const flushMessages = useCallback(() => {
@@ -205,6 +225,7 @@ export default function OrchestrationChatPanel({
     return () => {
       mountedRef.current = false
       if (flushRafRef.current != null) cancelAnimationFrame(flushRafRef.current)
+      if (refreshTimerRef.current != null) clearTimeout(refreshTimerRef.current)
       abortRef.current?.abort()
     }
   }, [])
@@ -222,6 +243,13 @@ export default function OrchestrationChatPanel({
     restoredKeyRef.current = key
     let alive = true
     setConv('connecting')
+    // 避免后端接口异常/缓慢时恢复状态一直卡“等待响应”
+    const timeoutId = setTimeout(() => {
+      if (!alive) return
+      alive = false
+      setConv('idle')
+      setError(t('common.timeout'))
+    }, 10000)
     ;(async () => {
       try {
         let targetId = restoreSessionId
@@ -238,10 +266,14 @@ export default function OrchestrationChatPanel({
         setSelectedAgent(sResp.data.agent_type)
       } catch { /* 会话可能已删除：忽略，保持空会话，允许重新新建 */ }
       finally {
+        clearTimeout(timeoutId)
         if (alive) setConv('idle')
       }
     })()
-    return () => { alive = false }
+    return () => {
+      alive = false
+      clearTimeout(timeoutId)
+    }
   }, [workspaceId, restoreSessionId])
 
   // ===== 发送 =====
@@ -275,7 +307,7 @@ export default function OrchestrationChatPanel({
           const resp = await createSession(selectedAgent, workspaceId, selectedModel || undefined)
           activeSession = resp.data
           setSession(activeSession)
-          updateSessionTitle(activeSession.id, t('orchestration.aiTitle')).catch(() => {})
+          updateSessionTitle(activeSession.id, t('taskmanager.aiTitle')).catch(() => {})
           const extras = probeConfigs.filter((o) => o.type === 'select' && o.category !== 'model' && o.current_value)
           for (const o of extras) {
             try { await setConfigOption(activeSession.id, o.id, o.current_value) } catch { /* ignore */ }
@@ -311,6 +343,8 @@ export default function OrchestrationChatPanel({
           const req = parsePermissionRequest(msg.raw_json)
           if (req) enqueuePermission(req)
         }
+        // 编排工具调用（如 create_task）落地后即时刷新左栏任务列表
+        if (isTMToolMessage(msg)) scheduleTaskRefresh()
         if (msg.role !== 'user') enqueueMessage(msg)
         setConv((s) => (s === 'idle' ? 'streaming' : s))
       },
@@ -328,6 +362,8 @@ export default function OrchestrationChatPanel({
         clearPermissions()
         setConv('idle')
         setError(isTimeoutError(err) ? t('common.timeout') : err.message)
+        // 出错前 agent 可能已改动 tasks.json，仍需同步一次任务列表
+        onTaskChanged()
       },
       { signal: ac.signal },
     )
@@ -408,9 +444,9 @@ export default function OrchestrationChatPanel({
         <ChatPanel
           ctx={ctx}
           configBar="coding"
-          emptyTitleKey="orchestration.aiManageTitle"
-          emptyHintKey="orchestration.aiHint"
-          placeholderKey="orchestration.aiPlaceholder"
+          emptyTitleKey="taskmanager.aiManageTitle"
+          emptyHintKey="taskmanager.aiHint"
+          placeholderKey="taskmanager.aiPlaceholder"
         />
       </div>
     </div>

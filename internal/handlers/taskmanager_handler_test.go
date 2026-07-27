@@ -20,29 +20,29 @@ func (s *stubWorkspaceStore) FindWorkspaceByID(_ uint) (*models.Workspace, error
 	return s.ws, nil
 }
 
-func setupOrchRouter(t *testing.T, userID uint, cwd string) *gin.Engine {
+func setupTMRouter(t *testing.T, userID uint, cwd string) *gin.Engine {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
-	svc := services.NewOrchestratorService(nil)
+	svc := services.NewTaskManagerService(nil)
 	ws := &models.Workspace{UserID: userID, Cwd: cwd}
 	ws.ID = 1
-	h := NewOrchestrationHandler(svc, &stubWorkspaceStore{ws: ws})
+	h := NewTaskManagerHandler(svc, &stubWorkspaceStore{ws: ws})
 	r := gin.New()
 	r.Use(func(c *gin.Context) {
 		c.Set(middleware.UserIDKey(), userID)
 		c.Next()
 	})
 	g := r.Group("/api/v1")
-	g.GET("/orchestration", h.Get)
+	g.GET("/taskmanager", h.Get)
 	return r
 }
 
-// TestGetOrchestrationHandler 验证 GET /orchestration 返回空任务定义（tasks.json 不存在时）。
-func TestGetOrchestrationHandler(t *testing.T) {
+// TestGetTaskManagerHandler 验证 GET /taskmanager 返回空任务定义（tasks.json 不存在时）。
+func TestGetTaskManagerHandler(t *testing.T) {
 	cwd := t.TempDir()
-	r := setupOrchRouter(t, 9, cwd)
+	r := setupTMRouter(t, 9, cwd)
 
-	w := doJSON(t, r, "GET", "/api/v1/orchestration?workspace_id=1", nil)
+	w := doJSON(t, r, "GET", "/api/v1/taskmanager?workspace_id=1", nil)
 	if w.Code != http.StatusOK {
 		t.Fatalf("GET status=%d body=%s", w.Code, w.Body.String())
 	}

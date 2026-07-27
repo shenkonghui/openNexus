@@ -1,4 +1,4 @@
-package orchestrationmcp
+package taskmanagermcp
 
 import (
 	"context"

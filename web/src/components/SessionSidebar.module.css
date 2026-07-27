@@ -486,15 +486,16 @@
   border-top: 1px solid var(--border);
 }
 
-/* footer 顶部的工作区切换行 */
-.footerWorkspace {
-  margin-bottom: 2px;
-}
-
 .footerBar {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 4px;
+}
+
+.footerActions {
+  display: flex;
+  align-items: center;
   gap: 4px;
 }
 
@@ -522,6 +523,16 @@
 .footerIconActive {
   background: var(--accent-subtle);
   color: var(--accent);
+}
+
+.footerIconYolo {
+  color: var(--warning, #d97706);
+  background: rgba(217, 119, 6, 0.12);
+}
+
+.footerIconYolo:hover:not(:disabled) {
+  color: var(--warning, #d97706);
+  background: rgba(217, 119, 6, 0.2);
 }
 
 /* ===== 文件选择弹窗 ===== */

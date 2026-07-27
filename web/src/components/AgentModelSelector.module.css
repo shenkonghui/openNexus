@@ -1,0 +1,25 @@
+/* agent+模型 合并下拉：比单独的模型下拉更宽以容纳组合标签 */
+.select {
+  height: var(--config-control-height);
+  max-width: calc(var(--config-control-width) * 1.8);
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: var(--config-control-font);
+  background: var(--bg-input);
+  color: var(--text-primary);
+  cursor: pointer;
+  text-overflow: ellipsis;
+  line-height: 1;
+}
+
+.select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.select:disabled {
+  background: var(--bg-muted);
+  cursor: not-allowed;
+  color: var(--text-muted);
+}

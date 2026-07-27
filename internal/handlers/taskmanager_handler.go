@@ -11,24 +11,24 @@ import (
 	"opennexus/internal/services"
 )
 
-// OrchestrationWorkspaceStore 解析编排关联的工作区。
-type OrchestrationWorkspaceStore interface {
+// TaskManagerWorkspaceStore 解析编排关联的工作区。
+type TaskManagerWorkspaceStore interface {
 	FindWorkspaceByID(id uint) (*models.Workspace, error)
 }
 
-// OrchestrationHandler 处理任务编排相关请求。
-type OrchestrationHandler struct {
-	svc     *services.OrchestratorService
-	wsStore OrchestrationWorkspaceStore
+// TaskManagerHandler 处理任务管理相关请求。
+type TaskManagerHandler struct {
+	svc     *services.TaskManagerService
+	wsStore TaskManagerWorkspaceStore
 }
 
-// NewOrchestrationHandler 创建 OrchestrationHandler。
-func NewOrchestrationHandler(svc *services.OrchestratorService, wsStore OrchestrationWorkspaceStore) *OrchestrationHandler {
-	return &OrchestrationHandler{svc: svc, wsStore: wsStore}
+// NewTaskManagerHandler 创建 TaskManagerHandler。
+func NewTaskManagerHandler(svc *services.TaskManagerService, wsStore TaskManagerWorkspaceStore) *TaskManagerHandler {
+	return &TaskManagerHandler{svc: svc, wsStore: wsStore}
 }
 
 // resolveCwd 通过 workspace_id 解析 cwd，并校验归属当前用户。
-func (h *OrchestrationHandler) resolveCwd(c *gin.Context) (string, uint, bool) {
+func (h *TaskManagerHandler) resolveCwd(c *gin.Context) (string, uint, bool) {
 	uid, ok := currentUserID(c)
 	if !ok {
 		Fail(c, http.StatusUnauthorized, "UNAUTHORIZED", "未认证")
@@ -60,8 +60,8 @@ func (h *OrchestrationHandler) resolveCwd(c *gin.Context) (string, uint, bool) {
 	return ws.Cwd, ws.ID, true
 }
 
-// Get GET /api/v1/orchestration?workspace_id=123 — 读取 tasks.json
-func (h *OrchestrationHandler) Get(c *gin.Context) {
+// Get GET /api/v1/taskmanager?workspace_id=123 — 读取 tasks.json
+func (h *TaskManagerHandler) Get(c *gin.Context) {
 	cwd, _, ok := h.resolveCwd(c)
 	if !ok {
 		return
@@ -76,11 +76,11 @@ func (h *OrchestrationHandler) Get(c *gin.Context) {
 
 type saveDefRequest struct {
 	MaxParallel int                        `json:"max_parallel"`
-	Tasks       []models.OrchestrationTask `json:"tasks"`
+	Tasks       []models.TaskManagerTask `json:"tasks"`
 }
 
-// Save PUT /api/v1/orchestration?workspace_id=123 — 整体覆盖保存任务定义。
-func (h *OrchestrationHandler) Save(c *gin.Context) {
+// Save PUT /api/v1/taskmanager?workspace_id=123 — 整体覆盖保存任务定义。
+func (h *TaskManagerHandler) Save(c *gin.Context) {
 	cwd, _, ok := h.resolveCwd(c)
 	if !ok {
 		return
@@ -90,7 +90,7 @@ func (h *OrchestrationHandler) Save(c *gin.Context) {
 		Fail(c, http.StatusBadRequest, "INVALID_REQUEST", "请求参数无效")
 		return
 	}
-	def := &models.OrchestrationDef{MaxParallel: req.MaxParallel, Tasks: req.Tasks}
+	def := &models.TaskManagerDef{MaxParallel: req.MaxParallel, Tasks: req.Tasks}
 	if err := h.svc.Save(cwd, def); err != nil {
 		Fail(c, http.StatusInternalServerError, "INTERNAL", err.Error())
 		return
@@ -108,8 +108,8 @@ type upsertTaskRequest struct {
 	DependsOn  []string `json:"depends_on"`
 }
 
-// UpsertTask POST /api/v1/orchestration/tasks?workspace_id=123 — 新增/更新单个任务。
-func (h *OrchestrationHandler) UpsertTask(c *gin.Context) {
+// UpsertTask POST /api/v1/taskmanager/tasks?workspace_id=123 — 新增/更新单个任务。
+func (h *TaskManagerHandler) UpsertTask(c *gin.Context) {
 	cwd, _, ok := h.resolveCwd(c)
 	if !ok {
 		return
@@ -119,13 +119,13 @@ func (h *OrchestrationHandler) UpsertTask(c *gin.Context) {
 		Fail(c, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
 		return
 	}
-	task := models.OrchestrationTask{
+	task := models.TaskManagerTask{
 		ID:         strings.TrimSpace(req.ID),
 		Title:      strings.TrimSpace(req.Title),
 		Detail:     req.Detail,
 		AgentType:  req.AgentType,
 		ModelValue: strings.TrimSpace(req.ModelValue),
-		Priority:   models.NormalizeOrchTaskPriority(req.Priority),
+		Priority:   models.NormalizeTaskPriority(req.Priority),
 		DependsOn:  req.DependsOn,
 	}
 	if task.ID == "" {
@@ -136,11 +136,23 @@ func (h *OrchestrationHandler) UpsertTask(c *gin.Context) {
 		Fail(c, http.StatusInternalServerError, "INTERNAL", err.Error())
 		return
 	}
+	// 重新读取持久化后的任务（包含默认 status 等运行时字段）返回给前端。
+	saved, err := h.svc.Load(cwd)
+	if err != nil {
+		Fail(c, http.StatusInternalServerError, "INTERNAL", err.Error())
+		return
+	}
+	for i := range saved.Tasks {
+		if saved.Tasks[i].ID == task.ID {
+			Success(c, http.StatusOK, saved.Tasks[i])
+			return
+		}
+	}
 	Success(c, http.StatusOK, task)
 }
 
-// DeleteTask DELETE /api/v1/orchestration/tasks/:task_id?workspace_id=123
-func (h *OrchestrationHandler) DeleteTask(c *gin.Context) {
+// DeleteTask DELETE /api/v1/taskmanager/tasks/:task_id?workspace_id=123
+func (h *TaskManagerHandler) DeleteTask(c *gin.Context) {
 	cwd, _, ok := h.resolveCwd(c)
 	if !ok {
 		return
@@ -161,8 +173,8 @@ type setMaxParallelRequest struct {
 	MaxParallel int `json:"max_parallel" binding:"required"`
 }
 
-// SetMaxParallel PUT /api/v1/orchestration/max-parallel?workspace_id=123
-func (h *OrchestrationHandler) SetMaxParallel(c *gin.Context) {
+// SetMaxParallel PUT /api/v1/taskmanager/max-parallel?workspace_id=123
+func (h *TaskManagerHandler) SetMaxParallel(c *gin.Context) {
 	cwd, _, ok := h.resolveCwd(c)
 	if !ok {
 		return
@@ -183,8 +195,8 @@ type startRequest struct {
 	TaskID string `json:"task_id"`
 }
 
-// Start POST /api/v1/orchestration/start?workspace_id=123 — 启动全部或单个任务。
-func (h *OrchestrationHandler) Start(c *gin.Context) {
+// Start POST /api/v1/taskmanager/start?workspace_id=123 — 启动全部或单个任务。
+func (h *TaskManagerHandler) Start(c *gin.Context) {
 	cwd, wsID, ok := h.resolveCwd(c)
 	if !ok {
 		return
@@ -203,8 +215,8 @@ type stopRequest struct {
 	TaskID string `json:"task_id"`
 }
 
-// Stop POST /api/v1/orchestration/stop?workspace_id=123 — 停止全部或单个任务。
-func (h *OrchestrationHandler) Stop(c *gin.Context) {
+// Stop POST /api/v1/taskmanager/stop?workspace_id=123 — 停止全部或单个任务。
+func (h *TaskManagerHandler) Stop(c *gin.Context) {
 	cwd, _, ok := h.resolveCwd(c)
 	if !ok {
 		return
@@ -218,8 +230,8 @@ func (h *OrchestrationHandler) Stop(c *gin.Context) {
 	Success(c, http.StatusOK, gin.H{"stopped": true})
 }
 
-// Status GET /api/v1/orchestration/status?workspace_id=123 — 轮询各任务状态。
-func (h *OrchestrationHandler) Status(c *gin.Context) {
+// Status GET /api/v1/taskmanager/status?workspace_id=123 — 轮询各任务状态。
+func (h *TaskManagerHandler) Status(c *gin.Context) {
 	cwd, _, ok := h.resolveCwd(c)
 	if !ok {
 		return
@@ -232,9 +244,9 @@ func (h *OrchestrationHandler) Status(c *gin.Context) {
 	Success(c, http.StatusOK, gin.H{"max_parallel": def.MaxParallel, "tasks": def.Tasks})
 }
 
-// GitStatus GET /api/v1/orchestration/git-status?workspace_id=123
+// GitStatus GET /api/v1/taskmanager/git-status?workspace_id=123
 // 报告编排 cwd 是否为 git 仓库（编排任务需基于 worktree 隔离）。
-func (h *OrchestrationHandler) GitStatus(c *gin.Context) {
+func (h *TaskManagerHandler) GitStatus(c *gin.Context) {
 	cwd, _, ok := h.resolveCwd(c)
 	if !ok {
 		return
@@ -242,9 +254,9 @@ func (h *OrchestrationHandler) GitStatus(c *gin.Context) {
 	Success(c, http.StatusOK, gin.H{"cwd": cwd, "is_git_repo": h.svc.IsGitRepo(cwd)})
 }
 
-// GitInit POST /api/v1/orchestration/git-init?workspace_id=123
+// GitInit POST /api/v1/taskmanager/git-init?workspace_id=123
 // 在编排 cwd 初始化 git 仓库（含初始提交）并创建 .worktrees 目录。
-func (h *OrchestrationHandler) GitInit(c *gin.Context) {
+func (h *TaskManagerHandler) GitInit(c *gin.Context) {
 	cwd, _, ok := h.resolveCwd(c)
 	if !ok {
 		return

@@ -1,8 +1,8 @@
 import type { Agent, ModelOption, ConfigOption, AgentStatus, AgentCommand, SessionMode } from '../types'
 import { apiFetch } from './client'
 
-// 获取可用 agent 列表
-export function listAgents(): Promise<{ data: { agents: Agent[] } }> {
+// 获取可用 agent 列表（selector_filters 为 agent+模型 合并下拉的显示过滤正则，来自 config.yaml）
+export function listAgents(): Promise<{ data: { agents: Agent[]; selector_filters?: string[] } }> {
   return apiFetch('/agents')
 }
 

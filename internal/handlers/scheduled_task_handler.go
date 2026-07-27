@@ -11,38 +11,27 @@ import (
 
 	"opennexus/internal/models"
 	"opennexus/internal/repository"
+	"opennexus/internal/services"
 )
 
 // SchedulerManager 是 handler 操作定时任务所需的能力（*services.SchedulerService 实现该接口）。
 type SchedulerManager interface {
-	AddTask(t *models.ScheduledTask) error
-	UpdateTask(t *models.ScheduledTask) error
-	RemoveTask(taskID uint) error
-	RunTask(taskID uint) error
-}
-
-// ExecutionLister 按会话 ID 查询定时执行块聚合（*agent.Router 实现该接口）。
-type ExecutionLister interface {
-	ListExecutions(sessionID string) ([]repository.ExecutionAggregate, error)
-}
-
-// ScheduledTaskWorkspaceStore 解析定时任务关联的工作区。
-type ScheduledTaskWorkspaceStore interface {
-	FindWorkspaceByID(id uint) (*models.Workspace, error)
+	AddTask(cwd string, t *models.TaskManagerTask) error
+	UpdateTask(cwd string, t *models.TaskManagerTask) error
+	RemoveTask(cwd, taskID string) error
+	RunTask(cwd, taskID string) error
 }
 
 // ScheduledTaskHandler 处理定时任务相关请求。
+// 定时任务配置统一存储在 workspace cwd 下的 tasks.json 中。
 type ScheduledTaskHandler struct {
-	repo     *repository.ScheduledTaskRepository
-	execRepo *repository.TaskExecutionRepository
-	mgr      SchedulerManager
-	lister   ExecutionLister
-	wsStore  ScheduledTaskWorkspaceStore
+	wsRepo *repository.WorkspaceRepository
+	mgr    SchedulerManager
 }
 
 // NewScheduledTaskHandler 创建 ScheduledTaskHandler。
-func NewScheduledTaskHandler(repo *repository.ScheduledTaskRepository, execRepo *repository.TaskExecutionRepository, mgr SchedulerManager, lister ExecutionLister, wsStore ScheduledTaskWorkspaceStore) *ScheduledTaskHandler {
-	return &ScheduledTaskHandler{repo: repo, execRepo: execRepo, mgr: mgr, lister: lister, wsStore: wsStore}
+func NewScheduledTaskHandler(wsRepo *repository.WorkspaceRepository, mgr SchedulerManager) *ScheduledTaskHandler {
+	return &ScheduledTaskHandler{wsRepo: wsRepo, mgr: mgr}
 }
 
 type createTaskRequest struct {
@@ -73,7 +62,7 @@ func (h *ScheduledTaskHandler) Create(c *gin.Context) {
 		Fail(c, http.StatusUnauthorized, "UNAUTHORIZED", "未认证")
 		return
 	}
-	wsID, cwd, err := h.resolveWorkspace(uid, req.WorkspaceID, req.Cwd)
+	ws, cwd, err := h.resolveWorkspace(uid, &req.WorkspaceID, &req.Cwd)
 	if err != nil {
 		Fail(c, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
 		return
@@ -82,31 +71,40 @@ func (h *ScheduledTaskHandler) Create(c *gin.Context) {
 	if req.Enabled != nil {
 		enabled = *req.Enabled
 	}
-	task := &models.ScheduledTask{
-		Name:        strings.TrimSpace(req.Name),
-		AgentType:   req.AgentType,
-		WorkspaceID: wsID,
-		Cwd:         cwd,
-		Prompt:      req.Prompt,
-		CronExpr:   req.CronExpr,
-		Enabled:    enabled,
-		UserID:     uid,
-		ModelValue: strings.TrimSpace(req.ModelValue),
-	}
+	timeout := 5
 	if req.TimeoutMinutes != nil && *req.TimeoutMinutes > 0 {
-		task.TimeoutMinutes = *req.TimeoutMinutes
-	} else {
-		task.TimeoutMinutes = 5
+		timeout = *req.TimeoutMinutes
 	}
-	if err := h.mgr.AddTask(task); err != nil {
+
+	id := slugify(req.Name)
+	store := services.NewTaskStore(cwd)
+	for i := 1; ; i++ {
+		if _, err := store.FindTask(id); err != nil {
+			break
+		}
+		id = slugify(req.Name) + "-" + strconv.Itoa(i)
+	}
+	task := &models.TaskManagerTask{
+		ID:         id,
+		Title:      strings.TrimSpace(req.Name),
+		Detail:     req.Prompt,
+		AgentType:  req.AgentType,
+		ModelValue: strings.TrimSpace(req.ModelValue),
+		Priority:   models.TaskPriorityP1,
+		Schedule: &models.TaskSchedule{
+			CronExpr:       req.CronExpr,
+			Enabled:        enabled,
+			TimeoutMinutes: timeout,
+		},
+	}
+	if err := h.mgr.AddTask(cwd, task); err != nil {
 		Fail(c, http.StatusInternalServerError, "INTERNAL", err.Error())
 		return
 	}
-	Success(c, http.StatusCreated, task)
+	Success(c, http.StatusCreated, scheduledTaskResponse(ws, cwd, task))
 }
 
 // List GET /api/v1/scheduled-tasks?workspace_id=123
-// 支持按 workspace_id 过滤，不传则返回当前用户全部任务。
 func (h *ScheduledTaskHandler) List(c *gin.Context) {
 	uid, ok := currentUserID(c)
 	if !ok {
@@ -114,32 +112,52 @@ func (h *ScheduledTaskHandler) List(c *gin.Context) {
 		return
 	}
 	wsIDStr := c.Query("workspace_id")
-	var tasks []models.ScheduledTask
-	var err error
+	var out []gin.H
 	if wsIDStr != "" {
 		wsID, parseErr := strconv.ParseUint(wsIDStr, 10, 64)
 		if parseErr != nil {
 			Fail(c, http.StatusBadRequest, "INVALID_REQUEST", "workspace_id 参数无效")
 			return
 		}
-		tasks, err = h.repo.FindByUserIDAndWorkspace(uid, uint(wsID))
+		ws, err := h.wsRepo.FindByID(uint(wsID))
+		if err != nil || ws.UserID != uid {
+			Fail(c, http.StatusNotFound, "WORKSPACE_NOT_FOUND", "工作区不存在")
+			return
+		}
+		tasks, err := services.NewTaskStore(ws.Cwd).ListScheduledTasks()
+		if err != nil {
+			Fail(c, http.StatusInternalServerError, "INTERNAL", err.Error())
+			return
+		}
+		for i := range tasks {
+			out = append(out, scheduledTaskResponse(ws, ws.Cwd, &tasks[i]))
+		}
 	} else {
-		tasks, err = h.repo.FindByUserID(uid)
+		wss, err := h.wsRepo.FindByUserID(uid)
+		if err != nil {
+			Fail(c, http.StatusInternalServerError, "INTERNAL", err.Error())
+			return
+		}
+		for _, ws := range wss {
+			tasks, err := services.NewTaskStore(ws.Cwd).ListScheduledTasks()
+			if err != nil {
+				continue
+			}
+			for i := range tasks {
+				out = append(out, scheduledTaskResponse(&ws, ws.Cwd, &tasks[i]))
+			}
+		}
 	}
-	if err != nil {
-		Fail(c, http.StatusInternalServerError, "INTERNAL", err.Error())
-		return
-	}
-	Success(c, http.StatusOK, gin.H{"tasks": tasks})
+	Success(c, http.StatusOK, gin.H{"tasks": out})
 }
 
 // Get GET /api/v1/scheduled-tasks/:id
 func (h *ScheduledTaskHandler) Get(c *gin.Context) {
-	task, ok := h.loadOwnedTask(c)
+	_, task, ws, cwd, ok := h.loadOwnedTask(c)
 	if !ok {
 		return
 	}
-	Success(c, http.StatusOK, task)
+	Success(c, http.StatusOK, scheduledTaskResponse(ws, cwd, task))
 }
 
 type updateTaskRequest struct {
@@ -156,7 +174,7 @@ type updateTaskRequest struct {
 
 // Update PUT /api/v1/scheduled-tasks/:id
 func (h *ScheduledTaskHandler) Update(c *gin.Context) {
-	task, ok := h.loadOwnedTask(c)
+	uid, task, ws, cwd, ok := h.loadOwnedTask(c)
 	if !ok {
 		return
 	}
@@ -165,56 +183,65 @@ func (h *ScheduledTaskHandler) Update(c *gin.Context) {
 		Fail(c, http.StatusBadRequest, "INVALID_REQUEST", "请求参数无效")
 		return
 	}
-	if req.Name != nil {
-		task.Name = strings.TrimSpace(*req.Name)
-	}
-	if req.AgentType != nil {
-		task.AgentType = *req.AgentType
-	}
-	if req.WorkspaceID != nil {
-		wsID, cwd, err := h.resolveWorkspace(task.UserID, *req.WorkspaceID, "")
-		if err != nil {
-			Fail(c, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
-			return
-		}
-		task.WorkspaceID = wsID
-		task.Cwd = cwd
-	} else if req.Cwd != nil {
-		task.Cwd = *req.Cwd
-	}
-	if req.Prompt != nil {
-		task.Prompt = *req.Prompt
-	}
 	if req.CronExpr != nil {
 		if err := validateCron(*req.CronExpr); err != nil {
 			Fail(c, http.StatusBadRequest, "INVALID_CRON", err.Error())
 			return
 		}
-		task.CronExpr = *req.CronExpr
+	}
+	// 如果请求切换了工作区，先迁移任务到新 cwd
+	if req.WorkspaceID != nil || req.Cwd != nil {
+		newWS, newCwd, err := h.resolveWorkspace(uid, req.WorkspaceID, req.Cwd)
+		if err != nil {
+			Fail(c, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
+			return
+		}
+		if newCwd != cwd {
+			// 先在新位置新增，再从旧位置删除
+			if err := services.NewTaskStore(newCwd).UpsertTask(*task); err != nil {
+				Fail(c, http.StatusInternalServerError, "INTERNAL", err.Error())
+				return
+			}
+			_ = services.NewTaskStore(cwd).DeleteTask(task.ID)
+			cwd = newCwd
+			ws = newWS
+		}
+	}
+	if req.Name != nil {
+		task.Title = strings.TrimSpace(*req.Name)
+	}
+	if req.AgentType != nil {
+		task.AgentType = *req.AgentType
+	}
+	if req.Prompt != nil {
+		task.Detail = *req.Prompt
+	}
+	if req.CronExpr != nil {
+		task.Schedule.CronExpr = *req.CronExpr
 	}
 	if req.Enabled != nil {
-		task.Enabled = *req.Enabled
+		task.Schedule.Enabled = *req.Enabled
 	}
 	if req.ModelValue != nil {
 		task.ModelValue = strings.TrimSpace(*req.ModelValue)
 	}
 	if req.TimeoutMinutes != nil && *req.TimeoutMinutes > 0 {
-		task.TimeoutMinutes = *req.TimeoutMinutes
+		task.Schedule.TimeoutMinutes = *req.TimeoutMinutes
 	}
-	if err := h.mgr.UpdateTask(task); err != nil {
+	if err := h.mgr.UpdateTask(cwd, task); err != nil {
 		Fail(c, http.StatusInternalServerError, "INTERNAL", err.Error())
 		return
 	}
-	Success(c, http.StatusOK, task)
+	Success(c, http.StatusOK, scheduledTaskResponse(ws, cwd, task))
 }
 
 // Delete DELETE /api/v1/scheduled-tasks/:id
 func (h *ScheduledTaskHandler) Delete(c *gin.Context) {
-	task, ok := h.loadOwnedTask(c)
+	_, task, _, cwd, ok := h.loadOwnedTask(c)
 	if !ok {
 		return
 	}
-	if err := h.mgr.RemoveTask(task.ID); err != nil {
+	if err := h.mgr.RemoveTask(cwd, task.ID); err != nil {
 		Fail(c, http.StatusInternalServerError, "INTERNAL", err.Error())
 		return
 	}
@@ -223,97 +250,126 @@ func (h *ScheduledTaskHandler) Delete(c *gin.Context) {
 
 // Run POST /api/v1/scheduled-tasks/:id/run — 手动触发一次执行。
 func (h *ScheduledTaskHandler) Run(c *gin.Context) {
-	task, ok := h.loadOwnedTask(c)
+	_, task, _, cwd, ok := h.loadOwnedTask(c)
 	if !ok {
 		return
 	}
-	if err := h.mgr.RunTask(task.ID); err != nil {
+	if err := h.mgr.RunTask(cwd, task.ID); err != nil {
 		Fail(c, http.StatusInternalServerError, "INTERNAL", err.Error())
 		return
 	}
 	Success(c, http.StatusOK, struct{}{})
 }
 
-// Executions GET /api/v1/scheduled-tasks/:id/executions — 任务关联会话的执行块历史（含每次执行状态）。
+// Executions GET /api/v1/scheduled-tasks/:id/executions — 任务关联会话的执行块历史。
 func (h *ScheduledTaskHandler) Executions(c *gin.Context) {
-	task, ok := h.loadOwnedTask(c)
+	_, task, _, _, ok := h.loadOwnedTask(c)
 	if !ok {
 		return
 	}
 	if task.SessionID == "" {
-		Success(c, http.StatusOK, gin.H{"executions": []repository.ExecutionAggregate{}})
+		Success(c, http.StatusOK, gin.H{"executions": []models.TaskExecutionRecord{}})
 		return
 	}
-	execs, err := h.lister.ListExecutions(task.SessionID)
-	if err != nil {
-		Fail(c, http.StatusInternalServerError, "INTERNAL", err.Error())
-		return
-	}
-	// 合并 TaskExecution 表的状态
-	if h.execRepo != nil && len(execs) > 0 {
-		execIDs := make([]uint, 0, len(execs))
-		for _, e := range execs {
-			execIDs = append(execIDs, e.ExecutionID)
-		}
-		records, _ := h.execRepo.ListByTaskIDAndExecutionIDs(task.ID, execIDs)
-		statusMap := make(map[uint]*models.TaskExecution, len(records))
-		for i := range records {
-			statusMap[records[i].ExecutionID] = &records[i]
-		}
-		for i := range execs {
-			if rec, ok := statusMap[execs[i].ExecutionID]; ok {
-				execs[i].Status = rec.Status
-				execs[i].Error = rec.Error
-			}
-		}
-	}
-	Success(c, http.StatusOK, gin.H{"executions": execs})
+	Success(c, http.StatusOK, gin.H{"executions": task.Executions})
 }
 
 // loadOwnedTask 加载 :id 对应任务并校验归属；失败时已写入错误响应。
-func (h *ScheduledTaskHandler) loadOwnedTask(c *gin.Context) (*models.ScheduledTask, bool) {
-	idStr := c.Param("id")
-	id, err := strconv.ParseUint(idStr, 10, 64)
-	if err != nil || id == 0 {
+// 返回 (userID, task, workspace, cwd, ok)。
+func (h *ScheduledTaskHandler) loadOwnedTask(c *gin.Context) (uint, *models.TaskManagerTask, *models.Workspace, string, bool) {
+	taskID := c.Param("id")
+	if taskID == "" {
 		Fail(c, http.StatusBadRequest, "INVALID_REQUEST", "无效的任务 ID")
-		return nil, false
-	}
-	task, err := h.repo.FindByID(uint(id))
-	if err != nil || task == nil {
-		Fail(c, http.StatusNotFound, "TASK_NOT_FOUND", "定时任务不存在")
-		return nil, false
+		return 0, nil, nil, "", false
 	}
 	uid, ok := currentUserID(c)
-	if !ok || task.UserID != uid {
-		Fail(c, http.StatusNotFound, "TASK_NOT_FOUND", "定时任务不存在")
-		return nil, false
+	if !ok {
+		Fail(c, http.StatusUnauthorized, "UNAUTHORIZED", "未认证")
+		return 0, nil, nil, "", false
 	}
-	return task, true
+	wss, err := h.wsRepo.FindByUserID(uid)
+	if err != nil {
+		Fail(c, http.StatusInternalServerError, "INTERNAL", err.Error())
+		return 0, nil, nil, "", false
+	}
+	for i := range wss {
+		ws := &wss[i]
+		t, err := services.NewTaskStore(ws.Cwd).FindTask(taskID)
+		if err == nil {
+			return uid, t, ws, ws.Cwd, true
+		}
+	}
+	Fail(c, http.StatusNotFound, "TASK_NOT_FOUND", "定时任务不存在")
+	return 0, nil, nil, "", false
 }
 
-// resolveWorkspace 校验工作区归属并返回 workspace_id 与 cwd。
-func (h *ScheduledTaskHandler) resolveWorkspace(uid, workspaceID uint, fallbackCwd string) (uint, string, error) {
-	if workspaceID > 0 {
-		if h.wsStore == nil {
-			return 0, "", errors.New("工作区服务未配置")
+// resolveWorkspace 校验工作区归属并返回 workspace 与 cwd。
+func (h *ScheduledTaskHandler) resolveWorkspace(uid uint, workspaceID *uint, fallbackCwd *string) (*models.Workspace, string, error) {
+	if workspaceID != nil && *workspaceID > 0 {
+		ws, err := h.wsRepo.FindByID(*workspaceID)
+		if err != nil {
+			return nil, "", errors.New("工作区不存在")
 		}
-		ws, err := h.wsStore.FindWorkspaceByID(workspaceID)
-		if err != nil || ws == nil || ws.UserID != uid {
-			return 0, "", errors.New("工作区不存在")
+		if ws.UserID != uid {
+			return nil, "", errors.New("工作区不存在")
 		}
-		return ws.ID, ws.Cwd, nil
+		return ws, ws.Cwd, nil
 	}
-	if strings.TrimSpace(fallbackCwd) != "" {
-		return 0, strings.TrimSpace(fallbackCwd), nil
+	if fallbackCwd != nil && *fallbackCwd != "" {
+		ws, err := h.wsRepo.FindByUserIDAndCwd(uid, *fallbackCwd)
+		if err != nil {
+			return nil, "", errors.New("工作区不存在")
+		}
+		return ws, ws.Cwd, nil
 	}
-	return 0, "", errors.New("请选择工作区")
+	return nil, "", errors.New("缺少 workspace_id 或 cwd")
 }
 
-// validateCron 校验标准 5 字段 cron 表达式。
+// scheduledTaskResponse 把 TaskManagerTask 映射为前端兼容的 ScheduledTask JSON。
+func scheduledTaskResponse(ws *models.Workspace, cwd string, t *models.TaskManagerTask) gin.H {
+	resp := gin.H{
+		"id":            t.ID,
+		"name":          t.Title,
+		"agent_type":    t.AgentType,
+		"workspace_id":  ws.ID,
+		"cwd":           cwd,
+		"prompt":        t.Detail,
+		"model_value":   t.ModelValue,
+		"session_id":    t.SessionID,
+		"db_session_id": t.DBSessionID,
+	}
+	if t.Schedule != nil {
+		resp["cron_expr"] = t.Schedule.CronExpr
+		resp["enabled"] = t.Schedule.Enabled
+		resp["timeout_minutes"] = t.Schedule.TimeoutMinutes
+		resp["last_run_at"] = t.Schedule.LastRunAt
+		resp["last_status"] = t.Schedule.LastStatus
+		resp["last_error"] = t.Schedule.LastError
+	}
+	return resp
+}
+
+// slugify 把任务名转成适合作为文件 id 的字符串。
+func slugify(name string) string {
+	s := strings.TrimSpace(name)
+	s = strings.ToLower(s)
+	var b strings.Builder
+	for _, r := range s {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
+			b.WriteRune(r)
+		} else if r == ' ' || r == '/' || r == '.' {
+			b.WriteRune('-')
+		}
+	}
+	id := b.String()
+	if id == "" {
+		id = "task"
+	}
+	return strings.Trim(id, "-")
+}
+
+// validateCron 校验 cron 表达式。
 func validateCron(expr string) error {
-	parser := cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
-	if _, err := parser.Parse(expr); err != nil {
-		return errors.New("cron 表达式无效: " + err.Error())
-	}
-	return nil
+	_, err := cron.ParseStandard(expr)
+	return err
 }

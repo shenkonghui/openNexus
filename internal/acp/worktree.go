@@ -82,7 +82,24 @@ func CreateWorktree(repoPath, branch, destPath, base string) error {
 	if err := runGit(root, args...); err != nil {
 		return err
 	}
+	// 清除 worktree 内由编排引擎管理的运行时状态文件。
+	// git worktree add 会从 HEAD 检出被跟踪文件；若历史上 tasks.json 等曾被提交进仓库，
+	// 每个 worktree 都会带上一份副本，导致主工作区的 tasks.json 与 worktree 副本分裂
+	// （主列表看不到任务、状态不一致）。这里在创建后无条件移除，保证 worktree 干净。
+	// 删除失败不阻断 worktree 创建（缺失这些文件不影响任务执行）。
+	removeTaskManagerRuntimeFiles(destPath)
 	return nil
+}
+
+// removeTaskManagerRuntimeFiles 删除 worktree 目录内编排引擎的运行时状态文件。
+// 这些文件是工作区私有的，不应进入各任务 worktree。缺失即正常。
+func removeTaskManagerRuntimeFiles(worktreeDir string) {
+	// tasks.json 及其备份
+	for _, name := range []string{"tasks.json", "tasks.json.bak"} {
+		_ = os.Remove(filepath.Join(worktreeDir, name))
+	}
+	// 执行记录目录（.openNexus/scheduled-executions.jsonl 等）
+	_ = os.RemoveAll(filepath.Join(worktreeDir, ".openNexus"))
 }
 
 // RemoveWorktree 移除 destPath 对应的 worktree，并删除其分支 branch（force）。
@@ -201,7 +218,7 @@ func ensureInitialCommit(path string) error {
 	return runGit(path,
 		"-c", "user.email=nexus@local",
 		"-c", "user.name=NexusAgent",
-		"commit", "--allow-empty", "-m", "chore: initialize repository for orchestration",
+		"commit", "--allow-empty", "-m", "chore: initialize repository for task manager",
 	)
 }
 

@@ -35,7 +35,7 @@ export function listRunningSessions(): Promise<{ data: { db_session_ids: number[
 }
 
 // 获取指定 workspace 下最近一条会话（按 created_at DESC）。
-// 任务助手（OrchestrationChatPanel）用它实现“一个工作区只复用一条管理会话”：
+// 任务助手（TaskManagerChatPanel）用它实现“一个工作区只复用一条管理会话”：
 // 命中返回该会话，无会话（后端 404）或非 404 错误时返回 null，由调用方决定是否新建。
 export async function getLatestSessionByWorkspace(
   workspaceId: number,

@@ -28,12 +28,13 @@ import (
 	"opennexus/internal/logging"
 	gatewaymcp "opennexus/internal/mcp/gateway"
 	notesmcp "opennexus/internal/mcp/notes"
-	orchestrationmcp "opennexus/internal/mcp/orchestration"
+	taskmanagermcp "opennexus/internal/mcp/taskmanager"
 	"opennexus/internal/models"
 	"opennexus/internal/repository"
 	"opennexus/internal/router"
 	"opennexus/internal/services"
 	"opennexus/internal/sysutil"
+	"opennexus/internal/workspacemeta"
 )
 
 // ldflags 注入
@@ -53,7 +54,7 @@ func stopWithTimeout(name string, timeout time.Duration, stop func()) {
 }
 
 // ensureBuiltinMCPToken 保证存在一个全局 MCP token：内置 MCP server（notes/subagent/
-// orchestration）依赖它生成 Authorization 头并写入 ~/.agents/mcp.json。启动同步
+// taskmanager）依赖它生成 Authorization 头并写入 ~/.agents/mcp.json。启动同步
 // （SyncAllNotesMCP / SyncAllSubagentMCP）采用全局共享 token 策略，若一个 token 都没有
 // 则直接跳过写入，导致新安装时内置 MCP 不会出现在 mcp.json。此处在首次启动
 // （尚无任何 token）时为 admin 用户自动生成一个，使内置 MCP 开箱即用。
@@ -138,11 +139,15 @@ func main() {
 		log.Printf("auth.auto_login 已启用：前端将自动以 admin 身份登录")
 	}
 
-	// --data-dir 覆盖数据库路径与会话工作区
+	// --data-dir 覆盖数据库路径、会话工作区与工作区管理数据目录
 	if *dataDir != "" {
 		cfg.Database.Path = filepath.Join(*dataDir, "opennexus.db")
 		cfg.Agents.Workspace.SessionDir = filepath.Join(*dataDir, "session")
+		cfg.Agents.Workspace.MetaDir = filepath.Join(*dataDir, "workspaces")
 	}
+	// 注入工作区管理数据根目录：tasks.json、执行记录、上传文件等管理数据
+	// 与 agent 工作目录（cwd）分离，需在创建调度器/任务管理服务前生效。
+	workspacemeta.SetRoot(cfg.Agents.Workspace.MetaDir)
 
 	if cfg.Database.Path != ":memory:" {
 		dir := filepath.Dir(cfg.Database.Path)
@@ -236,26 +241,25 @@ func main() {
 	// 若已有 watchdog 在运行（上次启动残留），先杀旧再起新（满足「已运行则重启一次」）。
 	spawnWatchdog(cfg.Database.Path)
 
-	// P7: 定时任务调度器
-	schedTaskRepo := repository.NewScheduledTaskRepository(db)
-	execRepo := repository.NewTaskExecutionRepository(db)
-	schedulerSvc := services.NewSchedulerService(schedTaskRepo, execRepo, agentRouter)
+	// P7: 定时任务调度器（配置统一存储在工作区管理数据目录的 tasks.json）
+	wsRepo := repository.NewWorkspaceRepository(db)
+	schedulerSvc := services.NewSchedulerService(wsRepo, agentRouter)
 	if err := schedulerSvc.Start(); err != nil {
 		log.Fatalf("启动定时任务调度器失败: %v", err)
 	}
-	schedTaskH := handlers.NewScheduledTaskHandler(schedTaskRepo, execRepo, schedulerSvc, agentRouter, agentRouter)
+	schedTaskH := handlers.NewScheduledTaskHandler(wsRepo, schedulerSvc)
 
-	// 任务编排：基于工作区 cwd 下的 tasks.json 定义任务，按并发上限调度，
+	// 任务管理：基于工作区管理数据目录中的 tasks.json 定义任务，按并发上限调度，
 	// 每个任务用 git worktree 隔离工作目录，复用 RunSessionTask 创建持久会话执行。
-	orchestratorSvc := services.NewOrchestratorService(agentRouter)
+	tmSvc := services.NewTaskManagerService(agentRouter)
 	// 服务重启后将各工作区 tasks.json 中残留的 running/queued 标为 interrupt，
 	// 否则「全部启动」会因误判仍在运行而跳过这些任务。
-	if cwds, err := repository.NewWorkspaceRepository(db).ListCwds(); err != nil {
+	if cwds, err := wsRepo.ListCwds(); err != nil {
 		log.Printf("编排任务恢复：列举工作区 cwd 失败: %v", err)
 	} else {
-		orchestratorSvc.RecoverAll(cwds)
+		tmSvc.RecoverAll(cwds)
 	}
-	orchH := handlers.NewOrchestrationHandler(orchestratorSvc, agentRouter)
+	tmH := handlers.NewTaskManagerHandler(tmSvc, agentRouter)
 
 	noteRepo := repository.NewNoteRepository(db)
 	noteSettingsRepo := repository.NewNoteSettingsRepository(db)
@@ -267,7 +271,7 @@ func main() {
 		publicBase = fmt.Sprintf("http://127.0.0.1:%d", cfg.Server.Port)
 	}
 	noteH := handlers.NewNoteHandler(noteRepo, noteSettingsRepo, noteClassifier, cfg.Agents.MCP.ConfigPath, publicBase)
-	// 保证存在全局 MCP token：内置 MCP server（notes/subagent/orchestration）依赖它才会
+	// 保证存在全局 MCP token：内置 MCP server（notes/subagent/taskmanager）依赖它才会
 	// 被写入 ~/.agents/mcp.json。首次启动尚无任何 token 时自动生成，使内置 MCP 开箱即用，
 	// 无需手动到设置页点"生成 MCP Token"。
 	ensureBuiltinMCPToken(repository.NewUserRepository(db), noteSettingsRepo)
@@ -321,13 +325,13 @@ func main() {
 	subAgentH := handlers.NewSubAgentHandler(noteSettingsRepo, cfg.Agents.MCP.ConfigPath, publicBase)
 	subAgentH.SyncAllSubagentMCP()
 
-	engine := router.Setup(authSvc, jwtSvc, agentRouter, agentCfgH, registryH, schedTaskH, noteH, taskSettingsH, agentPrefsH, configH, mcpH, logH, debugH, subAgentH, orchH, permSettingsH, orchestratorSvc, cfg.Agents.Skills, cfg.Agents.Commands, cfg.Agents.Rules, cfg.Agents.SubAgents, cfg.Server.Mode, cfg.Server.WebDist, cfg.Auth.AutoLogin)
+	engine := router.Setup(authSvc, jwtSvc, agentRouter, agentCfgH, registryH, schedTaskH, noteH, taskSettingsH, agentPrefsH, configH, mcpH, logH, debugH, subAgentH, tmH, permSettingsH, tmSvc, cfg.Agents.Skills, cfg.Agents.Commands, cfg.Agents.Rules, cfg.Agents.SubAgents, cfg.Agents.Selector, cfg.Server.Mode, cfg.Server.WebDist, cfg.Auth.AutoLogin)
 	engine.Any("/mcp/notes", gin.WrapH(notesmcp.Handler(noteRepo, noteSettingsRepo)))
 	engine.Any("/mcp/notes/*path", gin.WrapH(notesmcp.Handler(noteRepo, noteSettingsRepo)))
-	// orchestration MCP server：主 agent 通过 MCP 工具管理工作区任务编排（tasks.json）。
-	// agentRouter 作为 WorkspaceResolver，orchestratorSvc 执行增删改与启停。
-	engine.Any("/mcp/orchestration", gin.WrapH(orchestrationmcp.Handler(noteSettingsRepo, agentPrefsRepo, agentRouter, orchestratorSvc)))
-	engine.Any("/mcp/orchestration/*path", gin.WrapH(orchestrationmcp.Handler(noteSettingsRepo, agentPrefsRepo, agentRouter, orchestratorSvc)))
+	// taskmanager MCP server：主 agent 通过 MCP 工具管理工作区任务（tasks.json）。
+	// agentRouter 作为 WorkspaceResolver，tmSvc 执行增删改与启停。
+	engine.Any("/mcp/taskmanager", gin.WrapH(taskmanagermcp.Handler(noteSettingsRepo, agentPrefsRepo, agentRouter, tmSvc)))
+	engine.Any("/mcp/taskmanager/*path", gin.WrapH(taskmanagermcp.Handler(noteSettingsRepo, agentPrefsRepo, agentRouter, tmSvc)))
 	// 聚合网关的 MCP endpoint 本身（实例在上面创建，两条路由共享以复用上游连接池与工具缓存）。
 	engine.Any(gatewaymcp.GatewayPath, gin.WrapH(mcpGateway.Handler()))
 	engine.Any(gatewaymcp.GatewayPath+"/*path", gin.WrapH(mcpGateway.Handler()))

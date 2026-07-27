@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -91,6 +92,30 @@ type PasswordConfig struct {
 	BcryptCost int `yaml:"bcrypt_cost"`
 }
 
+// SelectorConfig 控制前端 agent+模型 合并下拉框的可见项。
+// Filters 是正则列表，匹配串为 "agentType/modelValue"（模型尚未探测到时仅 "agentType"）。
+// 为空则全部显示；非空时任一正则匹配（子串匹配）即显示。
+type SelectorConfig struct {
+	Filters []string `yaml:"filters"`
+}
+
+// normalize 校验过滤正则合法性（启动时即报错，避免前端静默失效），并去除空项。
+func (s *SelectorConfig) normalize() error {
+	out := make([]string, 0, len(s.Filters))
+	for _, f := range s.Filters {
+		f = strings.TrimSpace(f)
+		if f == "" {
+			continue
+		}
+		if _, err := regexp.Compile(f); err != nil {
+			return fmt.Errorf("agents.selector.filters 正则非法 %q: %w", f, err)
+		}
+		out = append(out, f)
+	}
+	s.Filters = out
+	return nil
+}
+
 type AgentsConfig struct {
 	Workspace  WorkspaceConfig  `yaml:"workspace"`
 	Skills     SkillsConfig     `yaml:"skills"`
@@ -99,6 +124,8 @@ type AgentsConfig struct {
 	SubAgents  SubAgentsConfig  `yaml:"subagents"`
 	MCP        MCPConfig        `yaml:"mcp"`
 	ClaudeCode ClaudeCodeConfig `yaml:"claude_code"`
+	// Selector 控制前端 agent+模型 合并下拉框的可见项。
+	Selector SelectorConfig `yaml:"selector"`
 	// PromptMaxDuration 单轮 prompt 的最大存活时间，超时强制结束并标记 interrupted，
 	// 防 agent 卡死导致 goroutine 永久泄漏。0 或负值=默认 30min。
 	PromptMaxDuration time.Duration `yaml:"prompt_max_duration"`
@@ -160,6 +187,9 @@ type WorkspaceConfig struct {
 	// SessionDir 是 temporary 模式会话工作区的存放根目录。
 	// 默认 ~/.openNexus/session，仅在删除工作区时清理，不依赖系统清理临时目录。
 	SessionDir string `yaml:"session_dir"`
+	// MetaDir 是各工作区管理数据（tasks.json、执行记录、上传文件等）的存放根目录，
+	// 与 agent 工作目录（cwd）分离，避免污染用户代码仓库。默认 ~/.openNexus/workspaces。
+	MetaDir string `yaml:"meta_dir"`
 }
 
 type ClaudeCodeConfig struct {
@@ -216,6 +246,9 @@ func (c *Config) applyEnv() {
 	}
 	if v := os.Getenv("AGENTS_WORKSPACE_SESSION_DIR"); v != "" {
 		c.Agents.Workspace.SessionDir = v
+	}
+	if v := os.Getenv("AGENTS_WORKSPACE_META_DIR"); v != "" {
+		c.Agents.Workspace.MetaDir = v
 	}
 	if v := os.Getenv("AGENTS_SKILLS_USER_DIRS"); v != "" {
 		c.Agents.Skills.UserDirs = splitCommaList(v)
@@ -304,6 +337,9 @@ func (c *Config) Validate() error {
 	if err := c.Agents.MCP.normalize(); err != nil {
 		return err
 	}
+	if err := c.Agents.Selector.normalize(); err != nil {
+		return err
+	}
 	if err := c.Debug.ACP.normalize(); err != nil {
 		return err
 	}
@@ -329,7 +365,7 @@ func (c *ACPDebugConfig) normalize() error {
 	return nil
 }
 
-// resolveDataPaths 将 database.path 与 session_dir 默认到 ~/.openNexus 并展开 ~。
+// resolveDataPaths 将 database.path、session_dir 与 meta_dir 默认到 ~/.openNexus 并展开 ~。
 func (c *Config) resolveDataPaths() error {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -352,6 +388,15 @@ func (c *Config) resolveDataPaths() error {
 			return fmt.Errorf("session_dir 无效: %w", err)
 		}
 		c.Agents.Workspace.SessionDir = abs
+	}
+	if c.Agents.Workspace.MetaDir == "" {
+		c.Agents.Workspace.MetaDir = filepath.Join(home, ".openNexus", "workspaces")
+	} else {
+		abs, err := expandPath(c.Agents.Workspace.MetaDir)
+		if err != nil {
+			return fmt.Errorf("meta_dir 无效: %w", err)
+		}
+		c.Agents.Workspace.MetaDir = abs
 	}
 	return nil
 }
