@@ -3,14 +3,14 @@ import { useLocation, useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { useRequireAuth } from '../hooks/useRequireAuth'
 import { useCurrentWorkspace } from '../hooks/useCurrentWorkspace'
-import { listAgents, getAgentModels, probeAgentConfigs, listAgentCommands, listAgentModes } from '../api/agents'
+import { listAgents, probeAgentConfigs, listAgentCommands, listAgentModes } from '../api/agents'
 import { listSkillsByPath } from '../api/filesystem'
 import { getWorkspace } from '../api/workspaces'
 import {
   listScheduledTasks, createScheduledTask, updateScheduledTask, deleteScheduledTask, runScheduledTask,
 } from '../api/scheduledTasks'
-import type { Agent, ScheduledTask, ModelOption, AgentCommand, SessionMode, AgentSkill } from '../types'
-import AgentSelector from '../components/AgentSelector'
+import type { Agent, ScheduledTask, ConfigOptionValue, AgentCommand, SessionMode, AgentSkill } from '../types'
+import AgentModelSelector from '../components/AgentModelSelector'
 import PromptInput from '../components/PromptInput'
 import ErrorBanner from '../components/ErrorBanner'
 import LoadingSpinner from '../components/LoadingSpinner'
@@ -32,7 +32,9 @@ export default function ScheduledTasksPage() {
 
   const [agents, setAgents] = useState<Agent[]>([])
   const [tasks, setTasks] = useState<ScheduledTask[]>([])
-  const [modelOptions, setModelOptions] = useState<ModelOption[]>([])
+  // agent+模型 合并下拉：各 agent 探测到的模型列表与显示过滤正则（与新建任务页同一套）
+  const [agentModelsMap, setAgentModelsMap] = useState<Record<string, ConfigOptionValue[]>>({})
+  const [selectorFilters, setSelectorFilters] = useState<string[]>([])
   const [probing, setProbing] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -68,26 +70,25 @@ export default function ScheduledTasksPage() {
       .catch(() => { setWorkspaceCwd(''); setWorkspaceName('') })
   }, [workspaceId])
 
+  // 表单打开时并行探测全部 agent 的模型列表，供合并下拉展示全部组合（probeAgentConfigs 有前端缓存）
   useEffect(() => {
-    if (!form.agent_type) { setModelOptions([]); return }
+    if (!showForm || agents.length === 0) return
     let alive = true
-    getAgentModels(form.agent_type).then((r) => { if (alive) setModelOptions(r.data.model_options || []) }).catch(() => { if (alive) setModelOptions([]) })
+    setProbing(true)
+    Promise.allSettled(agents.map((a) =>
+      probeAgentConfigs(a.type)
+        .then((r) => {
+          if (!alive) return
+          const modelOpt = (r.data.config_options || []).find((o) => o.category === 'model')
+          setAgentModelsMap((prev) => ({ ...prev, [a.type]: modelOpt?.options || [] }))
+        })
+        .catch(() => {
+          // 探测失败：记为空列表，下拉中退化为 agent 级单项（使用默认模型）
+          if (alive) setAgentModelsMap((prev) => (a.type in prev ? prev : { ...prev, [a.type]: [] }))
+        }),
+    )).finally(() => { if (alive) setProbing(false) })
     return () => { alive = false }
-  }, [form.agent_type])
-
-  useEffect(() => {
-    if (!showForm || !form.agent_type || modelOptions.length > 0 || probing) return
-    let alive = true; setProbing(true)
-    probeAgentConfigs(form.agent_type)
-      .then((r) => {
-        if (!alive) return; const opts = r.data.config_options || []
-        const modelOpt = opts.find((o) => o.category === 'model' && o.type === 'select')
-        if (modelOpt) setModelOptions([{ id: modelOpt.id, name: modelOpt.name, current_value: modelOpt.current_value, options: modelOpt.options }])
-      })
-      .catch(() => {})
-      .finally(() => { if (alive) setProbing(false) })
-    return () => { alive = false }
-  }, [showForm, form.agent_type, modelOptions.length])
+  }, [showForm, agents])
 
   useEffect(() => {
     if (!showForm || !form.agent_type || probing) {
@@ -116,6 +117,7 @@ export default function ScheduledTasksPage() {
     try {
       const [agentsResp, tasksResp] = await Promise.all([listAgents(), listScheduledTasks(workspaceId || undefined)])
       setAgents(agentsResp.data.agents || [])
+      setSelectorFilters(agentsResp.data.selector_filters || [])
       setTasks(tasksResp.data.tasks || [])
       if (agentsResp.data.agents?.length > 0 && !form.agent_type) setForm((prev) => ({ ...prev, agent_type: agentsResp.data.agents[0].type }))
     } catch (err) { setError(err instanceof Error ? err.message : t('common.failed')) }
@@ -164,17 +166,6 @@ export default function ScheduledTasksPage() {
     const preset = presets.find((p) => p.label === label)
     if (preset && label !== customLabel) setForm((prev) => ({ ...prev, preset: label, cron_expr: preset.value }))
     else setForm((prev) => ({ ...prev, preset: customLabel }))
-  }
-
-  async function handleProbe() {
-    if (!form.agent_type || probing) return; setProbing(true); setError('')
-    try {
-      const resp = await probeAgentConfigs(form.agent_type); const opts = resp.data.config_options || []
-      const modelOpt = opts.find((o) => o.category === 'model' && o.type === 'select')
-      if (modelOpt) setModelOptions([{ id: modelOpt.id, name: modelOpt.name, current_value: modelOpt.current_value, options: modelOpt.options }])
-      else setModelOptions([])
-    } catch (err) { setError(err instanceof Error ? err.message : t('common.failed')) }
-    finally { setProbing(false) }
   }
 
   async function handleSubmit(e: FormEvent) {
@@ -266,31 +257,19 @@ export default function ScheduledTasksPage() {
                     onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder={t('scheduledTask.namePlaceholder')} required
                   />
                 </div>
-                <AgentSelector agents={agents} value={form.agent_type} onChange={(v) => setForm({ ...form, agent_type: v })} />
+                {/* agent+模型 合并下拉（与新建任务页同一控件，含 selector.filters 过滤） */}
                 <div className={styles.field}>
-                  <label className={styles.label}>{t('scheduledTask.modelValue')}</label>
-                  <div className={styles.inlineRow}>
-                    {modelOptions.length > 0 && modelOptions[0].options.length > 0 ? (
-                      <select className={styles.input} value={form.model_value}
-                        onChange={(e) => setForm({ ...form, model_value: e.target.value })}
-                      >
-                        <option value="">{t('scheduledTask.defaultModel')}</option>
-                        {modelOptions[0].options.map((o) => (
-                          <option key={o.value} value={o.value}>{o.name !== o.value ? `${o.name} (${o.value})` : o.value}</option>
-                        ))}
-                      </select>
-                    ) : (
-                      <input className={styles.input} type="text" value={form.model_value}
-                        onChange={(e) => setForm({ ...form, model_value: e.target.value })}
-                        placeholder={t('scheduledTask.modelValuePlaceholder')}
-                      />
-                    )}
-                    <button type="button" className={styles.secondaryBtn}
-                      onClick={handleProbe} disabled={probing || !form.agent_type}
-                      title={t('scheduledTask.probeTitle')}
-                    >{probing ? t('common.loading') : t('scheduledTask.probeConfig')}</button>
-                  </div>
-                  <span className={styles.hint}>{modelOptions.length === 0 ? t('scheduledTask.probeHint') : t('scheduledTask.probeDone')}</span>
+                  <label className={styles.label}>{t('scheduledTask.agentModel')}</label>
+                  <AgentModelSelector
+                    agents={agents}
+                    modelsByAgent={agentModelsMap}
+                    filters={selectorFilters}
+                    selectedAgent={form.agent_type}
+                    selectedModel={form.model_value}
+                    className={styles.input}
+                    onSelect={(agentType, modelValue) => setForm({ ...form, agent_type: agentType, model_value: modelValue })}
+                  />
+                  {probing && <span className={styles.hint}>{t('common.loading')}</span>}
                 </div>
                 <div className={styles.fieldRow}>
                   <div className={styles.field}>

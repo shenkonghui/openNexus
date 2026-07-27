@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Plus, X } from 'lucide-react'
+import { Bot, Plus, X } from 'lucide-react'
 import TerminalInstance, { buildSessionWSURL } from './TerminalInstance'
 import AgentTerminalInstance, { type AgentTerminalHandle } from './AgentTerminalInstance'
 import styles from './Terminal.module.css'
@@ -13,21 +13,16 @@ interface TerminalProps {
 interface TerminalTab {
   id: string
   kind: 'user' | 'agent'
-  /** agent tab：对应后端 TerminalBridge 的 terminalId */
-  terminalId?: string
-  /** agent tab：标签标题（命令首词） */
-  title?: string
-  command?: string
-  cwd?: string
 }
 
-/** agent 终端事件缓冲：xterm 实例挂载前先缓存 output/exit，挂载后由 onReady 回放。 */
-interface AgentTermState {
-  handle?: AgentTerminalHandle
-  pending: Uint8Array[]
-  exit?: { exitCode: number | null; signal: string | null }
-  exitFlushed?: boolean
-}
+/** agent 聚合终端 tab 的固定 id（同一时刻至多一个 agent tab）。 */
+const AGENT_TAB_ID = 'agent'
+
+/** agent 终端写入操作：按事件到达顺序排队，实例挂载前先缓冲，挂载后回放。 */
+type AgentOp =
+  | { kind: 'command'; command: string; cwd?: string }
+  | { kind: 'output'; data: Uint8Array }
+  | { kind: 'exit'; exitCode: number | null; signal: string | null }
 
 /** 后端 HandleAgentTerminal 下发的 JSON 帧。 */
 interface AgentTermFrame {
@@ -57,8 +52,12 @@ export default function TerminalPanel({ sessionId, onClose }: TerminalProps) {
   const counterRef = useRef(0)
   const [tabs, setTabs] = useState<TerminalTab[]>([{ id: 't-0', kind: 'user' }])
   const [activeId, setActiveId] = useState<string>('t-0')
-  // terminalId → 事件缓冲/写入句柄
-  const agentTermsRef = useRef(new Map<string, AgentTermState>())
+  // agent 聚合终端：写入句柄 + 挂载前的操作缓冲（保持事件到达顺序）
+  const agentHandleRef = useRef<AgentTerminalHandle | null>(null)
+  const agentPendingRef = useRef<AgentOp[]>([])
+  // 已见过的 terminalId（去重 created 帧）与已退出的 terminalId（去重 exit 帧）
+  const seenTermsRef = useRef(new Set<string>())
+  const exitedTermsRef = useRef(new Set<string>())
 
   const addTab = useCallback(() => {
     const id = `t-${++counterRef.current}`
@@ -73,7 +72,11 @@ export default function TerminalPanel({ sessionId, onClose }: TerminalProps) {
       if (!target) return prev
       // 至少保留一个用户终端 tab；agent tab 随时可关
       if (target.kind === 'user' && prev.filter((tab) => tab.kind === 'user').length <= 1) return prev
-      if (target.terminalId) agentTermsRef.current.delete(target.terminalId)
+      if (target.kind === 'agent') {
+        // 关闭 agent tab：丢弃句柄与缓冲，下次 agent 执行命令时重建
+        agentHandleRef.current = null
+        agentPendingRef.current = []
+      }
       const idx = prev.findIndex((tab) => tab.id === id)
       const next = prev.filter((tab) => tab.id !== id)
       if (activeId === id) {
@@ -84,26 +87,26 @@ export default function TerminalPanel({ sessionId, onClose }: TerminalProps) {
     })
   }, [activeId])
 
-  // agent 终端实例挂载完成：记录写入句柄并回放挂载前缓冲的输出/退出事件
-  const handleAgentReady = useCallback((terminalId: string, handle: AgentTerminalHandle) => {
-    const st = agentTermsRef.current.get(terminalId)
-    if (!st) return
-    st.handle = handle
-    for (const chunk of st.pending) handle.write(chunk)
-    st.pending = []
-    if (st.exit && !st.exitFlushed) {
-      st.exitFlushed = true
-      handle.writeExit(st.exit.exitCode, st.exit.signal)
-    }
+  // agent 聚合终端实例挂载完成：记录写入句柄并按顺序回放挂载前缓冲的操作
+  const handleAgentReady = useCallback((handle: AgentTerminalHandle) => {
+    agentHandleRef.current = handle
+    const pending = agentPendingRef.current
+    agentPendingRef.current = []
+    for (const op of pending) applyAgentOp(handle, op)
   }, [])
 
-  // 订阅 agent 终端事件：agent 执行 shell 时自动新增只读 tab 并弹出终端面板
+  // 订阅 agent 终端事件：所有 agent shell 命令聚合到同一个只读 tab 展示
   useEffect(() => {
     let ws: WebSocket
     try {
       ws = new WebSocket(buildSessionWSURL(sessionId, 'agent-terminals'))
     } catch {
       return
+    }
+    const pushOp = (op: AgentOp) => {
+      const handle = agentHandleRef.current
+      if (handle) applyAgentOp(handle, op)
+      else agentPendingRef.current.push(op)
     }
     ws.onmessage = (event) => {
       let frame: AgentTermFrame
@@ -112,45 +115,32 @@ export default function TerminalPanel({ sessionId, onClose }: TerminalProps) {
       } catch {
         return
       }
-      const terms = agentTermsRef.current
       switch (frame.type) {
         case 'created': {
-          if (!frame.terminalId || terms.has(frame.terminalId)) return
-          terms.set(frame.terminalId, { pending: [] })
-          const id = `t-${++counterRef.current}`
-          const firstWord = (frame.command || '').trim().split(/\s+/)[0] || 'agent'
-          setTabs((prev) => [...prev, {
-            id,
-            kind: 'agent',
-            terminalId: frame.terminalId,
-            title: `▶ ${firstWord}`,
-            command: frame.command || '',
-            cwd: frame.cwd,
-          }])
-          setActiveId(id)
+          if (!frame.terminalId || seenTermsRef.current.has(frame.terminalId)) return
+          seenTermsRef.current.add(frame.terminalId)
+          pushOp({ kind: 'command', command: frame.command || '', cwd: frame.cwd })
+          // 确保 agent tab 存在（唯一、常驻），激活并弹出终端面板
+          setTabs((prev) => (prev.some((tab) => tab.kind === 'agent')
+            ? prev
+            : [...prev, { id: AGENT_TAB_ID, kind: 'agent' }]))
+          setActiveId(AGENT_TAB_ID)
           window.dispatchEvent(new CustomEvent('onx:activate-panel', { detail: { panelId: 'terminal' } }))
           break
         }
         case 'output': {
-          const st = terms.get(frame.terminalId)
-          if (!st || !frame.data) return
-          const bytes = decodeBase64(frame.data)
-          if (st.handle) st.handle.write(bytes)
-          else st.pending.push(bytes)
+          if (!frame.data || !seenTermsRef.current.has(frame.terminalId)) return
+          pushOp({ kind: 'output', data: decodeBase64(frame.data) })
           break
         }
         case 'exit': {
-          const st = terms.get(frame.terminalId)
-          if (!st) return
-          st.exit = { exitCode: frame.exitCode ?? null, signal: frame.signal ?? null }
-          if (st.handle && !st.exitFlushed) {
-            st.exitFlushed = true
-            st.handle.writeExit(st.exit.exitCode, st.exit.signal)
-          }
+          if (!seenTermsRef.current.has(frame.terminalId) || exitedTermsRef.current.has(frame.terminalId)) return
+          exitedTermsRef.current.add(frame.terminalId)
+          pushOp({ kind: 'exit', exitCode: frame.exitCode ?? null, signal: frame.signal ?? null })
           break
         }
         default:
-          // released 等：保留 tab 供用户查看，无需处理
+          // released 等：内容保留在聚合终端中供用户查看，无需处理
           break
       }
     }
@@ -165,7 +155,7 @@ export default function TerminalPanel({ sessionId, onClose }: TerminalProps) {
 
   const userTabIds = tabs.filter((tab) => tab.kind === 'user').map((tab) => tab.id)
   const tabLabel = (tab: TerminalTab): string =>
-    tab.kind === 'user' ? makeTabName(baseName, userTabIds.indexOf(tab.id)) : (tab.title || '▶')
+    tab.kind === 'user' ? makeTabName(baseName, userTabIds.indexOf(tab.id)) : t('agentTerminal.tabName')
   const closable = (tab: TerminalTab): boolean =>
     tab.kind === 'agent' || userTabIds.length > 1
 
@@ -176,12 +166,13 @@ export default function TerminalPanel({ sessionId, onClose }: TerminalProps) {
           {tabs.map((tab) => (
             <div
               key={tab.id}
-              className={`${styles.tab} ${tab.id === activeId ? styles.activeTab : ''}`}
+              className={`${styles.tab} ${tab.kind === 'agent' ? styles.agentTab : ''} ${tab.id === activeId ? styles.activeTab : ''}`}
               onClick={() => setActiveId(tab.id)}
               role="tab"
               aria-selected={tab.id === activeId}
-              title={tab.kind === 'agent' ? tab.command : undefined}
+              title={tab.kind === 'agent' ? t('agentTerminal.tabHint') : undefined}
             >
+              {tab.kind === 'agent' && <Bot size={13} className={styles.agentTabIcon} />}
               <span className={styles.tabName}>{tabLabel(tab)}</span>
               {closable(tab) && (
                 <button
@@ -224,10 +215,8 @@ export default function TerminalPanel({ sessionId, onClose }: TerminalProps) {
               <TerminalInstance sessionId={sessionId} active={tab.id === activeId} />
             ) : (
               <AgentTerminalInstance
-                command={tab.command || ''}
-                cwd={tab.cwd}
                 active={tab.id === activeId}
-                onReady={(h) => handleAgentReady(tab.terminalId!, h)}
+                onReady={handleAgentReady}
               />
             )}
           </div>
@@ -235,4 +224,19 @@ export default function TerminalPanel({ sessionId, onClose }: TerminalProps) {
       </div>
     </div>
   )
+}
+
+/** 把一条写入操作应用到聚合终端实例。 */
+function applyAgentOp(handle: AgentTerminalHandle, op: AgentOp) {
+  switch (op.kind) {
+    case 'command':
+      handle.writeCommand(op.command, op.cwd)
+      break
+    case 'output':
+      handle.write(op.data)
+      break
+    case 'exit':
+      handle.writeExit(op.exitCode, op.signal)
+      break
+  }
 }

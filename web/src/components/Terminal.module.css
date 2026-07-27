@@ -108,6 +108,25 @@
   color: var(--text-primary);
 }
 
+/* agent 聚合终端 tab：强调色区分用户终端 */
+.agentTab {
+  color: var(--accent);
+}
+
+.agentTab:hover {
+  background: var(--accent-subtle);
+}
+
+.agentTab.activeTab {
+  background: var(--accent-subtle);
+  border-color: var(--accent-border);
+  color: var(--accent);
+}
+
+.agentTabIcon {
+  flex-shrink: 0;
+}
+
 .tabName {
   max-width: 120px;
   overflow: hidden;

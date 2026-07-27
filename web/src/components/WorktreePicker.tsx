@@ -2,8 +2,11 @@ import { useState, useEffect, useCallback, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { listWorktrees, createWorktree, type WorktreeEntry } from '../api/filesystem'
 import LoadingSpinner from './LoadingSpinner'
-import { X, GitBranch, Plus } from 'lucide-react'
+import { X, GitBranch, Plus, Sparkles } from 'lucide-react'
 import styles from './WorktreePicker.module.css'
+
+/** 哨兵值：表示首次发送时由后端 AI 根据对话内容自动命名并创建 worktree */
+export const AUTO_WORKTREE = '__auto_worktree__'
 
 interface WorktreePickerProps {
   /** 用于定位 git 仓库的路径（通常是当前工作区 cwd） */
@@ -107,6 +110,17 @@ export default function WorktreePicker({ repoPath, selectedPath, onSelect, onClo
         {error && <div className={styles.error}>{error}</div>}
 
         <div className={styles.list}>
+          {/* AI 自动：不预先命名，首次发送时由 AI 根据任务内容生成分支名并创建 worktree */}
+          <button
+            type="button"
+            className={`${styles.item} ${selectedPath === AUTO_WORKTREE ? styles.itemActive : ''}`}
+            onClick={() => onSelect(AUTO_WORKTREE)}
+            title={t('session.worktreeAutoHint')}
+          >
+            <Sparkles size={13} className={styles.icon} />
+            <span className={styles.itemName}>{t('session.worktreeAuto')}</span>
+            <span className={styles.itemBranch}>{t('session.worktreeAutoHint')}</span>
+          </button>
           {loading ? (
             <LoadingSpinner />
           ) : worktrees.length === 0 ? (

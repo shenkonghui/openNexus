@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"unicode"
 )
 
 // WorktreesDir 是存放各任务 worktree 的目录名，位于仓库根下。
@@ -127,6 +128,60 @@ func RemoveWorktree(repoPath, destPath, branch string) error {
 // WorktreePath 返回仓库根下 .worktrees/<name> 的绝对路径。
 func WorktreePath(repoRoot, name string) string {
 	return filepath.Join(repoRoot, WorktreesDir, name)
+}
+
+// SanitizeWorktreeName 把任意文本（如 AI 输出或 prompt 首行）清洗为合法的
+// git 分支名 / worktree 目录名：取首行、去引号，非法字符替换为 '-'，
+// 保留 unicode 字母数字（中文可用），并截断到 40 个字符。清洗后为空返回 ""。
+func SanitizeWorktreeName(s string) string {
+	s = strings.TrimSpace(s)
+	if idx := strings.IndexByte(s, '\n'); idx >= 0 {
+		s = s[:idx]
+	}
+	s = strings.Trim(s, "`\"'“”‘’《》【】")
+	var b strings.Builder
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9',
+			r == '-', r == '_', r == '.':
+			b.WriteRune(r)
+		case unicode.IsLetter(r) || unicode.IsDigit(r):
+			b.WriteRune(r)
+		default:
+			b.WriteRune('-')
+		}
+	}
+	out := b.String()
+	// git ref 不允许 ".."；折叠连续 '-'，去掉首尾 '-' 与 '.'
+	out = strings.ReplaceAll(out, "..", "-")
+	for strings.Contains(out, "--") {
+		out = strings.ReplaceAll(out, "--", "-")
+	}
+	out = strings.Trim(out, "-.")
+	out = strings.TrimSuffix(out, ".lock")
+	if r := []rune(out); len(r) > 40 {
+		out = strings.Trim(string(r[:40]), "-.")
+	}
+	return out
+}
+
+// branchExists 报告仓库中是否已存在本地分支 branch。
+func branchExists(repoRoot, branch string) bool {
+	cmd := exec.Command("git", "-C", repoRoot, "rev-parse", "--verify", "refs/heads/"+branch)
+	return cmd.Run() == nil
+}
+
+// UniqueWorktreeName 在 name 基础上生成不冲突的 worktree 名：
+// 若 .worktrees/<name> 目录或同名分支已存在，则依次尝试 name-2、name-3…
+func UniqueWorktreeName(repoRoot, name string) string {
+	candidate := name
+	for i := 2; ; i++ {
+		_, statErr := os.Stat(WorktreePath(repoRoot, candidate))
+		if os.IsNotExist(statErr) && !branchExists(repoRoot, candidate) {
+			return candidate
+		}
+		candidate = fmt.Sprintf("%s-%d", name, i)
+	}
 }
 
 // WorktreeInfo 描述一个 git worktree（来自 `git worktree list --porcelain`）。

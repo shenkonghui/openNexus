@@ -72,6 +72,9 @@ type SessionStore interface {
 	ResumeInterruptedTask(ctx context.Context, taskID uint) (<-chan models.Message, error)
 	// ListRunningDBSessionIDs 返回指定用户下所有正在运行的 db_session_id。
 	ListRunningDBSessionIDs(userID uint) ([]uint, error)
+	// RunPromptOnce 在临时 ACP 会话中发送 prompt 并收集文本响应（不落库），
+	// 用于 AI 生成 worktree 名等一次性调用。
+	RunPromptOnce(ctx context.Context, agentType, modelValue, prompt string) (string, error)
 }
 
 // SessionTaskRegistrar 把新建会话登记到工作区 cwd 下的 tasks.json，
@@ -178,6 +181,66 @@ type createSessionRequest struct {
 	Cwd string `json:"cwd"`
 	// Yolo 创建时即开启本任务 YOLO。
 	Yolo bool `json:"yolo"`
+	// AutoWorktree 自动创建 worktree：由 AI 根据首条 prompt 生成分支名，
+	// 在工作区仓库的 .worktrees 下创建并作为会话 cwd。与 Cwd 互斥（Cwd 优先）。
+	AutoWorktree bool `json:"auto_worktree"`
+	// Prompt 首条对话内容，仅用于 AutoWorktree 时的 AI 命名，不会在此接口发送给 agent。
+	Prompt string `json:"prompt"`
+}
+
+// autoWorktreeNamePrompt 是 AI 生成 worktree 分支名的提示词模板。
+const autoWorktreeNamePrompt = `请为以下开发任务生成一个简短的英文 git 分支名（kebab-case，2-4 个单词，只用小写字母、数字和连字符，概括任务核心内容）。
+任务描述：{{prompt}}
+仅输出分支名，不要输出其他任何内容。`
+
+// generateWorktreeName 生成 worktree 名：优先用会话选定的 agent 做一次性 AI 命名，
+// 失败时回退到从 prompt 首行提取，仍为空则用时间戳兑底。
+func (h *SessionHandler) generateWorktreeName(ctx context.Context, req *createSessionRequest) string {
+	prompt := strings.TrimSpace(req.Prompt)
+	if prompt != "" {
+		aiCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+		defer cancel()
+		built := strings.ReplaceAll(autoWorktreeNamePrompt, "{{prompt}}", prompt)
+		if resp, err := h.store.RunPromptOnce(aiCtx, req.AgentType, req.ModelValue, built); err == nil {
+			if name := acplocal.SanitizeWorktreeName(resp); name != "" {
+				return name
+			}
+		} else {
+			slog.Warn("AI 生成 worktree 名失败，回退规则提取", "agent", req.AgentType, "err", err)
+		}
+		if name := acplocal.SanitizeWorktreeName(prompt); name != "" {
+			return name
+		}
+	}
+	return "task-" + time.Now().Format("20060102-150405")
+}
+
+// createAutoWorktree 在工作区仓库下自动创建 worktree 并返回其绝对路径。
+// 非 git 仓库时自动初始化（与编排任务一致）；名称冲突时自动加序号。
+func (h *SessionHandler) createAutoWorktree(ctx context.Context, req *createSessionRequest) (string, error) {
+	wsCwd, err := h.store.GetWorkspaceCwd(req.WorkspaceID)
+	if err != nil || strings.TrimSpace(wsCwd) == "" {
+		return "", fmt.Errorf("无法解析工作区目录")
+	}
+	repoRoot, rootErr := acplocal.GitRoot(wsCwd)
+	if rootErr != nil {
+		if initErr := acplocal.GitInit(wsCwd); initErr != nil {
+			return "", fmt.Errorf("初始化 git 仓库失败: %w", initErr)
+		}
+		repoRoot = wsCwd
+		if root, e := acplocal.GitRoot(wsCwd); e == nil {
+			repoRoot = root
+		}
+	}
+	if err := acplocal.EnsureWorktreesDir(repoRoot); err != nil {
+		return "", fmt.Errorf("创建 .worktrees 目录失败: %w", err)
+	}
+	name := acplocal.UniqueWorktreeName(repoRoot, h.generateWorktreeName(ctx, req))
+	destPath := acplocal.WorktreePath(repoRoot, name)
+	if err := acplocal.CreateWorktree(repoRoot, name, destPath, ""); err != nil {
+		return "", fmt.Errorf("创建 worktree 失败: %w", err)
+	}
+	return destPath, nil
 }
 
 // Create POST /api/v1/sessions
@@ -204,6 +267,14 @@ func (h *SessionHandler) Create(c *gin.Context) {
 			return
 		}
 		sess, err = h.store.CreateSessionWithCwd(c.Request.Context(), req.AgentType, req.WorkspaceID, uid, models.SessionSourceManual, req.ModelValue, cwd)
+	case req.AutoWorktree:
+		// AI 自动命名并创建 worktree，以 worktree 路径作为会话 cwd。
+		wtPath, wtErr := h.createAutoWorktree(c.Request.Context(), &req)
+		if wtErr != nil {
+			Fail(c, http.StatusBadRequest, "AUTO_WORKTREE_FAILED", wtErr.Error())
+			return
+		}
+		sess, err = h.store.CreateSessionWithCwd(c.Request.Context(), req.AgentType, req.WorkspaceID, uid, models.SessionSourceManual, req.ModelValue, wtPath)
 	default:
 		sess, err = h.store.CreateSession(c.Request.Context(), req.AgentType, req.WorkspaceID, uid, req.ModelValue)
 	}

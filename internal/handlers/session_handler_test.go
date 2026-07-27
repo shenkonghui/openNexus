@@ -264,6 +264,10 @@ func (f *fakeSessionStore) ListRunningDBSessionIDs(_ uint) ([]uint, error) {
 	return nil, nil
 }
 
+func (f *fakeSessionStore) RunPromptOnce(_ context.Context, _, _, _ string) (string, error) {
+	return "", nil
+}
+
 func (f *fakeSessionStore) ResumeInterruptedTask(_ context.Context, _ uint) (<-chan models.Message, error) {
 	return nil, nil
 }
@@ -681,6 +685,9 @@ func (s *commandsFakeStore) SubscribeSession(string, int) ([]models.Message, <-c
 func (s *commandsFakeStore) HasActivePrompt(string) bool                             { return false }
 func (s *commandsFakeStore) ListInterruptedTasks(uint) ([]models.RunningTask, error) { return nil, nil }
 func (s *commandsFakeStore) ListRunningDBSessionIDs(uint) ([]uint, error)            { return nil, nil }
+func (s *commandsFakeStore) RunPromptOnce(context.Context, string, string, string) (string, error) {
+	return "", nil
+}
 func (s *commandsFakeStore) ResumeInterruptedTask(context.Context, uint) (<-chan models.Message, error) {
 	return nil, nil
 }

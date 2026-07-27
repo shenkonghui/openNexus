@@ -149,6 +149,8 @@
     "worktreeCreatePlaceholder": "New branch name, Enter to create worktree",
     "worktreeCreate": "Create",
     "worktreeCreating": "Creating...",
+    "worktreeAuto": "Auto (AI)",
+    "worktreeAutoHint": "AI names and creates a worktree from your task on first send",
     "history": "History",
     "deleteConfirm": "Are you sure you want to delete this session? This action cannot be undone.",
     "deleteSuccess": "Session deleted",
@@ -304,8 +306,8 @@
     "languageChanged": "Language switched",
     "hint": "Add local ACP-compatible agents (Claude Code, CodeBuddy, Devin, etc.) here. Configurations are shared globally. Built-in agents are managed by config.yaml.",
     "defaultAgent": "Default Agent (auto-selected when creating sessions)",
-        "defaultAgentModel": "Default Agent · Model (auto-selected when creating tasks)",
-        "defaultAgentModelHint": "Same combined dropdown as the new-task page; picking an agent-only entry uses the agent's own default model, and the visibility filters below apply here too",
+    "defaultAgentModel": "Default Agent · Model (auto-selected when creating tasks)",
+    "defaultAgentModelHint": "Same combined dropdown as the new-task page; picking an agent-only entry uses the agent's own default model, and the visibility filters below apply here too",
     "defaultModel": "Default Model",
     "defaultModelHint": "Model auto-selected for the default agent when creating tasks; leave empty to use the agent's own default",
     "selectorFilters": "Agent / Model visibility filter",
@@ -454,6 +456,7 @@
     "cwd": "Working Directory",
     "cwdPlaceholder": "Enter working directory",
     "modelValue": "Model",
+    "agentModel": "Agent · Model",
     "modelValuePlaceholder": "Specify Agent model",
     "defaultModel": "Default Model",
     "probeTitle": "Probe agent config",
@@ -732,6 +735,8 @@
     "requireSession": "Create or select a task session first"
   },
   "agentTerminal": {
+    "tabName": "Agent Terminal",
+    "tabHint": "Commands run by the agent are shown here (read-only)",
     "exitCode": "Process exited with code {{code}}",
     "signal": "Process terminated by signal: {{signal}}"
   },

@@ -149,6 +149,8 @@
     "worktreeCreatePlaceholder": "新分支名，回车创建 worktree",
     "worktreeCreate": "新建",
     "worktreeCreating": "创建中...",
+    "worktreeAuto": "AI 自动创建",
+    "worktreeAutoHint": "发送时由 AI 根据任务内容命名并创建 worktree",
     "history": "历史任务",
     "deleteConfirm": "确定删除此任务吗？此操作不可恢复。",
     "deleteSuccess": "任务已删除",
@@ -454,6 +456,7 @@
     "cwd": "工作目录",
     "cwdPlaceholder": "输入工作目录",
     "modelValue": "模型",
+    "agentModel": "Agent · 模型",
     "modelValuePlaceholder": "指定 Agent 模型",
     "defaultModel": "默认模型",
     "probeTitle": "获取配置",
@@ -732,6 +735,8 @@
     "requireSession": "请先创建或选择一个任务会话"
   },
   "agentTerminal": {
+    "tabName": "Agent 终端",
+    "tabHint": "Agent 执行的命令统一在此展示（只读）",
     "exitCode": "进程已退出，退出码 {{code}}",
     "signal": "进程被信号终止：{{signal}}"
   },

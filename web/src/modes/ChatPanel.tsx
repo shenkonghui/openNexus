@@ -9,8 +9,8 @@ import ModelSelector from '../components/ModelSelector'
 import AgentModelSelector from '../components/AgentModelSelector'
 import SessionModeSelector from '../components/SessionModeSelector'
 import ContextStats from '../components/ContextStats'
-import WorktreePicker from '../components/WorktreePicker'
-import { BookOpenText, Code2, FolderGit2, Zap } from 'lucide-react'
+import WorktreePicker, { AUTO_WORKTREE } from '../components/WorktreePicker'
+import { BookOpenText, Code2, FolderGit2, Sparkles, Zap } from 'lucide-react'
 import type { PanelCtx, ConfigBarKind } from './types'
 import styles from './ChatPanel.module.css'
 
@@ -131,18 +131,20 @@ export default function ChatPanel({
             hideModel
           />
 
-          {/* 工作目录：仅新建任务页（无会话）可选，可选择已存在的 worktree/目录作为本次任务 cwd */}
+          {/* 工作目录：仅新建任务页（无会话）可选，可选择已存在的 worktree/目录或 AI 自动创建作为本次任务 cwd */}
           {ctx.session === null && ctx.onSelectCwd && (
             <button
               type="button"
               className={styles.cwdBtn}
               onClick={() => setShowDirPicker(true)}
               disabled={ctx.sending || ctx.probing}
-              title={ctx.selectedCwd || ctx.cwd || t('session.selectWorktree')}
+              title={ctx.selectedCwd === AUTO_WORKTREE ? t('session.worktreeAutoHint') : (ctx.selectedCwd || ctx.cwd || t('session.selectWorktree'))}
             >
-              <FolderGit2 size={13} />
+              {ctx.selectedCwd === AUTO_WORKTREE ? <Sparkles size={13} /> : <FolderGit2 size={13} />}
               <span className={styles.cwdBtnLabel}>
-                {cwdBaseName(ctx.selectedCwd || ctx.cwd) || t('session.selectWorktree')}
+                {ctx.selectedCwd === AUTO_WORKTREE
+                  ? t('session.worktreeAuto')
+                  : cwdBaseName(ctx.selectedCwd || ctx.cwd) || t('session.selectWorktree')}
               </span>
             </button>
           )}
@@ -174,7 +176,7 @@ export default function ChatPanel({
     <div className={styles.chat}>
       {showDirPicker && ctx.onSelectCwd && (
         <WorktreePicker
-          repoPath={ctx.selectedCwd || ctx.cwd || ''}
+          repoPath={(ctx.selectedCwd !== AUTO_WORKTREE ? ctx.selectedCwd : '') || ctx.cwd || ''}
           selectedPath={ctx.selectedCwd || ctx.cwd || undefined}
           onSelect={(path) => {
             ctx.onSelectCwd?.(path)

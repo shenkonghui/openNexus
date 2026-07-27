@@ -21,6 +21,7 @@ import LoadingSpinner from '../components/LoadingSpinner'
 import { type ConvState as ConvStatusState } from '../components/ConvStatusBar'
 import TaskModeSwitch, { type TaskMode } from '../components/TaskModeSwitch'
 import TaskManagerView from '../components/TaskManagerView'
+import { AUTO_WORKTREE } from '../components/WorktreePicker'
 import { PanelRightClose, PanelRightOpen } from 'lucide-react'
 import { useFileViewer } from '../context/FileViewerContext'
 import { saveLastDoc, loadDocFolders, loadDocSession, saveDocSession, clearDocSession, TASK_MODE_KEY, LAST_DOC_KEY_PREFIX, type DocTarget } from '../utils/docs'
@@ -304,7 +305,7 @@ export default function ChatPage() {
   const [homeModes, setHomeModes] = useState<SessionMode[]>([])
   const [homeSkills, setHomeSkills] = useState<AgentSkill[]>([])
   const [workspaceCwd, setWorkspaceCwd] = useState('')
-  // 新建任务页：用户选择的自定义工作目录（如已存在的 git worktree）；为空则跟随工作区 cwd。
+  // 新建任务页：用户选择的自定义工作目录（如已存在的 git worktree，或 AUTO_WORKTREE 哨兵值表示 AI 自动创建）；为空则跟随工作区 cwd。
   const [taskCwd, setTaskCwd] = useState('')
   const [agentPrefs, setAgentPrefs] = useState<AgentPrefs>({ last_agent_type: '', prefs: {} })
   const prefsSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -884,7 +885,18 @@ export default function ChatPage() {
     if (!selectedAgent || creating) return
     setCreating(true); setError('')
     try {
-      const resp = await createSession(selectedAgent, workspaceId || 0, selectedModel || undefined, undefined, taskCwd || undefined, yoloDraft)
+      // AI 自动 worktree：不传 cwd，由后端根据首条 prompt 命名并创建 worktree
+      const isAutoWt = taskCwd === AUTO_WORKTREE
+      const resp = await createSession(
+        selectedAgent,
+        workspaceId || 0,
+        selectedModel || undefined,
+        undefined,
+        isAutoWt ? undefined : (taskCwd || undefined),
+        yoloDraft,
+        isAutoWt,
+        isAutoWt ? prompt : undefined,
+      )
       const extras = probeConfigs.filter((o) => o.type === 'select' && o.category !== 'model' && o.current_value)
       for (const o of extras) {
         try { await setConfigOption(resp.data.id, o.id, o.current_value) } catch { /* 部分失败可接受 */ }

@@ -1,7 +1,8 @@
 import type { Session, Message, AgentCommand, ConfigOption, SessionMode, AgentSkill, Execution, RunningTask } from '../types'
 import { apiFetch } from './client'
 
-// 创建会话（可选 model_value 指定初始模型，可选 workspace_id，可选 source 标记来源，可选 cwd 指定自定义工作目录，可选 yolo）
+// 创建会话（可选 model_value 指定初始模型，可选 workspace_id，可选 source 标记来源，可选 cwd 指定自定义工作目录，可选 yolo；
+// autoWorktree 为 true 时由后端 AI 根据 prompt 自动命名并创建 worktree 作为会话 cwd）
 export function createSession(
   agentType: string,
   workspaceId?: number,
@@ -9,6 +10,8 @@ export function createSession(
   source?: 'manual',
   cwd?: string,
   yolo?: boolean,
+  autoWorktree?: boolean,
+  prompt?: string,
 ): Promise<{ data: Session }> {
   return apiFetch('/sessions', {
     method: 'POST',
@@ -19,6 +22,7 @@ export function createSession(
       ...(source ? { source } : {}),
       ...(cwd ? { cwd } : {}),
       ...(yolo ? { yolo: true } : {}),
+      ...(autoWorktree ? { auto_worktree: true, prompt: prompt || '' } : {}),
     }),
   })
 }

@@ -6,22 +6,25 @@ import { useTranslation } from 'react-i18next'
 import '@xterm/xterm/css/xterm.css'
 import styles from './Terminal.module.css'
 
-/** agent 终端实例的写入句柄：由父组件（TerminalPanel）按 terminalId 路由事件调用。 */
+/** agent 聚合终端的写入句柄：由父组件（TerminalPanel）按事件顺序调用。 */
 export interface AgentTerminalHandle {
+  /** 新命令开始：打印分隔头（cwd + $ 命令行） */
+  writeCommand: (command: string, cwd?: string) => void
   write: (data: Uint8Array) => void
   writeExit: (exitCode: number | null, signal: string | null) => void
 }
 
 export interface AgentTerminalInstanceProps {
-  command: string
-  cwd?: string
   active: boolean
-  /** 挂载完成后回调写入句柄（父组件负责回放实例挂载前缓冲的输出/退出事件） */
+  /** 挂载完成后回调写入句柄（父组件负责回放实例挂载前缓冲的事件） */
   onReady: (handle: AgentTerminalHandle) => void
 }
 
-/** 只读 xterm：展示 agent 通过 ACP terminal 能力执行的命令输出，不支持输入。 */
-export default function AgentTerminalInstance({ command, cwd, active, onReady }: AgentTerminalInstanceProps) {
+/**
+ * 只读聚合 xterm：所有 agent 通过 ACP terminal 能力执行的命令共用此实例展示，
+ * 命令之间以分隔头（cwd + $ 命令行）区分，不支持输入。
+ */
+export default function AgentTerminalInstance({ active, onReady }: AgentTerminalInstanceProps) {
   const { t } = useTranslation()
   const containerRef = useRef<HTMLDivElement>(null)
   const fitRef = useRef<FitAddon | null>(null)
@@ -48,14 +51,18 @@ export default function AgentTerminalInstance({ command, cwd, active, onReady }:
     try { fit.fit() } catch {}
     fitRef.current = fit
 
-    // 首行展示工作目录与执行的命令
-    if (cwd) term.writeln(`\x1b[90m${cwd}\x1b[0m`)
-    term.writeln(`\x1b[1;32m$\x1b[0m \x1b[1m${command}\x1b[0m`)
-
     const resizeObserver = new ResizeObserver(() => { try { fit.fit() } catch {} })
     resizeObserver.observe(container)
 
+    let firstCommand = true
     onReadyRef.current({
+      writeCommand: (command, cwd) => {
+        // 命令之间空一行分隔；首条命令不留空行
+        if (!firstCommand) term.write('\r\n')
+        firstCommand = false
+        if (cwd) term.writeln(`\x1b[90m${cwd}\x1b[0m`)
+        term.writeln(`\x1b[1;32m$\x1b[0m \x1b[1m${command}\x1b[0m`)
+      },
       write: (data) => term.write(data),
       writeExit: (exitCode, signal) => {
         const msg = signal
