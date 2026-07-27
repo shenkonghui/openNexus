@@ -140,7 +140,7 @@ func (s *TaskStore) Load() (*models.TaskManagerDef, error) {
 	return &def, nil
 }
 
-// Save 原子写回 tasks.json。
+// Save 原子写回 tasks.json，成功后广播变更事件（驱动前端自动刷新）。
 func (s *TaskStore) Save(def *models.TaskManagerDef) error {
 	s.ensureMigrated()
 	if def == nil {
@@ -163,7 +163,12 @@ func (s *TaskStore) Save(def *models.TaskManagerDef) error {
 	if err := os.WriteFile(tmp, data, 0o644); err != nil {
 		return fmt.Errorf("写入 tasks.json: %w", err)
 	}
-	return os.Rename(tmp, s.tasksPath())
+	if err := os.Rename(tmp, s.tasksPath()); err != nil {
+		return err
+	}
+	// 所有写路径（REST/MCP/编排器/调度器）都汇聚到此处落盘，统一在这里通知订阅者。
+	notifyTaskChanged(s.cwd)
+	return nil
 }
 
 // UpsertTask 新增或按 id 更新任务，保留运行时字段。

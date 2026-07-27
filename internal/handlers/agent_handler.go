@@ -23,6 +23,11 @@ type AgentStatusLister interface {
 	ListAgentStatus() []acplocal.AgentStatus
 }
 
+// AgentACPInfoProvider 暴露 agent 类型最近一次 ACP 握手能力信息的查询能力。
+type AgentACPInfoProvider interface {
+	AgentACPInfo(agentType string) (acplocal.AgentACPInfo, bool)
+}
+
 // AgentModelProber 返回指定 agent 类型的可用模型 config option（从已有会话缓存获取）。
 type AgentModelProber interface {
 	CachedModelOptions(agentType string) []acpsdk.SessionConfigOption
@@ -51,13 +56,14 @@ type AgentModeLister interface {
 
 // AgentHandler 处理 agent 列表相关请求。
 type AgentHandler struct {
-	lister         AgentLister
-	prober         AgentModelProber
-	cfgProber      AgentConfigProber
-	preconnector   AgentPreconnector
-	cmdLister      AgentCommandLister
-	modeLister     AgentModeLister
-	statusLister   AgentStatusLister
+	lister       AgentLister
+	prober       AgentModelProber
+	cfgProber    AgentConfigProber
+	preconnector AgentPreconnector
+	cmdLister    AgentCommandLister
+	modeLister   AgentModeLister
+	statusLister AgentStatusLister
+	acpInfo      AgentACPInfoProvider
 	// selectorFilters 是 config.yaml 中 agents.selector.filters 的正则列表，
 	// 随 GET /agents 透出，由前端对 agent+模型 合并下拉项做显示过滤。
 	selectorFilters []string
@@ -74,6 +80,9 @@ func NewAgentHandler(lister AgentLister, prober AgentModelProber, cfgProber Agen
 	}
 	if pc, ok := lister.(AgentPreconnector); ok {
 		h.preconnector = pc
+	}
+	if ip, ok := statusLister.(AgentACPInfoProvider); ok {
+		h.acpInfo = ip
 	}
 	return h
 }
@@ -117,6 +126,137 @@ func (h *AgentHandler) Status(c *gin.Context) {
 	}
 	statuses := h.statusLister.ListAgentStatus()
 	Success(c, http.StatusOK, gin.H{"agents": statuses})
+}
+
+// acpMethodItem 描述单个 ACP 方法的支持情况（供设置页能力展示）。
+type acpMethodItem struct {
+	Method    string `json:"method"`
+	Supported bool   `json:"supported"`
+	// Gate 是门控该方法的 capability 字段路径；空表示协议基线方法（无需声明）。
+	Gate     string `json:"gate,omitempty"`
+	Unstable bool   `json:"unstable,omitempty"`
+}
+
+// acpAuthMethodItem 描述 agent 声明的一种认证方式。
+type acpAuthMethodItem struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	Type string `json:"type"` // "agent" | "env_var" | "terminal"
+}
+
+// buildAgentMethodItems 根据握手响应推导 agent-side method（client → agent）支持情况。
+// 基线方法协议保证支持；其余按 initialize 返回的 AgentCapabilities 门控。
+func buildAgentMethodItems(initResp acpsdk.InitializeResponse) []acpMethodItem {
+	caps := initResp.AgentCapabilities
+	sc := caps.SessionCapabilities
+	nes := caps.Nes != nil
+	providers := caps.Providers != nil
+	return []acpMethodItem{
+		{Method: acpsdk.AgentMethodInitialize, Supported: true},
+		{Method: acpsdk.AgentMethodAuthenticate, Supported: len(initResp.AuthMethods) > 0, Gate: "authMethods"},
+		{Method: acpsdk.AgentMethodLogout, Supported: caps.Auth.Logout != nil, Gate: "auth.logout"},
+		{Method: acpsdk.AgentMethodSessionNew, Supported: true},
+		{Method: acpsdk.AgentMethodSessionPrompt, Supported: true},
+		{Method: acpsdk.AgentMethodSessionCancel, Supported: true},
+		{Method: acpsdk.AgentMethodSessionSetMode, Supported: true},
+		{Method: acpsdk.AgentMethodSessionSetConfigOption, Supported: true},
+		{Method: acpsdk.AgentMethodSessionLoad, Supported: caps.LoadSession, Gate: "loadSession"},
+		{Method: acpsdk.AgentMethodSessionList, Supported: sc.List != nil, Gate: "sessionCapabilities.list"},
+		{Method: acpsdk.AgentMethodSessionResume, Supported: sc.Resume != nil, Gate: "sessionCapabilities.resume"},
+		{Method: acpsdk.AgentMethodSessionClose, Supported: sc.Close != nil, Gate: "sessionCapabilities.close"},
+		{Method: acpsdk.AgentMethodSessionFork, Supported: sc.Fork != nil, Gate: "sessionCapabilities.fork", Unstable: true},
+		{Method: acpsdk.AgentMethodSessionDelete, Supported: sc.Delete != nil, Gate: "sessionCapabilities.delete", Unstable: true},
+		{Method: acpsdk.AgentMethodMcpMessage, Supported: caps.McpCapabilities.Acp, Gate: "mcpCapabilities.acp", Unstable: true},
+		{Method: acpsdk.AgentMethodNesStart, Supported: nes, Gate: "nes", Unstable: true},
+		{Method: acpsdk.AgentMethodNesSuggest, Supported: nes, Gate: "nes", Unstable: true},
+		{Method: acpsdk.AgentMethodNesAccept, Supported: nes, Gate: "nes", Unstable: true},
+		{Method: acpsdk.AgentMethodNesReject, Supported: nes, Gate: "nes", Unstable: true},
+		{Method: acpsdk.AgentMethodNesClose, Supported: nes, Gate: "nes", Unstable: true},
+		{Method: acpsdk.AgentMethodProvidersList, Supported: providers, Gate: "providers", Unstable: true},
+		{Method: acpsdk.AgentMethodProvidersSet, Supported: providers, Gate: "providers", Unstable: true},
+		{Method: acpsdk.AgentMethodProvidersDisable, Supported: providers, Gate: "providers", Unstable: true},
+	}
+}
+
+// buildClientMethodItems 根据本服务握手声明的 client 能力推导 client-side method（agent → client）支持情况。
+// elicitation/mcp 等 unstable 方法本服务未实现，固定为不支持。
+func buildClientMethodItems(caps acpsdk.ClientCapabilities) []acpMethodItem {
+	return []acpMethodItem{
+		{Method: acpsdk.ClientMethodSessionRequestPermission, Supported: true},
+		{Method: acpsdk.ClientMethodSessionUpdate, Supported: true},
+		{Method: acpsdk.ClientMethodFsReadTextFile, Supported: caps.Fs.ReadTextFile, Gate: "fs.readTextFile"},
+		{Method: acpsdk.ClientMethodFsWriteTextFile, Supported: caps.Fs.WriteTextFile, Gate: "fs.writeTextFile"},
+		{Method: acpsdk.ClientMethodTerminalCreate, Supported: caps.Terminal, Gate: "terminal"},
+		{Method: acpsdk.ClientMethodTerminalOutput, Supported: caps.Terminal, Gate: "terminal"},
+		{Method: acpsdk.ClientMethodTerminalWaitForExit, Supported: caps.Terminal, Gate: "terminal"},
+		{Method: acpsdk.ClientMethodTerminalKill, Supported: caps.Terminal, Gate: "terminal"},
+		{Method: acpsdk.ClientMethodTerminalRelease, Supported: caps.Terminal, Gate: "terminal"},
+		{Method: acpsdk.ClientMethodElicitationCreate, Supported: false, Gate: "elicitation", Unstable: true},
+		{Method: acpsdk.ClientMethodElicitationComplete, Supported: false, Gate: "elicitation", Unstable: true},
+		{Method: acpsdk.ClientMethodMcpConnect, Supported: false, Gate: "mcp", Unstable: true},
+		{Method: acpsdk.ClientMethodMcpDisconnect, Supported: false, Gate: "mcp", Unstable: true},
+		{Method: acpsdk.ClientMethodMcpMessage, Supported: false, Gate: "mcp", Unstable: true},
+	}
+}
+
+// buildAuthMethodItems 把握手返回的认证方式转为对外展示结构。
+func buildAuthMethodItems(methods []acpsdk.AuthMethod) []acpAuthMethodItem {
+	items := make([]acpAuthMethodItem, 0, len(methods))
+	for _, m := range methods {
+		switch {
+		case m.EnvVar != nil:
+			items = append(items, acpAuthMethodItem{ID: m.EnvVar.Id, Name: m.EnvVar.Name, Type: "env_var"})
+		case m.Terminal != nil:
+			items = append(items, acpAuthMethodItem{ID: m.Terminal.Id, Name: m.Terminal.Name, Type: "terminal"})
+		case m.Agent != nil:
+			items = append(items, acpAuthMethodItem{ID: m.Agent.Id, Name: m.Agent.Name, Type: "agent"})
+		}
+	}
+	return items
+}
+
+// Capabilities GET /api/v1/agents/:type/capabilities — 返回指定 agent 类型最近一次 ACP 握手的能力信息。
+// 包含 agent-side / client-side method 支持情况；若从未握手则 available=false（前端可引导预连接）。
+func (h *AgentHandler) Capabilities(c *gin.Context) {
+	agentType := strings.TrimSpace(c.Param("type"))
+	if agentType == "" {
+		Fail(c, http.StatusBadRequest, "INVALID_REQUEST", "缺少 agent 类型")
+		return
+	}
+	if h.acpInfo == nil {
+		Fail(c, http.StatusServiceUnavailable, "CAPS_UNAVAILABLE", "当前服务不支持能力查询")
+		return
+	}
+	info, ok := h.acpInfo.AgentACPInfo(agentType)
+	if !ok {
+		Success(c, http.StatusOK, gin.H{"agent_type": agentType, "available": false})
+		return
+	}
+	agentName, agentVersion := "", ""
+	if ai := info.InitResp.AgentInfo; ai != nil {
+		agentName, agentVersion = ai.Name, ai.Version
+		if ai.Title != nil && *ai.Title != "" {
+			agentName = *ai.Title
+		}
+	}
+	pc := info.InitResp.AgentCapabilities.PromptCapabilities
+	mc := info.InitResp.AgentCapabilities.McpCapabilities
+	Success(c, http.StatusOK, gin.H{
+		"agent_type":       agentType,
+		"available":        true,
+		"protocol_version": int(info.InitResp.ProtocolVersion),
+		"agent_name":       agentName,
+		"agent_version":    agentVersion,
+		"auth_methods":     buildAuthMethodItems(info.InitResp.AuthMethods),
+		"prompt_capabilities": gin.H{
+			"image":            pc.Image,
+			"audio":            pc.Audio,
+			"embedded_context": pc.EmbeddedContext,
+		},
+		"mcp_capabilities": gin.H{"http": mc.Http, "sse": mc.Sse, "acp": mc.Acp},
+		"agent_methods":    buildAgentMethodItems(info.InitResp),
+		"client_methods":   buildClientMethodItems(info.ClientCaps),
+	})
 }
 
 // modelOptionItem 是对外暴露的模型 config option 描述。

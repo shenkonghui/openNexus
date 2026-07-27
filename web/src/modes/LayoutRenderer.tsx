@@ -210,6 +210,17 @@ function TabsView({ node, ctx, flex }: { node: Extract<LayoutNode, { kind: 'tabs
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [node.panels.join(','), node.defaultTab])
 
+  // 监听全局面板激活事件（如 agent 执行 shell 时自动弹出终端面板）
+  useEffect(() => {
+    const onActivate = (e: Event) => {
+      const panelId = (e as CustomEvent<{ panelId?: string }>).detail?.panelId
+      if (panelId && node.panels.includes(panelId)) setActive(panelId)
+    }
+    window.addEventListener('onx:activate-panel', onActivate)
+    return () => window.removeEventListener('onx:activate-panel', onActivate)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [node.panels.join(',')])
+
   return (
     <div className={styles.tabs} style={{ flex: flex ?? node.flex ?? 1 }}>
       <div className={styles.tabNav}>

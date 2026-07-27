@@ -115,7 +115,8 @@ export default function SessionSidebar({ sessions, workspaceId, currentId, onDel
     return () => { alive = false }
   }, [location.pathname, workspaceId])
 
-  // 加载任务管理任务（侧边栏「任务管理」分组展开时显示）
+  // 加载任务管理任务（侧边栏「任务管理」分组展开时显示）。
+  // 依赖 sessions：删除/新建会话会同步增删 tasks.json 登记条目，需重新拉取保持一致。
   useEffect(() => {
     if (!workspaceId) { setOrchTasks([]); return }
     let alive = true
@@ -123,7 +124,7 @@ export default function SessionSidebar({ sessions, workspaceId, currentId, onDel
       .then((r) => { if (alive) setOrchTasks(r.data.tasks || []) })
       .catch(() => { if (alive) setOrchTasks([]) })
     return () => { alive = false }
-  }, [workspaceId, location.pathname])
+  }, [workspaceId, location.pathname, sessions])
 
   useEffect(() => {
     let alive = true

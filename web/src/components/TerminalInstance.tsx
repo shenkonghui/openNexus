@@ -10,7 +10,8 @@ export interface TerminalInstanceProps {
   active: boolean
 }
 
-function buildTerminalURL(sessionId: number): string {
+/** 构造 WebSocket 端点 URL（query token 认证），path 为相对 API base 的路径（不含 token）。 */
+export function buildWSURL(path: string): string {
   const baseURL = import.meta.env.VITE_API_BASE || '/api/v1'
   const token = localStorage.getItem('access_token') || ''
   let wsBase: string
@@ -22,7 +23,17 @@ function buildTerminalURL(sessionId: number): string {
     const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
     wsBase = `${proto}//${window.location.host}${baseURL}`
   }
-  return `${wsBase}/sessions/${sessionId}/terminal?token=${encodeURIComponent(token)}`
+  const sep = path.includes('?') ? '&' : '?'
+  return `${wsBase}${path}${sep}token=${encodeURIComponent(token)}`
+}
+
+/** 构造会话级 WebSocket 端点 URL（query token 认证），供交互终端与 agent 终端事件订阅复用。 */
+export function buildSessionWSURL(sessionId: number, endpoint: string): string {
+  return buildWSURL(`/sessions/${sessionId}/${endpoint}`)
+}
+
+function buildTerminalURL(sessionId: number): string {
+  return buildSessionWSURL(sessionId, 'terminal')
 }
 
 function sendResize(term: XTerm, ws: WebSocket, fit: FitAddon) {
@@ -39,8 +50,9 @@ function sendResize(term: XTerm, ws: WebSocket, fit: FitAddon) {
   try { fit.fit() } catch {}
 }
 
-function startTerminal(
-  sessionId: number,
+/** 在容器内启动 xterm 并连接指定 WS 端点，双向转发输入输出。返回清理函数。 */
+export function startTerminal(
+  wsURL: string,
   container: HTMLDivElement,
   termRef: React.MutableRefObject<XTerm | null>,
   wsRef: React.MutableRefObject<WebSocket | null>,
@@ -61,7 +73,6 @@ function startTerminal(
   fitRef.current = fit
   term.writeln('\x1b[36m正在连接终端...\x1b[0m')
 
-  const wsURL = buildTerminalURL(sessionId)
   let ws: WebSocket
   try {
     ws = new WebSocket(wsURL)
@@ -138,7 +149,7 @@ export default function TerminalInstance({ sessionId, active }: TerminalInstance
 
   useEffect(() => {
     if (!containerRef.current) return
-    return startTerminal(sessionId, containerRef.current, termRef, wsRef, fitRef)
+    return startTerminal(buildTerminalURL(sessionId), containerRef.current, termRef, wsRef, fitRef)
   }, [sessionId])
 
   useEffect(() => {

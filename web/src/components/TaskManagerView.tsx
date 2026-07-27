@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next'
 import {
   getTaskManager, getTaskStatus, getTaskGitStatus, initTaskGitRepo,
   upsertTask, deleteTask, startTaskManager, stopTaskManager, saveTaskManager,
+  subscribeTaskEvents,
   type TaskManagerDef, type TaskManagerTask, type TaskPriority,
 } from '../api/taskmanager'
 import { sessionUrl, newTaskUrl } from '../utils/routes'
@@ -106,6 +107,28 @@ export default function TaskManagerView({ workspaceId, cwd, agents, restoreSessi
       if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null }
     }
   }, [def.tasks, workspaceId])
+
+  // 订阅后端 tasks.json 变更事件：任意来源（左侧操作、任务助手 MCP 工具、定时调度器）
+  // 写入后都会推送，收到即防抖刷新列表——保证两侧操作后左栏自动同步，
+  // 不再依赖前端对工具调用的正则检测或轮询兼容。
+  useEffect(() => {
+    if (!workspaceId) return
+    const ac = new AbortController()
+    let timer: ReturnType<typeof setTimeout> | null = null
+    subscribeTaskEvents(workspaceId, () => {
+      if (timer) clearTimeout(timer)
+      timer = setTimeout(() => {
+        timer = null
+        getTaskStatus(workspaceId)
+          .then((r) => setDef(normalizeDef(r.data)))
+          .catch(() => {})
+      }, 300)
+    }, ac.signal)
+    return () => {
+      ac.abort()
+      if (timer) clearTimeout(timer)
+    }
+  }, [workspaceId])
 
   async function reloadStatus() {
     if (!workspaceId) return

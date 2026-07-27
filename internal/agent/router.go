@@ -226,6 +226,22 @@ func (r *Router) ListAgentStatus() []acp.AgentStatus {
 	return r.service.ListAgentStatus()
 }
 
+// AgentACPInfo 返回指定 agent 类型最近一次 ACP 握手的能力信息，委托 service。
+func (r *Router) AgentACPInfo(agentType string) (acp.AgentACPInfo, bool) {
+	if r.service == nil {
+		return acp.AgentACPInfo{}, false
+	}
+	return r.service.AgentACPInfo(agentType)
+}
+
+// AgentAuthTerminalSpec 返回指定 agent 类型的 terminal 认证登录进程启动参数，委托 service。
+func (r *Router) AgentAuthTerminalSpec(agentType, methodID string) (acp.AuthTerminalSpec, error) {
+	if r.service == nil {
+		return acp.AuthTerminalSpec{}, errors.New("service 未配置")
+	}
+	return r.service.AgentAuthTerminalSpec(agentType, methodID)
+}
+
 // ====== SessionStore delegation methods ======
 
 func (r *Router) Prompt(ctx context.Context, sessionID, prompt string) (<-chan models.Message, error) {
@@ -498,4 +514,13 @@ func (r *Router) ListRunningDBSessionIDs(userID uint) ([]uint, error) {
 		return nil, errors.New("service 未配置")
 	}
 	return r.service.ListRunningDBSessionIDs(userID)
+}
+
+// SubscribeAgentTerminal 按 DB 会话 ID 订阅 agent 终端事件（供前端 WebSocket 桥接），委托 service。
+func (r *Router) SubscribeAgentTerminal(dbSessionID uint) ([]acp.TerminalSnapshot, <-chan acp.TerminalEvent, func(), error) {
+	if r.service == nil {
+		return nil, nil, nil, errors.New("service 未配置")
+	}
+	snapshots, ch, cancel := r.service.SubscribeAgentTerminal(dbSessionID)
+	return snapshots, ch, cancel, nil
 }

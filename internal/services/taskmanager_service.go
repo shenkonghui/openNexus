@@ -122,23 +122,51 @@ func (s *TaskManagerService) UpsertTask(cwd string, task models.TaskManagerTask)
 func (s *TaskManagerService) DeleteTask(cwd, taskID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
-	def, err := s.storeFor(cwd).Load()
+	removed, err := s.deleteTaskLocked(cwd, func(t *models.TaskManagerTask) bool { return t.ID == taskID })
 	if err != nil {
 		return err
 	}
+	if !removed {
+		return fmt.Errorf("任务 %s 不存在", taskID)
+	}
+	return nil
+}
+
+// UnregisterSessionTask 注销会话登记的任务：删除 tasks.json 中 db_session_id 匹配的条目。
+// 与 RegisterSessionTask 对称，删除会话时调用，避免会话删除后登记的任务残留
+// 在任务列表中。未登记过的会话（无匹配条目）视为成功，直接返回 nil。
+func (s *TaskManagerService) UnregisterSessionTask(cwd string, dbSessionID uint) error {
+	if cwd == "" || dbSessionID == 0 {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, err := s.deleteTaskLocked(cwd, func(t *models.TaskManagerTask) bool {
+		return t.DBSessionID != nil && *t.DBSessionID == dbSessionID
+	})
+	return err
+}
+
+// deleteTaskLocked 删除首个匹配的任务（需持有 s.mu）：取消运行、清理 worktree 并写回。
+// 返回是否删除了条目。
+func (s *TaskManagerService) deleteTaskLocked(cwd string, match func(*models.TaskManagerTask) bool) (bool, error) {
+	def, err := s.storeFor(cwd).Load()
+	if err != nil {
+		return false, err
+	}
 	idx := -1
-	var wtPath, branch string
+	var taskID, wtPath, branch string
 	for i := range def.Tasks {
-		if def.Tasks[i].ID == taskID {
+		if match(&def.Tasks[i]) {
 			idx = i
+			taskID = def.Tasks[i].ID
 			wtPath = def.Tasks[i].WorktreePath
 			branch = def.Tasks[i].Branch
 			break
 		}
 	}
 	if idx < 0 {
-		return fmt.Errorf("任务 %s 不存在", taskID)
+		return false, nil
 	}
 	// 取消运行中的任务
 	s.cancelLocked(cwd, taskID)
@@ -149,7 +177,10 @@ func (s *TaskManagerService) DeleteTask(cwd, taskID string) error {
 		}
 	}
 	def.Tasks = append(def.Tasks[:idx], def.Tasks[idx+1:]...)
-	return s.storeFor(cwd).Save(def)
+	if err := s.storeFor(cwd).Save(def); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // SetMaxParallel 更新并发上限。若当前有运行态且新值更小，已启动的任务不受影响，

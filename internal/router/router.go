@@ -55,6 +55,8 @@ func Setup(authSvc *services.AuthService, jwtSvc *services.JWTService, agentRout
 			}
 			protected.GET("/agents", agentH.List)
 			protected.GET("/agents/status", agentH.Status)
+			// agent 类型最近一次 ACP 握手的能力信息（设置页能力展示）
+			protected.GET("/agents/:type/capabilities", agentH.Capabilities)
 			protected.GET("/agents/:type/models", agentH.Models)
 			protected.GET("/agents/:type/commands", agentH.Commands)
 			protected.GET("/agents/:type/modes", agentH.Modes)
@@ -202,6 +204,7 @@ func Setup(authSvc *services.AuthService, jwtSvc *services.JWTService, agentRout
 					tm.GET("", tmH.Get)
 					tm.PUT("", tmH.Save)
 					tm.GET("/status", tmH.Status)
+					tm.GET("/events", tmH.Events)
 					tm.GET("/git-status", tmH.GitStatus)
 					tm.POST("/git-init", tmH.GitInit)
 					tm.POST("/start", tmH.Start)
@@ -259,6 +262,10 @@ func Setup(authSvc *services.AuthService, jwtSvc *services.JWTService, agentRout
 		// 终端 WebSocket（通过 query token 认证，不走 AuthRequired 中间件）
 		terminalH := handlers.NewTerminalHandler(agentRouter, jwtSvc)
 		v1.GET("/sessions/:id/terminal", terminalH.HandleTerminal)
+		// agent 终端事件桥接（只读）：agent 执行 shell 时推送 created/output/exit 事件
+		v1.GET("/sessions/:id/agent-terminals", terminalH.HandleAgentTerminal)
+		// terminal 类型认证的交互式登录终端（设置页「登录」按钮）
+		v1.GET("/agents/:type/auth-terminal", terminalH.HandleAgentAuthTerminal)
 	}
 
 	health := r.Group("/health")

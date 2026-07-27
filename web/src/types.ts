@@ -21,6 +21,35 @@ export interface AgentStatus {
   active_count: number;
 }
 
+// ACP 方法支持情况（设置页能力展示）
+export interface AcpMethodItem {
+  method: string;
+  supported: boolean;
+  gate?: string; // 门控该方法的 capability 字段；缺省为协议基线
+  unstable?: boolean;
+}
+
+// Agent 声明的认证方式
+export interface AcpAuthMethodItem {
+  id: string;
+  name: string;
+  type: 'agent' | 'env_var' | 'terminal';
+}
+
+// Agent 类型最近一次 ACP 握手的能力信息
+export interface AgentAcpCapabilities {
+  agent_type: string;
+  available: boolean;
+  protocol_version?: number;
+  agent_name?: string;
+  agent_version?: string;
+  auth_methods?: AcpAuthMethodItem[];
+  prompt_capabilities?: { image: boolean; audio: boolean; embedded_context: boolean };
+  mcp_capabilities?: { http: boolean; sse: boolean; acp: boolean };
+  agent_methods?: AcpMethodItem[];
+  client_methods?: AcpMethodItem[];
+}
+
 // Agent 配置（设置页面管理的本地 ACP agent）
 export interface AgentConfig {
   id: number;

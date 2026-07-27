@@ -10,10 +10,12 @@ import { getTaskSettings, updateTaskSettings } from '../api/tasks'
 import { getPermissionSettings, updatePermissionSettings } from '../api/permissions'
 import { reloadProgram, updateSelectorFilters } from '../api/config'
 import { getAgentPrefs, patchAgentPrefs } from '../api/agentPrefs'
-import type { AgentConfig, Agent, ModelOption, ConfigOption, TaskSettings, PermissionSettings } from '../types'
+import type { AgentConfig, Agent, ModelOption, ConfigOption, ConfigOptionValue, TaskSettings, PermissionSettings } from '../types'
 import { translateTag } from '../utils/tag'
 import { translatePrompt } from '../utils/defaultPrompts'
 import EditAgentDialog, { type AgentFormPayload } from './EditAgentDialog'
+import AgentAcpCapsPanel from './AgentAcpCapsPanel'
+import AgentModelSelector from './AgentModelSelector'
 import ConfigEditor from './ConfigEditor'
 import RawConfigCard from './RawConfigCard'
 import ErrorBanner from './ErrorBanner'
@@ -77,9 +79,9 @@ export default function SettingsDialog({ initialTab = 'language', onClose }: Pro
   const [defaultAgent, setDefaultAgent] = useState('')
   // 默认 agent 的默认模型（存入 agent-prefs 的 prefs[agent].model，新建任务时自动应用）
   const [defaultModel, setDefaultModel] = useState('')
-  const [defaultModelOptions, setDefaultModelOptions] = useState<ModelOption[]>([])
-  const [defaultModelProbing, setDefaultModelProbing] = useState(false)
-  const [agentPrefsMap, setAgentPrefsMap] = useState<Record<string, Record<string, string>>>({})
+  // 各 agent 的可用模型列表（供默认 Agent·模型 合并下拉，同新建任务页）
+  const [defaultModelsMap, setDefaultModelsMap] = useState<Record<string, ConfigOptionValue[]>>({})
+  const [defaultModelsProbing, setDefaultModelsProbing] = useState(false)
   const [noteAgent, setNoteAgent] = useState('')
   const [noteModel, setNoteModel] = useState('')
   const [noteInterval, setNoteInterval] = useState(5)
@@ -116,6 +118,8 @@ export default function SettingsDialog({ initialTab = 'language', onClose }: Pro
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [editingConfig, setEditingConfig] = useState<AgentConfig | null>(null)
+  // 展开 ACP 能力面板的 agent 类型（同时只展开一个，再次点击收起）
+  const [capsAgentType, setCapsAgentType] = useState('')
   const [saving, setSaving] = useState(false)
   const noteMcpEndpoint = `${window.location.origin}/mcp/notes`
   const noteMcpConfig = noteMcpToken ? buildNoteMcpConfig(noteMcpEndpoint, noteMcpToken) : ''
@@ -169,44 +173,33 @@ export default function SettingsDialog({ initialTab = 'language', onClose }: Pro
     return () => { alive = false }
   }, [tab, noteAgent, t])
 
-  // 进入 agent 页且选中默认 agent 时，加载其可用模型列表（供默认模型下拉选择）。
+  // 进入 agent 页时加载各 agent 的可用模型列表（优先会话缓存，回退探测）。
   useEffect(() => {
-    if (tab !== 'agent' || !defaultAgent) {
-      setDefaultModelOptions([])
-      return
-    }
+    if (tab !== 'agent' || agents.length === 0) return
     let alive = true
-    setDefaultModelProbing(true)
 
-    async function loadDefaultModels() {
+    async function loadAgentModels(agentType: string) {
       try {
-        const cached = await getAgentModels(defaultAgent)
+        const cached = await getAgentModels(agentType)
         if (!alive) return
         const fromSession = cached.data.model_options || []
         if (fromSession.length > 0 && fromSession[0].options.length > 0) {
-          setDefaultModelOptions(fromSession)
+          setDefaultModelsMap((prev) => ({ ...prev, [agentType]: fromSession[0].options }))
           return
         }
-        const probed = await probeAgentConfigs(defaultAgent)
+        const probed = await probeAgentConfigs(agentType)
         if (!alive) return
         const modelOpt = findModelConfigOption(probed.data.config_options || [])
-        if (modelOpt && modelOpt.options.length > 0) {
-          setDefaultModelOptions([modelOptFromConfig(modelOpt)])
-        } else {
-          setDefaultModelOptions([])
-        }
-      } catch (err) {
-        if (!alive) return
-        setDefaultModelOptions([])
-        setError(err instanceof Error ? err.message : t('common.failed'))
-      } finally {
-        if (alive) setDefaultModelProbing(false)
+        setDefaultModelsMap((prev) => ({ ...prev, [agentType]: modelOpt?.options || [] }))
+      } catch {
+        // 探测失败：记为空列表，下拉退化为 agent 级单项（使用默认模型）
+        if (alive) setDefaultModelsMap((prev) => (agentType in prev ? prev : { ...prev, [agentType]: [] }))
       }
     }
 
-    loadDefaultModels()
+    agents.forEach((a) => { loadAgentModels(a.type) })
     return () => { alive = false }
-  }, [tab, defaultAgent, t])
+  }, [tab, agents])
 
   async function loadData() {
     setLoading(true); setError('')
@@ -221,7 +214,6 @@ export default function SettingsDialog({ initialTab = 'language', onClose }: Pro
       const prefsMap: Record<string, Record<string, string>> = prefsResp.data.prefs || {}
       const lastAgent = prefsResp.data.last_agent_type || ''
       setDefaultAgent(lastAgent)
-      setAgentPrefsMap(prefsMap)
       setDefaultModel(prefsMap[lastAgent]?.model || '')
       setNoteAgent(noteSettingsResp.data.agent_type || '')
       setNoteModel(noteSettingsResp.data.model_value || '')
@@ -248,55 +240,39 @@ export default function SettingsDialog({ initialTab = 'language', onClose }: Pro
     } finally { setLoading(false) }
   }
 
-  async function handleSetDefault(agentType: string) {
+  // 合并下拉选择默认 Agent·模型：一次 PATCH 同时写 last_agent_type 与 prefs[agent].model；
+  // agentType 为空表示清除默认 agent，modelValue 为空表示使用 agent 自身默认模型。
+  async function handleSetDefaultCombo(agentType: string, modelValue: string) {
     setDefaultAgent(agentType)
-    // 切换 agent 后，默认模型回到该 agent 已保存的选择（无则置空，使用 agent 自身默认）。
-    setDefaultModel(agentPrefsMap[agentType]?.model || '')
+    setDefaultModel(modelValue)
     try {
-      await patchAgentPrefs({ last_agent_type: agentType })
-    } catch (err) {
-      setError(err instanceof Error ? err.message : t('common.failed'))
-    }
-  }
-
-  // 保存默认 agent 的默认模型（写入 prefs[agent].model；空值则清除，回退 agent 自身默认）。
-  async function handleSetDefaultModel(model: string) {
-    if (!defaultAgent) return
-    setDefaultModel(model)
-    setAgentPrefsMap((prev) => {
-      const next = { ...prev }
-      const cur = { ...(next[defaultAgent] || {}) }
-      if (model) cur.model = model
-      else delete cur.model
-      next[defaultAgent] = cur
-      return next
-    })
-    try {
-      await patchAgentPrefs({ agent_type: defaultAgent, configs: { model } })
-    } catch (err) {
-      setError(err instanceof Error ? err.message : t('common.failed'))
-    }
-  }
-
-  // 手动重新探测默认 agent 的可用模型列表。
-  async function handleProbeDefaultModel() {
-    if (!defaultAgent) return
-    setDefaultModelProbing(true); setError('')
-    try {
-      clearAgentProbeCache(defaultAgent)
-      const r = await probeAgentConfigs(defaultAgent, { force: true })
-      const modelOpt = findModelConfigOption(r.data.config_options || [])
-      if (modelOpt && modelOpt.options.length > 0) {
-        setDefaultModelOptions([modelOptFromConfig(modelOpt)])
+      if (agentType) {
+        await patchAgentPrefs({ last_agent_type: agentType, agent_type: agentType, configs: { model: modelValue } })
       } else {
-        setDefaultModelOptions([])
-        setError(t('scheduledTask.probeHint'))
+        await patchAgentPrefs({ last_agent_type: '' })
       }
     } catch (err) {
-      setDefaultModelOptions([])
       setError(err instanceof Error ? err.message : t('common.failed'))
+    }
+  }
+
+  // 手动强制重新探测所有 agent 的可用模型列表。
+  async function handleProbeDefaultModels() {
+    if (agents.length === 0) return
+    setDefaultModelsProbing(true); setError('')
+    try {
+      await Promise.all(agents.map(async (a) => {
+        clearAgentProbeCache(a.type)
+        try {
+          const r = await probeAgentConfigs(a.type, { force: true })
+          const modelOpt = findModelConfigOption(r.data.config_options || [])
+          setDefaultModelsMap((prev) => ({ ...prev, [a.type]: modelOpt?.options || [] }))
+        } catch {
+          // 单个 agent 探测失败不阻断其余，保留旧列表
+        }
+      }))
     } finally {
-      setDefaultModelProbing(false)
+      setDefaultModelsProbing(false)
     }
   }
 
@@ -640,59 +616,31 @@ export default function SettingsDialog({ initialTab = 'language', onClose }: Pro
                 <>
                   <p className={styles.hint}>{t('settings.hint')}</p>
                   <div className={styles.defaultSection}>
-                    <label className={styles.label}>{t('settings.defaultAgent')}</label>
+                    <label className={styles.label}>{t('settings.defaultAgentModel')}</label>
                     <div className={styles.defaultRow}>
-                      <select className={styles.input} value={defaultAgent}
-                        onChange={(e) => handleSetDefault(e.target.value)}
-                      >
-                        <option value="">{t('common.no')}</option>
-                        {agents.map((a) => (
-                          <option key={a.type} value={a.type}>{a.display_name}（{a.type}）</option>
-                        ))}
-                      </select>
+                      {/* 默认 Agent·模型 合并下拉（与新建任务页同一控件，含 selector.filters 过滤） */}
+                      <AgentModelSelector
+                        agents={agents}
+                        modelsByAgent={defaultModelsMap}
+                        filters={linesToList(selectorFiltersText)}
+                        selectedAgent={defaultAgent}
+                        selectedModel={defaultModel}
+                        placeholder={t('common.no')}
+                        className={styles.input}
+                        onSelect={handleSetDefaultCombo}
+                      />
+                      <button type="button" className={styles.secondaryBtn}
+                        onClick={handleProbeDefaultModels}
+                        disabled={defaultModelsProbing}
+                        title={t('scheduledTask.probeTitle')}
+                      >{defaultModelsProbing ? t('common.loading') : t('scheduledTask.probeConfig')}</button>
                       {defaultAgent && (
                         <button type="button" className={styles.clearDefaultBtn}
-                          onClick={async () => {
-                            setDefaultAgent('')
-                            setDefaultModel('')
-                            setDefaultModelOptions([])
-                            try { await patchAgentPrefs({ last_agent_type: '' }) }
-                            catch (err) { setError(err instanceof Error ? err.message : t('common.failed')) }
-                          }}
+                          onClick={() => handleSetDefaultCombo('', '')}
                         >{t('common.cancel')}</button>
                       )}
                     </div>
-                    {defaultAgent && (
-                      <>
-                        <label className={styles.label}>{t('settings.defaultModel')}</label>
-                        <div className={styles.inlineRow}>
-                          {defaultModelOptions.length > 0 && defaultModelOptions[0].options.length > 0 ? (
-                            <select className={styles.input} value={defaultModel}
-                              onChange={(e) => handleSetDefaultModel(e.target.value)}
-                            >
-                              <option value="">{t('scheduledTask.defaultModel')}</option>
-                              {defaultModelOptions[0].options.map((o) => (
-                                <option key={o.value} value={o.value}>
-                                  {o.name !== o.value ? `${o.name} (${o.value})` : o.value}
-                                </option>
-                              ))}
-                            </select>
-                          ) : (
-                            <input className={styles.input} type="text" value={defaultModel}
-                              onChange={(e) => setDefaultModel(e.target.value)}
-                              onBlur={(e) => handleSetDefaultModel(e.target.value)}
-                              placeholder={t('scheduledTask.modelValuePlaceholder')}
-                            />
-                          )}
-                          <button type="button" className={styles.secondaryBtn}
-                            onClick={handleProbeDefaultModel}
-                            disabled={defaultModelProbing}
-                            title={t('scheduledTask.probeTitle')}
-                          >{defaultModelProbing ? t('common.loading') : t('scheduledTask.probeConfig')}</button>
-                        </div>
-                        <p className={styles.sectionHint}>{t('settings.defaultModelHint')}</p>
-                      </>
-                    )}
+                    <p className={styles.sectionHint}>{t('settings.defaultAgentModelHint')}</p>
                   </div>
                   {/* agent+模型 合并下拉的显示过滤（写回 config.yaml agents.selector.filters，保存即生效） */}
                   <div className={styles.defaultSection}>
@@ -757,35 +705,43 @@ export default function SettingsDialog({ initialTab = 'language', onClose }: Pro
                             || (cfg.description || '').toLowerCase().includes(q)
                         })
                         .map((cfg) => (
-                        <div key={cfg.id} className={styles.configRow}>
-                          <div className={styles.configIcon}>{cfg.display_name.slice(0, 2).toUpperCase()}</div>
-                          <div className={styles.configInfo}>
-                            <div className={styles.configName}>{cfg.display_name}</div>
-                            {cfg.description && <div className={styles.configDesc}>{cfg.description}</div>}
+                        <div key={cfg.id}>
+                          <div className={styles.configRow}>
+                            <div className={styles.configIcon}>{cfg.display_name.slice(0, 2).toUpperCase()}</div>
+                            <div className={styles.configInfo}>
+                              <div className={styles.configName}>{cfg.display_name}</div>
+                              {cfg.description && <div className={styles.configDesc}>{cfg.description}</div>}
+                            </div>
+                            {cfg.enabled ? (
+                              <button type="button" className={styles.disableBtn}
+                                onClick={async () => {
+                                  try { await updateAgentConfig(cfg.id, { ...cfg, enabled: false }); await loadData() }
+                                  catch (err) { setError(err instanceof Error ? err.message : t('common.failed')) }
+                                }}
+                              >{t('settings.disable')}</button>
+                            ) : (
+                              <button type="button" className={styles.enableBtn}
+                                onClick={async () => {
+                                  try { await updateAgentConfig(cfg.id, { ...cfg, enabled: true }); await loadData() }
+                                  catch (err) { setError(err instanceof Error ? err.message : t('common.failed')) }
+                                }}
+                              >{t('settings.enable')}</button>
+                            )}
+                            {/* ACP 能力展示：agent-side / client-side method 支持情况 */}
+                            <button type="button" className={styles.updateBtn}
+                              onClick={() => setCapsAgentType(capsAgentType === cfg.type ? '' : cfg.type)}
+                              title={t('settings.acpCaps.title')}
+                            >{t('settings.acpCaps.btn')}</button>
+                            <button type="button" className={styles.updateBtn}
+                              onClick={() => handleUpdateAgent(cfg)}
+                              disabled={updatingAgentId === cfg.id}
+                              title={t('settings.updateAgent')}
+                            >{updatingAgentId === cfg.id ? t('settings.updatingAgent') : t('settings.updateAgent')}</button>
+                            <button type="button" className={styles.editIconBtn} title={t('common.edit')}
+                              onClick={() => setEditingConfig(cfg)}
+                            >⋯</button>
                           </div>
-                          {cfg.enabled ? (
-                            <button type="button" className={styles.disableBtn}
-                              onClick={async () => {
-                                try { await updateAgentConfig(cfg.id, { ...cfg, enabled: false }); await loadData() }
-                                catch (err) { setError(err instanceof Error ? err.message : t('common.failed')) }
-                              }}
-                            >{t('settings.disable')}</button>
-                          ) : (
-                            <button type="button" className={styles.enableBtn}
-                              onClick={async () => {
-                                try { await updateAgentConfig(cfg.id, { ...cfg, enabled: true }); await loadData() }
-                                catch (err) { setError(err instanceof Error ? err.message : t('common.failed')) }
-                              }}
-                            >{t('settings.enable')}</button>
-                          )}
-                          <button type="button" className={styles.updateBtn}
-                            onClick={() => handleUpdateAgent(cfg)}
-                            disabled={updatingAgentId === cfg.id}
-                            title={t('settings.updateAgent')}
-                          >{updatingAgentId === cfg.id ? t('settings.updatingAgent') : t('settings.updateAgent')}</button>
-                          <button type="button" className={styles.editIconBtn} title={t('common.edit')}
-                            onClick={() => setEditingConfig(cfg)}
-                          >⋯</button>
+                          {capsAgentType === cfg.type && <AgentAcpCapsPanel agentType={cfg.type} />}
                         </div>
                       ))
                     )}

@@ -1,4 +1,4 @@
-import { apiFetch } from './client'
+import { apiFetch, getBaseURL, getAuthHeaders } from './client'
 
 export type TaskPriority = 'p0' | 'p1' | 'p2'
 
@@ -86,6 +86,45 @@ export function stopTaskManager(workspaceId: number, taskId?: string): Promise<v
 // 轮询状态
 export function getTaskStatus(workspaceId: number): Promise<{ data: TaskManagerDef }> {
   return apiFetch(`/taskmanager/status${qs(workspaceId)}`)
+}
+
+// 订阅 tasks.json 变更事件（SSE，用 fetch 实现以携带认证头）。
+// 任意来源（左侧 UI、任务助手 MCP 工具、定时调度器）写入都会推送 changed 事件，
+// 收到后回调 onChanged；连接断开后指数退避自动重连，直到 signal 中止。
+export async function subscribeTaskEvents(
+  workspaceId: number,
+  onChanged: () => void,
+  signal: AbortSignal,
+): Promise<void> {
+  let retryDelay = 1000
+  while (!signal.aborted) {
+    try {
+      const resp = await fetch(`${getBaseURL()}/taskmanager/events${qs(workspaceId)}`, {
+        headers: getAuthHeaders(),
+        signal,
+      })
+      if (!resp.ok || !resp.body) throw new Error(`events 订阅失败 (${resp.status})`)
+      retryDelay = 1000
+      const reader = resp.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+      for (;;) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        const events = buffer.split('\n\n')
+        buffer = events.pop() || ''
+        // 心跳行以 ":" 开头，仅 data 行视为变更事件
+        if (events.some((ev) => ev.split('\n').some((l) => l.startsWith('data: ')))) {
+          onChanged()
+        }
+      }
+    } catch {
+      if (signal.aborted) return
+    }
+    await new Promise((r) => setTimeout(r, retryDelay))
+    retryDelay = Math.min(retryDelay * 2, 15000)
+  }
 }
 
 // 检查任务管理 cwd 是否为 git 仓库

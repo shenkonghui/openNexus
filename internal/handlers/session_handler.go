@@ -78,6 +78,9 @@ type SessionStore interface {
 // 使任务编排视图统一展示所有任务/对话。由 *services.TaskManagerService 实现。
 type SessionTaskRegistrar interface {
 	RegisterSessionTask(cwd string, sess *models.Session, prompt string) error
+	// UnregisterSessionTask 删除 tasks.json 中 db_session_id 匹配的任务条目，
+	// 与登记对称：删除会话时调用，避免任务列表残留已删除会话的条目。
+	UnregisterSessionTask(cwd string, dbSessionID uint) error
 }
 
 // SessionHandler 处理会话相关请求。
@@ -361,7 +364,25 @@ func (h *SessionHandler) Delete(c *gin.Context) {
 		writeSessionError(c, err)
 		return
 	}
+	// 同步注销 tasks.json 中该会话登记的任务（与首次发送时的登记对称），
+	// 否则会话删除后任务条目残留，侧边栏/编排页仍会展示。失败仅记日志。
+	h.unregisterFromTasks(sess)
 	Success(c, http.StatusOK, struct{}{})
+}
+
+// unregisterFromTasks 删除会话在其工作区 tasks.json 中登记的任务条目。
+// registrar 未注入或工作区缺失时静默跳过；失败仅记录日志，不影响删除结果。
+func (h *SessionHandler) unregisterFromTasks(sess *models.Session) {
+	if h.registrar == nil || sess.WorkspaceID == nil {
+		return
+	}
+	cwd, err := h.store.GetWorkspaceCwd(*sess.WorkspaceID)
+	if err != nil || cwd == "" {
+		return
+	}
+	if err := h.registrar.UnregisterSessionTask(cwd, sess.ID); err != nil {
+		slog.Warn("注销 tasks.json 会话任务失败", "session", sess.ID, "cwd", cwd, "err", err)
+	}
 }
 
 // Messages GET /api/v1/sessions/:id/messages

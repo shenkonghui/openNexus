@@ -22,6 +22,10 @@ interface AgentModelSelectorProps {
   selectedAgent: string
   selectedModel: string
   disabled?: boolean
+  /** 未选择时的占位项文案（提供后允许空选择：选中占位项回调 onSelect('','')） */
+  placeholder?: string
+  /** 额外的 select 样式类（如设置页表单风格） */
+  className?: string
   onSelect: (agentType: string, modelValue: string) => void
 }
 
@@ -48,28 +52,33 @@ export default function AgentModelSelector({
   selectedAgent,
   selectedModel,
   disabled,
+  placeholder,
+  className,
   onSelect,
 }: AgentModelSelectorProps) {
   const { t } = useTranslation()
 
-  // 编译过滤正则（非法项忽略；后端启动时已校验，此处仅兜底）
+  // 编译过滤正则（忽略大小写；非法项忽略，后端启动时已校验，此处仅兜底）
   const regexes = useMemo(() => {
     const out: RegExp[] = []
     for (const f of filters) {
-      try { out.push(new RegExp(f)) } catch { /* 非法正则忽略 */ }
+      try { out.push(new RegExp(f, 'i')) } catch { /* 非法正则忽略 */ }
     }
     return out
   }, [filters])
 
   const entries = useMemo(() => {
     const list: ComboEntry[] = []
-    const matches = (candidate: string) => regexes.length === 0 || regexes.some((re) => re.test(candidate))
+    // 任一候选串被任一正则命中即显示；候选串同时覆盖模型值与显示名称，
+    // 避免用户按下拉里看到的名称（如 "SWE 1.5"）过滤时因 value 写法不同（如 "swe-1.5"）而漏配。
+    const matches = (...candidates: string[]) =>
+      regexes.length === 0 || regexes.some((re) => candidates.some((c) => re.test(c)))
 
     for (const agent of agents) {
       const models = modelsByAgent[agent.type]
       if (models && models.length > 0) {
         for (const m of models) {
-          if (!matches(`${agent.type}/${m.value}`)) continue
+          if (!matches(`${agent.type}/${m.value}`, `${agent.type}/${m.name}`)) continue
           list.push({
             agentType: agent.type,
             modelValue: m.value,
@@ -96,7 +105,7 @@ export default function AgentModelSelector({
 
   if (agents.length === 0) {
     return (
-      <select className={styles.select} disabled value="">
+      <select className={className || styles.select} disabled value="">
         <option value="">{t('docMode.noAgent')}</option>
       </select>
     )
@@ -104,16 +113,22 @@ export default function AgentModelSelector({
 
   return (
     <select
-      className={styles.select}
-      value={encodeCombo(selectedAgent, selectedModel)}
+      className={className || styles.select}
+      value={selectedAgent ? encodeCombo(selectedAgent, selectedModel) : ''}
       disabled={disabled}
       title={entries.find((e) => e.agentType === selectedAgent && e.modelValue === selectedModel)?.title}
       onChange={(e) => {
+        if (e.target.value === '') {
+          // 选中占位项：清空选择
+          if (placeholder !== undefined) onSelect('', '')
+          return
+        }
         const idx = e.target.value.indexOf(SEP)
         if (idx < 0) return
         onSelect(e.target.value.slice(0, idx), e.target.value.slice(idx + 1))
       }}
     >
+      {placeholder !== undefined && <option value="">{placeholder}</option>}
       {entries.map((entry) => (
         <option key={encodeCombo(entry.agentType, entry.modelValue)} value={encodeCombo(entry.agentType, entry.modelValue)} title={entry.title}>
           {entry.label}

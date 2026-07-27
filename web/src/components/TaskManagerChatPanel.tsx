@@ -51,7 +51,7 @@ function buildSystemPrelude(): string {
     '- set_max_parallel：调整并发上限（1=串行，1~16）',
     '所有工具都需要 workspace_id 参数。',
     `当前工作区 workspace_id：__WORKSPACE_ID__`,
-    '若工具列表里看不到上述名称，再改为直接读写当前目录下 tasks.json 并运行校验：bash .agents/skills/orchestration-tasks/scripts/validate-tasks.sh tasks.json。',
+    '若工具列表里看不到上述名称，直接告知用户编排工具不可用；不要尝试直接编辑 tasks.json（该文件不在当前目录，而在工作区管理数据目录，直接改写不会生效）。',
     '任务启动后会基于 git worktree 隔离执行；用户可在编排页点击任务查看其会话并继续对话。',
     '完成后用一句话总结改动。',
     '',
@@ -242,11 +242,15 @@ export default function TaskManagerChatPanel({
     if (restoredKeyRef.current === key) return
     restoredKeyRef.current = key
     let alive = true
+    // 恢复是否已走完（含成功/失败/超时）；未走完就被 cleanup 中断时需回滚去重 key，
+    // 否则 StrictMode 双挂载下第二次 effect 会因 key 命中直接 return，conv 永远卡在 connecting。
+    let done = false
     setConv('connecting')
     // 避免后端接口异常/缓慢时恢复状态一直卡“等待响应”
     const timeoutId = setTimeout(() => {
       if (!alive) return
       alive = false
+      done = true
       setConv('idle')
       setError(t('common.timeout'))
     }, 10000)
@@ -267,12 +271,20 @@ export default function TaskManagerChatPanel({
       } catch { /* 会话可能已删除：忽略，保持空会话，允许重新新建 */ }
       finally {
         clearTimeout(timeoutId)
-        if (alive) setConv('idle')
+        if (alive) {
+          done = true
+          setConv('idle')
+        }
       }
     })()
     return () => {
       alive = false
       clearTimeout(timeoutId)
+      // 恢复被中断（如 StrictMode 卸载重挂）：回滚 key 并复位状态，允许下次重新恢复
+      if (!done && restoredKeyRef.current === key) {
+        restoredKeyRef.current = ''
+        setConv('idle')
+      }
     }
   }, [workspaceId, restoreSessionId])
 

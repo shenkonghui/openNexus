@@ -181,6 +181,8 @@ func main() {
 	acpSvc.SetPromptMaxDuration(cfg.Agents.PromptMaxDuration)
 	// 失败任务自动重试一次：agent 运行中崩溃时 ResumeSession（断连则重连）并重发 prompt。
 	acpSvc.SetFailedTaskAutoRetryOnce(cfg.Agents.FailedTaskAutoRetryOnceEnabled())
+	// ACP terminal 能力：开启后 agent 的 shell 由本服务代执行并在网页终端面板展示。
+	acpSvc.SetTerminalEnabled(cfg.Agents.TerminalBridgeEnabled())
 	// 全局权限规则（yolo/白名单/黑名单）来自 config.yaml 的 permissions 段。
 	// 启动时立即下发到 service（须在 PreconnectAllAsync 前，使新连接建连即拿到规则）。
 	acpSvc.ApplyPermissions(cfg.Permissions.Mode, cfg.Permissions.Allow, cfg.Permissions.Ask, cfg.Permissions.Deny)

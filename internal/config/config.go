@@ -93,8 +93,9 @@ type PasswordConfig struct {
 }
 
 // SelectorConfig 控制前端 agent+模型 合并下拉框的可见项。
-// Filters 是正则列表，匹配串为 "agentType/modelValue"（模型尚未探测到时仅 "agentType"）。
-// 为空则全部显示；非空时任一正则匹配（子串匹配）即显示。
+// Filters 是正则列表，前端对 "agentType/模型值" 与 "agentType/模型显示名称" 做子串匹配
+// （忽略大小写；模型尚未探测到时仅 "agentType"）。
+// 为空则全部显示；非空时任一正则匹配即显示。
 type SelectorConfig struct {
 	Filters []string `yaml:"filters"`
 }
@@ -132,6 +133,18 @@ type AgentsConfig struct {
 	// FailedTaskAutoRetryOnce 运行中 agent 崩溃/断连时，是否自动 ResumeSession（重建连接）
 	// 并重发同一 prompt，仅一次。nil=默认 true（与历史硬编码行为一致）；显式 false 可关闭。
 	FailedTaskAutoRetryOnce *bool `yaml:"failed_task_auto_retry_once"`
+	// TerminalEnabled 是否向 agent 声明 ACP terminal 能力：开启后 agent 的 shell 执行
+	// 由本服务代为执行（PTY），并在网页终端面板实时展示执行情况。
+	// nil=默认 true；显式 false 回退为 agent 内部执行（仅聊天流展示摘要）。
+	TerminalEnabled *bool `yaml:"terminal_enabled"`
+}
+
+// TerminalBridgeEnabled 返回是否向 agent 声明 ACP terminal 能力；未配置时默认 true。
+func (a AgentsConfig) TerminalBridgeEnabled() bool {
+	if a.TerminalEnabled == nil {
+		return true
+	}
+	return *a.TerminalEnabled
 }
 
 // FailedTaskAutoRetryOnceEnabled 返回失败任务是否自动重试一次；未配置时默认 true。

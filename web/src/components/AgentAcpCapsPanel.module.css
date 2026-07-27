@@ -1,0 +1,230 @@
+/* ACP 能力面板：嵌在设置页 agent 列表行下方的展开区域 */
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px 12px;
+  margin: -2px 0 6px 0;
+  background: var(--bg-muted);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+.hint {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.error {
+  color: var(--danger, #d33);
+  font-size: 12px;
+}
+
+.connectBtn {
+  align-self: flex-start;
+  padding: 3px 10px;
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.connectBtn:hover:not(:disabled) {
+  background: var(--accent-subtle);
+  color: var(--accent);
+  border-color: var(--accent-border);
+}
+
+.connectBtn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* 握手元信息行 */
+.metaRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+}
+
+.authMethodItem {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-right: 8px;
+}
+
+.loginBtn {
+  padding: 1px 8px;
+  background: var(--bg-surface);
+  color: var(--accent);
+  border: 1px solid var(--accent-border);
+  border-radius: 4px;
+  font-size: 11px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.loginBtn:hover {
+  background: var(--accent-subtle);
+}
+
+/* 交互式登录终端 */
+.authTerm {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.authTermHeader {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 10px;
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border);
+}
+
+.authTermTitle {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.authTermHint {
+  flex: 1;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.authTermClose {
+  padding: 1px 8px;
+  background: transparent;
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.authTermClose:hover {
+  color: var(--text-secondary);
+  border-color: var(--accent-border);
+}
+
+.authTermBody {
+  height: 320px;
+  background: #1e1e2e;
+  padding: 4px;
+}
+
+.metaItem {
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.metaLabel {
+  color: var(--text-muted);
+  margin-right: 4px;
+}
+
+.metaLabel::after {
+  content: ':';
+}
+
+/* 两张方法表并排（窄屏自动换行） */
+.tables {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.methodSection {
+  flex: 1;
+  min-width: 280px;
+}
+
+.methodTitle {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 4px;
+}
+
+.methodTable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+
+.methodTable th {
+  text-align: left;
+  font-weight: 500;
+  color: var(--text-muted);
+  padding: 3px 8px 3px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.methodTable td {
+  padding: 3px 8px 3px 0;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-secondary);
+  vertical-align: top;
+}
+
+.rowUnsupported td {
+  opacity: 0.55;
+}
+
+.methodName {
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  color: var(--text-primary);
+  background: none;
+  padding: 0;
+}
+
+.yes {
+  color: var(--success);
+}
+
+.no {
+  color: var(--text-muted);
+}
+
+.gateCell {
+  white-space: nowrap;
+}
+
+.gate {
+  font-family: var(--font-mono, monospace);
+  font-size: 10px;
+  color: var(--text-muted);
+  background: none;
+  padding: 0;
+}
+
+.baseline {
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.unstableBadge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 4px;
+  font-size: 9px;
+  line-height: 14px;
+  border-radius: 3px;
+  color: var(--warning, #b8860b);
+  border: 1px solid currentColor;
+  opacity: 0.8;
+}

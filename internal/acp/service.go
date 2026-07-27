@@ -78,6 +78,9 @@ type Service struct {
 	modes          map[string][]acp.SessionMode
 	// probeCache 缓存探测结果，按 agentType 存储，避免重复创建临时会话探测。
 	probeCache map[string][]acp.SessionConfigOption
+	// agentInitInfo 按 agentType 缓存最近一次 ACP 握手响应（能力/认证方式/协议版本），
+	// 断开后保留最后一次握手结果，供设置页展示 ACP 能力。
+	agentInitInfo map[string]acp.InitializeResponse
 	// agentCommands / agentModes 按 agentType 缓存，供新建任务页使用（无会话时）。
 	agentCommands    map[string][]acp.AvailableCommand
 	agentModes       map[string][]acp.SessionMode
@@ -142,6 +145,13 @@ type Service struct {
 	activePermRules atomic.Pointer[PermissionRules]
 	// sessionYolo 按 ACP SessionId 记录会话级 YOLO 开关（名单仍走 activePermRules）。
 	sessionYolo sync.Map
+
+	// terminalBridge 是 ACP terminal 能力桥接器（所有连接共享）：代 agent 执行 shell
+	// 并把执行事件按 DB session ID 广播给前端终端面板。
+	terminalBridge *TerminalBridge
+	// terminalEnabled 握手时是否向 agent 声明 terminal 能力。默认 true；
+	// 由 SetTerminalEnabled 注入（config.yaml agents.terminal_enabled）。
+	terminalEnabled bool
 }
 
 // TaskMetaTrigger 由任务元数据服务实现，发起任务时异步调用以打标签和生成标题。
@@ -157,7 +167,7 @@ func (s *Service) SetTaskMetaTrigger(t TaskMetaTrigger) {
 // NewService 创建新的 Service。
 // messagesDir 为会话消息 JSONL 目录（通常为 {data-dir}/messages）。
 func NewService(db *gorm.DB, messagesDir string, wsConfig config.WorkspaceConfig, skillsConfig config.SkillsConfig, commandsConfig config.CommandsConfig, rulesConfig config.RulesConfig, subAgentsConfig config.SubAgentsConfig) *Service {
-	return &Service{
+	svc := &Service{
 		sessions:                repository.NewSessionRepository(db),
 		messages:                repository.NewMessageRepository(messagesDir),
 		workspaces:              repository.NewWorkspaceRepository(db),
@@ -170,6 +180,7 @@ func NewService(db *gorm.DB, messagesDir string, wsConfig config.WorkspaceConfig
 		configs:                 make(map[string][]acp.SessionConfigOption),
 		modes:                   make(map[string][]acp.SessionMode),
 		probeCache:              make(map[string][]acp.SessionConfigOption),
+		agentInitInfo:           make(map[string]acp.InitializeResponse),
 		agentCommands:           make(map[string][]acp.AvailableCommand),
 		agentModes:              make(map[string][]acp.SessionMode),
 		activePrompts:           make(map[string]*msgBroadcaster),
@@ -184,7 +195,28 @@ func NewService(db *gorm.DB, messagesDir string, wsConfig config.WorkspaceConfig
 		subAgentUserDirs:        append([]string(nil), subAgentsConfig.UserDirs...),
 		subAgentProjectDirs:     append([]string(nil), subAgentsConfig.ProjectDirs...),
 		failedTaskAutoRetryOnce: true, // 默认开启；可由 SetFailedTaskAutoRetryOnce 覆盖
+		terminalEnabled:         true, // 默认开启；可由 SetTerminalEnabled 覆盖
 	}
+	// terminal 事件按 agent_session_id 反查 DB 会话路由到前端；查不到（如临时探测会话）则不路由
+	svc.terminalBridge = NewTerminalBridge(func(sid acp.SessionId) uint {
+		sess, err := svc.sessions.FindByAgentSessionID(string(sid))
+		if err != nil {
+			return 0
+		}
+		return sess.ID
+	})
+	return svc
+}
+
+// SetTerminalEnabled 设置握手时是否向 agent 声明 terminal 能力（仅对之后新建的连接生效）。
+func (s *Service) SetTerminalEnabled(enabled bool) {
+	s.terminalEnabled = enabled
+}
+
+// SubscribeAgentTerminal 按 DB 会话 ID 订阅 agent 终端事件（供前端 WebSocket 桥接）。
+// 返回订阅时刻的活跃终端快照、事件 channel 与取消函数。
+func (s *Service) SubscribeAgentTerminal(dbSessionID uint) ([]TerminalSnapshot, <-chan TerminalEvent, func()) {
+	return s.terminalBridge.Subscribe(dbSessionID)
 }
 
 // SetNotesMCP 注入笔记 MCP 设置仓库与对外 Base URL（供 NewSession 注入）。
@@ -776,7 +808,7 @@ func (s *Service) buildConnection(ctx context.Context, agentType, cwd string) (*
 			return nil, fmt.Errorf("创建工作目录 %s: %w", cwd, err)
 		}
 	}
-	newConn, err := NewConnection(backend, cwd, s.dbg)
+	newConn, err := NewConnection(backend, cwd, s.dbg, s.terminalEnabled)
 	if err != nil {
 		slog.Error("建立 agent 连接失败：启动 agent 进程失败",
 			"agent", agentType,
@@ -786,6 +818,8 @@ func (s *Service) buildConnection(ctx context.Context, agentType, cwd string) (*
 			"err", err)
 		return nil, fmt.Errorf("建立共享连接: %w", err)
 	}
+	// 注入 terminal 桥接器：握手声明能力后 agent 的 terminal/* 请求由 bridge 代执行
+	newConn.Client().SetTerminalBridge(s.terminalBridge)
 	initResp, err := newConn.Initialize(ctx)
 	if err != nil {
 		// 握手失败时先诊断进程状态（必须在 Close 之前），给出可操作的失败原因。
@@ -808,6 +842,10 @@ func (s *Service) buildConnection(ctx context.Context, agentType, cwd string) (*
 	}
 	slog.Debug("建立 agent 连接成功",
 		"agent", agentType, "cwd", cwd, "protocol", initResp.ProtocolVersion)
+	// 缓存握手响应（按 agentType，同类型多连接以最近一次为准），供设置页展示 ACP 能力
+	s.mu.Lock()
+	s.agentInitInfo[agentType] = initResp
+	s.mu.Unlock()
 	return newConn, nil
 }
 
@@ -1857,6 +1895,8 @@ func (s *Service) DeleteSession(ctx context.Context, sessionID string) error {
 	s.debugUnregister(agentSessionID(session))
 	s.bindACPSessionYolo(agentSessionID(session), false)
 	s.detachAndReleaseConn(ctx, session)
+	// 释放该会话残留的 agent 终端（若有），防进程泄漏
+	s.terminalBridge.ReleaseSession(session.ID)
 
 	// 先删消息再删会话，避免孤儿消息
 	if err := s.messages.DeleteBySessionID(session.SessionID); err != nil {
@@ -2866,6 +2906,73 @@ type AgentStatus struct {
 	AgentType   string `json:"agent_type"`
 	Status      string `json:"status"` // "connected" | "connecting" | "disconnected"
 	ActiveCount int    `json:"active_count"`
+}
+
+// AgentACPInfo 描述某 agent 类型最近一次 ACP 握手的能力信息，供设置页展示。
+type AgentACPInfo struct {
+	// InitResp 是 agent 在 initialize 握手中返回的完整响应。
+	InitResp acp.InitializeResponse
+	// ClientCaps 是本服务握手时向 agent 声明的 client 能力。
+	ClientCaps acp.ClientCapabilities
+}
+
+// AgentACPInfo 返回指定 agent 类型最近一次握手的能力信息。
+// 若该 agent 类型从未完成过握手则返回 ok=false。
+func (s *Service) AgentACPInfo(agentType string) (AgentACPInfo, bool) {
+	s.mu.RLock()
+	initResp, ok := s.agentInitInfo[agentType]
+	s.mu.RUnlock()
+	if !ok {
+		return AgentACPInfo{}, false
+	}
+	return AgentACPInfo{
+		InitResp:   initResp,
+		ClientCaps: clientCapabilities(s.terminalEnabled),
+	}, true
+}
+
+// AuthTerminalSpec 描述 terminal 类型认证方式对应的交互式登录进程启动参数：
+// 用 agent 二进制 + 认证方式声明的 args/env 拉起登录 TUI（如 OAuth 流程）。
+type AuthTerminalSpec struct {
+	Command    string
+	Args       []string
+	Env        []string
+	MethodName string
+}
+
+// AgentAuthTerminalSpec 根据最近一次握手声明的 terminal 类型认证方式，
+// 构造交互式登录进程的启动参数。methodID 为空时取第一个 terminal 类型认证方式。
+// 按 ACP unstable 约定，登录进程 = agent 二进制 + 认证方式声明的 args（不包含 ACP 服务参数）。
+func (s *Service) AgentAuthTerminalSpec(agentType, methodID string) (AuthTerminalSpec, error) {
+	b, err := s.GetBackend(agentType)
+	if err != nil {
+		return AuthTerminalSpec{}, err
+	}
+	s.mu.RLock()
+	initResp, ok := s.agentInitInfo[agentType]
+	s.mu.RUnlock()
+	if !ok {
+		return AuthTerminalSpec{}, fmt.Errorf("agent %s 尚未完成 ACP 握手，无法获取认证方式", agentType)
+	}
+	for _, m := range initResp.AuthMethods {
+		term := m.Terminal
+		if term == nil || (methodID != "" && term.Id != methodID) {
+			continue
+		}
+		// 环境变量：继承服务进程环境 + 后端声明（API key 等）+ 认证方式额外声明
+		env := append(os.Environ(), b.Env()...)
+		env = append(env, "TERM=xterm-256color")
+		for k, v := range term.Env {
+			env = append(env, fmt.Sprintf("%s=%v", k, v))
+		}
+		return AuthTerminalSpec{
+			Command:    b.Command(),
+			Args:       append([]string{}, term.Args...),
+			Env:        env,
+			MethodName: term.Name,
+		}, nil
+	}
+	return AuthTerminalSpec{}, fmt.Errorf("agent %s 未声明 terminal 类型认证方式", agentType)
 }
 
 // ListAgentStatus 返回所有已注册后端的连接状态与活跃会话数。

@@ -1,4 +1,4 @@
-import type { Agent, ModelOption, ConfigOption, AgentStatus, AgentCommand, SessionMode } from '../types'
+import type { Agent, ModelOption, ConfigOption, AgentStatus, AgentCommand, SessionMode, AgentAcpCapabilities } from '../types'
 import { apiFetch } from './client'
 
 // 获取可用 agent 列表（selector_filters 为 agent+模型 合并下拉的显示过滤正则，来自 config.yaml）
@@ -9,6 +9,11 @@ export function listAgents(): Promise<{ data: { agents: Agent[]; selector_filter
 // 获取所有 agent 类型的 ACP 连接状态
 export function listAgentStatus(): Promise<{ data: { agents: AgentStatus[] } }> {
   return apiFetch('/agents/status')
+}
+
+// 获取指定 agent 类型最近一次 ACP 握手的能力信息（从未握手时 available=false）
+export function getAgentCapabilities(agentType: string): Promise<{ data: AgentAcpCapabilities }> {
+  return apiFetch(`/agents/${encodeURIComponent(agentType)}/capabilities`)
 }
 
 // 获取指定 agent 类型的可用模型列表（从已有会话缓存获取，可能为空）

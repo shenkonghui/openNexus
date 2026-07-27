@@ -6,6 +6,19 @@ import (
 	"github.com/coder/acp-go-sdk"
 )
 
+func TestClientCapabilities(t *testing.T) {
+	caps := clientCapabilities(true)
+	if !caps.Fs.ReadTextFile || !caps.Fs.WriteTextFile {
+		t.Fatalf("fs 能力应始终声明: %+v", caps.Fs)
+	}
+	if !caps.Terminal {
+		t.Fatal("terminalEnabled=true 时应声明 Terminal 能力")
+	}
+	if clientCapabilities(false).Terminal {
+		t.Fatal("terminalEnabled=false 时不应声明 Terminal 能力")
+	}
+}
+
 func TestAutoAuthMethodIDs(t *testing.T) {
 	methods := []acp.AuthMethod{
 		{Agent: &acp.AuthMethodAgent{Id: "claude-login", Name: "Login"}},

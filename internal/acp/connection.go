@@ -20,14 +20,22 @@ type Connection struct {
 	process *Process
 	client  *Client
 
+	// terminalEnabled 握手时是否向 agent 声明 terminal 能力（agent shell 由本服务代执行）。
+	terminalEnabled bool
+
 	// mcpCaps 是 initialize 握手中 agent 声明的 MCP 传输能力（http/sse 等）。
 	// 在 Initialize 成功后写入（连接入池前），之后只读。
 	mcpCaps acp.McpCapabilities
+
+	// initResp 是 initialize 握手的完整响应（agent 能力、认证方式、协议版本等），
+	// 在 Initialize 成功后写入（连接入池前），之后只读，供设置页展示 ACP 能力。
+	initResp acp.InitializeResponse
 }
 
 // NewConnection 启动 agent 进程并建立 ACP 连接。
 // dbg 非空且 Enabled 时，用 tee 包装 stdin/stdout 捕获 JSON-RPC 报文。
-func NewConnection(backend Backend, workDir string, dbg *ACPDebugger) (*Connection, error) {
+// terminalEnabled 为 true 时握手声明 terminal 能力（agent 的 shell 改由本服务代执行）。
+func NewConnection(backend Backend, workDir string, dbg *ACPDebugger, terminalEnabled bool) (*Connection, error) {
 	proc, err := NewProcess(backend, workDir)
 	if err != nil {
 		return nil, err
@@ -45,31 +53,46 @@ func NewConnection(backend Backend, workDir string, dbg *ACPDebugger) (*Connecti
 	conn.SetLogger(slog.Default())
 
 	return &Connection{
-		conn:    conn,
-		process: proc,
-		client:  client,
+		conn:            conn,
+		process:         proc,
+		client:          client,
+		terminalEnabled: terminalEnabled,
 	}, nil
+}
+
+// clientCapabilities 构造握手时声明的 client 能力。
+// terminalEnabled 为 true 时声明 terminal 能力，agent 的 shell 执行会改走 terminal/* 方法，
+// 由 TerminalBridge 代执行并推送到前端终端面板。
+func clientCapabilities(terminalEnabled bool) acp.ClientCapabilities {
+	return acp.ClientCapabilities{
+		Fs: acp.FileSystemCapabilities{
+			ReadTextFile:  true,
+			WriteTextFile: true,
+		},
+		Terminal: terminalEnabled,
+	}
 }
 
 // Initialize 执行 ACP 握手。
 func (c *Connection) Initialize(ctx context.Context) (acp.InitializeResponse, error) {
-	slog.Debug("ACP initialize")
+	slog.Debug("ACP initialize", "terminal", c.terminalEnabled)
 	resp, err := c.conn.Initialize(ctx, acp.InitializeRequest{
-		ProtocolVersion: acp.ProtocolVersionNumber,
-		ClientCapabilities: acp.ClientCapabilities{
-			Fs: acp.FileSystemCapabilities{
-				ReadTextFile:  true,
-				WriteTextFile: true,
-			},
-		},
+		ProtocolVersion:    acp.ProtocolVersionNumber,
+		ClientCapabilities: clientCapabilities(c.terminalEnabled),
 	})
 	if err != nil {
 		return acp.InitializeResponse{}, fmt.Errorf("ACP initialize: %w", err)
 	}
 	c.mcpCaps = resp.AgentCapabilities.McpCapabilities
+	c.initResp = resp
 	slog.Debug("ACP initialize 完成", "protocol", resp.ProtocolVersion, "auth_methods", len(resp.AuthMethods),
 		"mcp_http", c.mcpCaps.Http, "mcp_sse", c.mcpCaps.Sse)
 	return resp, nil
+}
+
+// InitializeInfo 返回握手的完整响应（Initialize 成功前为零值）。
+func (c *Connection) InitializeInfo() acp.InitializeResponse {
+	return c.initResp
 }
 
 // McpCapabilities 返回 agent 握手时声明的 MCP 传输能力。

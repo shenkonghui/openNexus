@@ -62,7 +62,7 @@ agents:
         # 全局共享 MCP server 配置文件（标准 mcpServers JSON 格式）。
         # 该文件中的 mcpServers 会注入给所有 agent 会话。可在设置页「MCP」Tab 编辑。
         config_path: ~/.agents/mcp.json
-    # agent+模型 合并下拉框的显示过滤（正则列表，对 "agentType/modelValue" 做子串匹配）。
+    # agent+模型 合并下拉框的显示过滤（正则列表，对 "agentType/模型值" 与 "agentType/模型显示名称" 做子串匹配，忽略大小写）。
     # 为空则全部显示；非空时任一正则命中即显示。示例：
     # selector:
     #     filters:
@@ -78,6 +78,10 @@ agents:
     # 运行中 agent 崩溃/断连时，是否自动重新连接并重发同一 prompt（仅一次）。
     # true=开启（默认）；false=直接标记 interrupted，由用户手动重发。
     failed_task_auto_retry_once: true
+    # 是否向 agent 声明 ACP terminal 能力：开启后 agent 执行的 shell 命令由本服务
+    # 代为执行（PTY），并在网页终端面板自动展示执行情况。默认 true；
+    # 设为 false 回退为 agent 内部执行（仅聊天流展示摘要）。
+    terminal_enabled: true
 permissions:
     mode: normal
     allow: []

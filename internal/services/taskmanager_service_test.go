@@ -255,3 +255,47 @@ func TestRegisterSessionTask_EmptyInputs(t *testing.T) {
 		t.Fatalf("nil sess 应无操作: %v", err)
 	}
 }
+
+// TestUnregisterSessionTask_RemovesRegisteredTask 验证删除会话时同步移除
+// tasks.json 中按 db_session_id 登记的任务，与 RegisterSessionTask 对称。
+func TestUnregisterSessionTask_RemovesRegisteredTask(t *testing.T) {
+	cwd := t.TempDir()
+	svc := NewTaskManagerService(&mockTMExecutor{})
+	sess := &models.Session{ID: 77, SessionID: "s-77", AgentType: "a", Source: models.SessionSourceManual}
+	if err := svc.RegisterSessionTask(cwd, sess, "prompt"); err != nil {
+		t.Fatalf("登记: %v", err)
+	}
+	if err := svc.UnregisterSessionTask(cwd, sess.ID); err != nil {
+		t.Fatalf("UnregisterSessionTask: %v", err)
+	}
+	def, err := svc.Load(cwd)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(def.Tasks) != 0 {
+		t.Fatalf("注销后 tasks 数量 = %d, want 0", len(def.Tasks))
+	}
+}
+
+// TestUnregisterSessionTask_NoMatchIsNoop 验证无匹配条目时为无操作：
+// 不报错且不影响其他任务；空 cwd / 零 id 同样安全。
+func TestUnregisterSessionTask_NoMatchIsNoop(t *testing.T) {
+	cwd := t.TempDir()
+	svc := NewTaskManagerService(&mockTMExecutor{})
+	if err := svc.UpsertTask(cwd, models.TaskManagerTask{ID: "t1", Title: "普通任务"}); err != nil {
+		t.Fatalf("UpsertTask: %v", err)
+	}
+	if err := svc.UnregisterSessionTask(cwd, 999); err != nil {
+		t.Fatalf("无匹配应返回 nil: %v", err)
+	}
+	def, _ := svc.Load(cwd)
+	if len(def.Tasks) != 1 {
+		t.Fatalf("无关任务不应被删除，剩余 %d, want 1", len(def.Tasks))
+	}
+	if err := svc.UnregisterSessionTask("", 1); err != nil {
+		t.Fatalf("空 cwd 应无操作: %v", err)
+	}
+	if err := svc.UnregisterSessionTask(cwd, 0); err != nil {
+		t.Fatalf("零 id 应无操作: %v", err)
+	}
+}

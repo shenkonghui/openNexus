@@ -25,6 +25,8 @@ type Client struct {
 	streams map[acp.SessionId]map[*subscriber]struct{}
 	perm    *permissionBroker
 	rec     *fileRecorder
+	// term 可选：ACP terminal 能力桥接器（Service 级共享）。nil 时 terminal/* 为 no-op。
+	term *TerminalBridge
 }
 
 // NewClient 创建一个新的 Client。
@@ -116,6 +118,11 @@ func (c *Client) UnregisterFileWaiter(sessionID acp.SessionId) {
 // SetYoloCheck 注入会话 YOLO 查询（按 ACP SessionId）。
 func (c *Client) SetYoloCheck(fn func(acp.SessionId) bool) {
 	c.perm.setYoloCheck(fn)
+}
+
+// SetTerminalBridge 注入 terminal 能力桥接器（建连后、Initialize 前调用）。
+func (c *Client) SetTerminalBridge(b *TerminalBridge) {
+	c.term = b
 }
 
 // CancelPermissions 取消 session 所有挂起的权限请求。
@@ -210,27 +217,42 @@ func (c *Client) ReadTextFile(ctx context.Context, params acp.ReadTextFileReques
 	return acp.ReadTextFileResponse{Content: string(b)}, nil
 }
 
-// CreateTerminal 暂不实现，返回 no-op。
+// CreateTerminal 代 agent 启动命令并开始采集输出（bridge 未注入时 no-op）。
 func (c *Client) CreateTerminal(ctx context.Context, params acp.CreateTerminalRequest) (acp.CreateTerminalResponse, error) {
-	return acp.CreateTerminalResponse{}, nil
+	if c.term == nil {
+		return acp.CreateTerminalResponse{}, nil
+	}
+	return c.term.Create(ctx, params)
 }
 
-// TerminalOutput 暂不实现，返回 no-op。
+// TerminalOutput 返回终端当前输出与退出状态（bridge 未注入时 no-op）。
 func (c *Client) TerminalOutput(ctx context.Context, params acp.TerminalOutputRequest) (acp.TerminalOutputResponse, error) {
-	return acp.TerminalOutputResponse{}, nil
+	if c.term == nil {
+		return acp.TerminalOutputResponse{}, nil
+	}
+	return c.term.Output(params)
 }
 
-// ReleaseTerminal 暂不实现，返回 no-op。
+// ReleaseTerminal 终止并释放终端（bridge 未注入时 no-op）。
 func (c *Client) ReleaseTerminal(ctx context.Context, params acp.ReleaseTerminalRequest) (acp.ReleaseTerminalResponse, error) {
-	return acp.ReleaseTerminalResponse{}, nil
+	if c.term == nil {
+		return acp.ReleaseTerminalResponse{}, nil
+	}
+	return c.term.Release(params)
 }
 
-// WaitForTerminalExit 暂不实现，返回 no-op。
+// WaitForTerminalExit 阻塞等待终端命令退出（bridge 未注入时 no-op）。
 func (c *Client) WaitForTerminalExit(ctx context.Context, params acp.WaitForTerminalExitRequest) (acp.WaitForTerminalExitResponse, error) {
-	return acp.WaitForTerminalExitResponse{}, nil
+	if c.term == nil {
+		return acp.WaitForTerminalExitResponse{}, nil
+	}
+	return c.term.WaitForExit(ctx, params)
 }
 
-// KillTerminal 暂不实现，返回 no-op。
+// KillTerminal 终止终端进程但保留输出（bridge 未注入时 no-op）。
 func (c *Client) KillTerminal(ctx context.Context, params acp.KillTerminalRequest) (acp.KillTerminalResponse, error) {
-	return acp.KillTerminalResponse{}, nil
+	if c.term == nil {
+		return acp.KillTerminalResponse{}, nil
+	}
+	return c.term.Kill(params)
 }

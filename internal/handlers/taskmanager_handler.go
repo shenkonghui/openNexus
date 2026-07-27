@@ -1,9 +1,11 @@
 package handlers
 
 import (
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -242,6 +244,40 @@ func (h *TaskManagerHandler) Status(c *gin.Context) {
 		return
 	}
 	Success(c, http.StatusOK, gin.H{"max_parallel": def.MaxParallel, "tasks": def.Tasks})
+}
+
+// Events GET /api/v1/taskmanager/events?workspace_id=123 — SSE 推送 tasks.json 变更事件。
+// 任意来源（REST/MCP 工具/编排器/调度器）的写入都会触发一条 "changed" 事件，
+// 前端收到后重新拉取任务列表，实现两侧界面自动同步；定期发送心跳保活。
+func (h *TaskManagerHandler) Events(c *gin.Context) {
+	cwd, _, ok := h.resolveCwd(c)
+	if !ok {
+		return
+	}
+	ch, cancel := services.SubscribeTaskChanges(cwd)
+	defer cancel()
+
+	c.Header("Content-Type", "text/event-stream")
+	c.Header("Cache-Control", "no-cache")
+	c.Header("Connection", "keep-alive")
+	c.Header("X-Accel-Buffering", "no")
+	c.Status(http.StatusOK)
+
+	ctx := c.Request.Context()
+	heartbeat := time.NewTicker(30 * time.Second)
+	defer heartbeat.Stop()
+	c.Stream(func(w io.Writer) bool {
+		select {
+		case <-ctx.Done():
+			return false
+		case <-ch:
+			_, _ = io.WriteString(w, "data: changed\n\n")
+			return true
+		case <-heartbeat.C:
+			_, _ = io.WriteString(w, ": ping\n\n")
+			return true
+		}
+	})
 }
 
 // GitStatus GET /api/v1/taskmanager/git-status?workspace_id=123

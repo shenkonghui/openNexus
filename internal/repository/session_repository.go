@@ -109,6 +109,17 @@ func (r *SessionRepository) UpdateAgentSessionID(id uint, agentSessionID string)
 		Update("agent_session_id", agentSessionID).Error
 }
 
+// FindByAgentSessionID 按 ACP agent session ID 查询会话（terminal 事件路由用）。
+// 同一 agent_session_id 理论上仅对应一个活跃会话；取最近更新的一条兼容残留。
+func (r *SessionRepository) FindByAgentSessionID(agentSessionID string) (*models.Session, error) {
+	var s models.Session
+	if err := r.db.Where("agent_session_id = ?", agentSessionID).
+		Order("updated_at DESC").First(&s).Error; err != nil {
+		return nil, ErrSessionNotFound
+	}
+	return &s, nil
+}
+
 // UpdateModelValue 更新会话记录的模型值（创建时或会话内切换模型时调用），
 // 使配置项回显始终为"实际使用/发送时选择的模型"。
 func (r *SessionRepository) UpdateModelValue(id uint, modelValue string) error {
