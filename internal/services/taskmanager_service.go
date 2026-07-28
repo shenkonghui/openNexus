@@ -28,12 +28,16 @@ type TaskManagerExecutor interface {
 	Prompt(ctx context.Context, sessionID, prompt string) (<-chan models.Message, error)
 	// RunPromptOnce 在临时 ACP 会话发送一次 prompt 并收集文本响应（不落库），用于 AI 生成分支名。
 	RunPromptOnce(ctx context.Context, agentType, modelValue, prompt string) (string, error)
+	// RunSubAgent 在临时 ACP 会话执行一次任务（不落库、自动拒绝权限），用于 reviewer 审查。
+	RunSubAgent(ctx context.Context, cfg acp.SubAgentRunConfig) (string, error)
 }
 
 // TaskManagerService 管理任务管理：读写工作区管理数据目录中的 tasks.json、按并发上限调度任务、
 // 基于 git worktree 隔离每个任务的工作目录，并复用 RunSessionTask 创建持久会话执行。
 type TaskManagerService struct {
 	exec TaskManagerExecutor
+	// reviewSettings 提供全局 review 默认配置（SetReviewSettingsSource 注入，可为 nil）。
+	reviewSettings TaskReviewSettingsSource
 
 	mu       sync.Mutex                    // 保护运行态
 	stores   map[string]*TaskStore         // cwd -> 文件 store
@@ -316,26 +320,27 @@ func (s *TaskManagerService) runTask(run *orchRun, t *models.TaskManagerTask, wo
 
 	result, runErr := s.executeTask(ctx, run.cwd, t, workspaceID, userID)
 
-	fin := time.Now()
-	s.updateTask(run.cwd, t.ID, func(task *models.TaskManagerTask) {
-		task.FinishedAt = &fin
-		task.SessionID = result.SessionID
-		if result.DBSessionID > 0 {
-			dbID := result.DBSessionID
-			task.DBSessionID = &dbID
-		}
-		if runErr != nil {
+	// 失败路径直接收尾；成功路径交给 review 循环（未启用 review 时内部直接置 done）。
+	if runErr != nil || !result.Success {
+		fin := time.Now()
+		s.updateTask(run.cwd, t.ID, func(task *models.TaskManagerTask) {
+			task.FinishedAt = &fin
+			task.SessionID = result.SessionID
+			if result.DBSessionID > 0 {
+				dbID := result.DBSessionID
+				task.DBSessionID = &dbID
+			}
 			task.Status = models.TaskStatusFailed
-			task.Error = runErr.Error()
-			return
-		}
-		if !result.Success {
-			task.Status = models.TaskStatusFailed
-			task.Error = result.Error
-			return
-		}
-		task.Status = models.TaskStatusDone
-	})
+			if runErr != nil {
+				task.Error = runErr.Error()
+			} else {
+				task.Error = result.Error
+			}
+		})
+		return
+	}
+
+	s.reviewTask(ctx, run.cwd, t, userID, result)
 }
 
 // taskBranchNamePrompt 是 AI 生成任务分支名的提示词模板。
@@ -415,7 +420,9 @@ func (s *TaskManagerService) executeTask(ctx context.Context, cwd string, t *mod
 		return acp.SessionTaskResult{}, fmt.Errorf("创建 worktree: %w", err)
 	}
 
-	// 记录 branch/worktreePath
+	// 记录 branch/worktreePath（同时回写本地副本，供后续 review 采集 diff 使用）
+	t.Branch = branch
+	t.WorktreePath = wtPath
 	s.updateTask(cwd, t.ID, func(task *models.TaskManagerTask) {
 		task.Branch = branch
 		task.WorktreePath = wtPath

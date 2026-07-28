@@ -292,6 +292,8 @@ func main() {
 
 	// 任务元数据：自动打标签 + AI 标题生成（异步，fire-and-forget）
 	taskSettingsRepo := repository.NewTaskSettingsRepository(db)
+	// 编排任务 review：从任务设置读取全局 reviewer 配置（任务级可覆盖）
+	tmSvc.SetReviewSettingsSource(taskSettingsRepo)
 	sessionRepo := repository.NewSessionRepository(db)
 	taskMetaSvc := services.NewTaskMetaService(taskSettingsRepo, sessionRepo, agentRouter)
 	acpSvc.SetTaskMetaTrigger(taskMetaSvc)

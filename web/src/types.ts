@@ -288,7 +288,7 @@ export interface AgentPrefsPatch {
   configs?: Record<string, string>;
 }
 
-// 任务设置：自动打标签 + AI 标题生成
+// 任务设置：自动打标签 + AI 标题生成 + 编排任务 review
 export interface TaskSettings {
   auto_tag_enabled: boolean;
   auto_title_enabled: boolean;
@@ -298,6 +298,12 @@ export interface TaskSettings {
   tags: string[];
   tag_prompt: string;
   title_prompt: string;
+  // 编排任务 review 全局默认配置（任务级可覆盖）
+  review_enabled: boolean;
+  review_agent_type: string;
+  review_model_value: string;
+  review_max_rounds: number;
+  review_prompt: string;
 }
 
 // 全局权限规则配置（白名单 / 询问名单 / 黑名单，对所有会话生效）。

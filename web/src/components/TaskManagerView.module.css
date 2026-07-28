@@ -275,6 +275,30 @@
   color: var(--info);
 }
 
+.status_reviewing {
+  background: var(--info-bg);
+  color: var(--info);
+}
+
+/* review 结果小徽章（完成后展示审查通过/未通过） */
+.taskReview {
+  font-size: 11px;
+  padding: 2px 10px;
+  border-radius: 10px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.reviewPassed {
+  background: var(--success-bg);
+  color: var(--success);
+}
+
+.reviewFailed {
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+
 .status_queued {
   background: var(--warning-bg);
   color: var(--warning);

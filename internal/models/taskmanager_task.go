@@ -11,6 +11,7 @@ const (
 	TaskStatusPending   = "pending"   // 已定义，尚未加入队列
 	TaskStatusQueued    = "queued"    // 已入队，等待执行槽位
 	TaskStatusRunning   = "running"   // 正在执行（agent 产出消息中）
+	TaskStatusReviewing = "reviewing" // 执行完毕，reviewer agent 审查/修复循环中
 	TaskStatusDone      = "done"      // 正常完成
 	TaskStatusFailed    = "failed"    // 执行失败
 	TaskStatusCanceled  = "canceled"  // 用户手动停止
@@ -52,7 +53,7 @@ func TaskPriorityRank(priority string) int {
 // IsTaskRunning 报告该状态是否属于"占用执行资源"的活跃态。
 func IsTaskRunning(status string) bool {
 	switch status {
-	case TaskStatusQueued, TaskStatusRunning:
+	case TaskStatusQueued, TaskStatusRunning, TaskStatusReviewing:
 		return true
 	default:
 		return false
@@ -97,6 +98,16 @@ type TaskExecutionRecord struct {
 	Error       string    `json:"error,omitempty"`
 }
 
+// TaskReviewConfig 是任务级 review 配置；任务上为 nil 时跟随全局 TaskSettings。
+type TaskReviewConfig struct {
+	Enabled bool `json:"enabled"`
+	// AgentType / ModelValue 指定 reviewer agent；空 = 用全局 reviewer 配置。
+	AgentType  string `json:"agent_type,omitempty"`
+	ModelValue string `json:"model_value,omitempty"`
+	// MaxRounds 最大 review 轮数；<=0 用全局值。
+	MaxRounds int `json:"max_rounds,omitempty"`
+}
+
 // TaskManagerTask 描述单个任务的定义与运行时状态。
 // 持久化于工作区 cwd 下的 tasks.json（见 TaskManagerDef）。
 // 当 Schedule 非 nil 时，该任务为定时任务，由 SchedulerService 调度；
@@ -110,6 +121,9 @@ type TaskManagerTask struct {
 	ModelValue string `json:"model_value,omitempty"`
 	// Priority 任务优先级：p0 / p1 / p2，缺省 p1。
 	Priority string `json:"priority,omitempty"`
+
+	// Review 非 nil 时覆盖全局 review 配置（nil = 跟随全局 TaskSettings）。
+	Review *TaskReviewConfig `json:"review,omitempty"`
 
 	// Schedule 非 nil 时表示定时任务；任务管理/手动任务为 nil。
 	Schedule *TaskSchedule `json:"schedule,omitempty"`
@@ -126,6 +140,10 @@ type TaskManagerTask struct {
 	StartedAt    *time.Time `json:"started_at,omitempty"`
 	FinishedAt   *time.Time `json:"finished_at,omitempty"`
 	Error        string     `json:"error,omitempty"`
+	// Review 运行时结果——review 循环每轮写回。
+	ReviewRounds   int    `json:"review_rounds,omitempty"`   // 已执行的 review 轮数
+	ReviewPassed   *bool  `json:"review_passed,omitempty"`   // 最近一轮判定（nil = 未 review 过）
+	ReviewFeedback string `json:"review_feedback,omitempty"` // 最近一轮审查意见
 
 	// 可扩展：任务间依赖（v1 仅做数据层，引擎按并发上限调度）。
 	DependsOn []string `json:"depends_on,omitempty"`

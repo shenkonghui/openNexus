@@ -100,6 +100,12 @@ export default function SettingsDialog({ initialTab = 'language', onClose }: Pro
   const [taskTagInput, setTaskTagInput] = useState('')
   const [taskTagPrompt, setTaskTagPrompt] = useState('')
   const [taskTitlePrompt, setTaskTitlePrompt] = useState('')
+  // 编排任务 review 全局默认配置（任务级可覆盖）
+  const [taskReviewEnabled, setTaskReviewEnabled] = useState(false)
+  const [taskReviewAgent, setTaskReviewAgent] = useState('')
+  const [taskReviewModel, setTaskReviewModel] = useState('')
+  const [taskReviewMaxRounds, setTaskReviewMaxRounds] = useState(2)
+  const [taskReviewPrompt, setTaskReviewPrompt] = useState('')
   const [taskSettingsSaving, setTaskSettingsSaving] = useState(false)
   const [taskSettingsSaved, setTaskSettingsSaved] = useState(false)
   // 权限规则设置（白名单 / 黑名单 / 询问名单；mode 由侧栏全局 YOLO 开关控制，保存时保留）
@@ -173,9 +179,9 @@ export default function SettingsDialog({ initialTab = 'language', onClose }: Pro
     return () => { alive = false }
   }, [tab, noteAgent, t])
 
-  // 进入 agent 页时加载各 agent 的可用模型列表（优先会话缓存，回退探测）。
+  // 进入 agent / 任务页时加载各 agent 的可用模型列表（优先会话缓存，回退探测）。
   useEffect(() => {
-    if (tab !== 'agent' || agents.length === 0) return
+    if ((tab !== 'agent' && tab !== 'task') || agents.length === 0) return
     let alive = true
 
     async function loadAgentModels(agentType: string) {
@@ -229,6 +235,11 @@ export default function SettingsDialog({ initialTab = 'language', onClose }: Pro
       setTaskTags(ts.tags || [])
       setTaskTagPrompt(ts.tag_prompt || '')
       setTaskTitlePrompt(ts.title_prompt || '')
+      setTaskReviewEnabled(!!ts.review_enabled)
+      setTaskReviewAgent(ts.review_agent_type || '')
+      setTaskReviewModel(ts.review_model_value || '')
+      setTaskReviewMaxRounds(ts.review_max_rounds || 2)
+      setTaskReviewPrompt(ts.review_prompt || '')
       // 权限规则设置（保留全局 YOLO mode，避免保存名单时误关）
       const ps = permResp.data
       setPermMode(ps.mode === 'yolo' ? 'yolo' : 'normal')
@@ -363,10 +374,16 @@ export default function SettingsDialog({ initialTab = 'language', onClose }: Pro
         tags: taskTags,
         tag_prompt: taskTagPrompt,
         title_prompt: taskTitlePrompt,
+        review_enabled: taskReviewEnabled,
+        review_agent_type: taskReviewAgent,
+        review_model_value: taskReviewModel,
+        review_max_rounds: taskReviewMaxRounds,
+        review_prompt: taskReviewPrompt,
       })
       setTaskTags(resp.data.tags || [])
       setTaskTagPrompt(resp.data.tag_prompt || '')
       setTaskTitlePrompt(resp.data.title_prompt || '')
+      setTaskReviewPrompt(resp.data.review_prompt || '')
       setTaskSettingsSaved(true)
     } catch (err) {
       setError(err instanceof Error ? err.message : t('common.failed'))
@@ -967,6 +984,39 @@ export default function SettingsDialog({ initialTab = 'language', onClose }: Pro
                       ))}
                     </div>
 
+                    {/* 编排任务 Review 全局默认配置 */}
+                    <label className={styles.label}>
+                      <input
+                        type="checkbox"
+                        checked={taskReviewEnabled}
+                        onChange={(e) => setTaskReviewEnabled(e.target.checked)}
+                        style={{ marginRight: 8, verticalAlign: 'middle' }}
+                      />
+                      {t('settings.taskReview')}
+                    </label>
+                    <p className={styles.sectionHint}>{t('settings.taskReviewHint')}</p>
+                    {taskReviewEnabled && (
+                      <>
+                        <label className={styles.label}>{t('settings.reviewAgent')}</label>
+                        <p className={styles.sectionHint}>{t('settings.reviewAgentHint')}</p>
+                        <AgentModelSelector
+                          agents={agents}
+                          modelsByAgent={defaultModelsMap}
+                          filters={linesToList(selectorFiltersText)}
+                          selectedAgent={taskReviewAgent}
+                          selectedModel={taskReviewModel}
+                          placeholder={t('settings.reviewAgentFollow')}
+                          className={styles.input}
+                          onSelect={(agentType, modelValue) => { setTaskReviewAgent(agentType); setTaskReviewModel(modelValue) }}
+                        />
+                        <label className={styles.label}>{t('settings.reviewMaxRounds')}</label>
+                        <input className={styles.input} type="number" min={1} max={10}
+                          value={taskReviewMaxRounds}
+                          onChange={(e) => setTaskReviewMaxRounds(Math.max(1, Math.floor(Number(e.target.value) || 1)))}
+                        />
+                      </>
+                    )}
+
                     {/* 高级：自定义提示词 */}
                     <details className={styles.advancedSection}>
                       <summary className={styles.advancedSummary}>{t('settings.taskAdvanced')}</summary>
@@ -981,6 +1031,12 @@ export default function SettingsDialog({ initialTab = 'language', onClose }: Pro
                       <textarea className={styles.textarea} rows={6}
                         value={translatePrompt(taskTitlePrompt)}
                         onChange={(e) => setTaskTitlePrompt(e.target.value)}
+                      />
+                      <label className={styles.label}>{t('settings.reviewPrompt')}</label>
+                      <p className={styles.sectionHint}>{t('settings.reviewPromptHint')}</p>
+                      <textarea className={styles.textarea} rows={6}
+                        value={translatePrompt(taskReviewPrompt)}
+                        onChange={(e) => setTaskReviewPrompt(e.target.value)}
                       />
                     </details>
 

@@ -195,6 +195,9 @@ func (s *TaskStore) UpsertTask(task models.TaskManagerTask) error {
 			task.StartedAt = cur.StartedAt
 			task.FinishedAt = cur.FinishedAt
 			task.Error = cur.Error
+			task.ReviewRounds = cur.ReviewRounds
+			task.ReviewPassed = cur.ReviewPassed
+			task.ReviewFeedback = cur.ReviewFeedback
 			task.Executions = cur.Executions
 			task.Branch = ifEmpty(task.Branch, cur.Branch)
 			task.Schedule = ifNilSchedule(task.Schedule, cur.Schedule)

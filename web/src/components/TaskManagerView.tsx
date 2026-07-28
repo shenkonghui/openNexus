@@ -5,17 +5,19 @@ import {
   getTaskManager, getTaskStatus, getTaskGitStatus, initTaskGitRepo,
   upsertTask, deleteTask, startTaskManager, stopTaskManager, saveTaskManager,
   subscribeTaskEvents,
-  type TaskManagerDef, type TaskManagerTask, type TaskPriority,
+  type TaskManagerDef, type TaskManagerTask, type TaskPriority, type TaskReviewConfig,
 } from '../api/taskmanager'
+import { listAgents, getAgentModels, probeAgentConfigs } from '../api/agents'
 import { sessionUrl, newTaskUrl } from '../utils/routes'
-import type { Agent } from '../types'
+import type { Agent, ConfigOptionValue } from '../types'
 import LoadingSpinner from './LoadingSpinner'
 import TaskManagerChatPanel from './TaskManagerChatPanel'
+import AgentModelSelector from './AgentModelSelector'
 import SplitPane from './SplitPane'
 import styles from './TaskManagerView.module.css'
 import { ChevronRight, ChevronDown, MessagesSquare, GitBranch, Plus, FileJson, List, Play, PlayCircle, Square, Trash2 } from 'lucide-react'
 
-const ACTIVE_STATUSES = new Set(['queued', 'running'])
+const ACTIVE_STATUSES = new Set(['queued', 'running', 'reviewing'])
 
 // 生成一个不与现有任务冲突的短 id（客户端新建任务用）。
 function genTaskId(): string {
@@ -61,6 +63,15 @@ export default function TaskManagerView({ workspaceId, cwd, agents, restoreSessi
   const [newPrompt, setNewPrompt] = useState('')
   const [newPriority, setNewPriority] = useState<TaskPriority>('p1')
   const [newAgent, setNewAgent] = useState('')
+  // 新任务 review 三态：跟随全局 / 开启（可选 reviewer 与轮数） / 关闭
+  const [newReviewMode, setNewReviewMode] = useState<'inherit' | 'on' | 'off'>('inherit')
+  const [newReviewAgent, setNewReviewAgent] = useState('')
+  const [newReviewModel, setNewReviewModel] = useState('')
+  // 0 = 跟随全局最大轮数
+  const [newReviewMaxRounds, setNewReviewMaxRounds] = useState(0)
+  // reviewer 合并下拉数据：各 agent 可用模型与显示过滤（选择「开启」时懒加载）
+  const [reviewModelsMap, setReviewModelsMap] = useState<Record<string, ConfigOptionValue[]>>({})
+  const [selectorFilters, setSelectorFilters] = useState<string[]>([])
   // JSON 查看/编辑模式
   const [jsonMode, setJsonMode] = useState(false)
   const [jsonText, setJsonText] = useState('')
@@ -130,6 +141,36 @@ export default function TaskManagerView({ workspaceId, cwd, agents, restoreSessi
     }
   }, [workspaceId])
 
+  // 选择「开启 review」时加载各 agent 可用模型与 selector.filters（优先会话缓存，回退探测，同设置页）。
+  useEffect(() => {
+    if (newReviewMode !== 'on' || agents.length === 0) return
+    let alive = true
+    listAgents()
+      .then((r) => { if (alive) setSelectorFilters(r.data.selector_filters || []) })
+      .catch(() => {})
+    async function loadModels(agentType: string) {
+      try {
+        const cached = await getAgentModels(agentType)
+        if (!alive) return
+        const fromSession = cached.data.model_options || []
+        if (fromSession.length > 0 && fromSession[0].options.length > 0) {
+          setReviewModelsMap((prev) => ({ ...prev, [agentType]: fromSession[0].options }))
+          return
+        }
+        const probed = await probeAgentConfigs(agentType)
+        if (!alive) return
+        const opts = probed.data.config_options || []
+        const modelOpt = opts.find((o) => o.category === 'model' && o.type === 'select') || opts.find((o) => o.category === 'model')
+        setReviewModelsMap((prev) => ({ ...prev, [agentType]: modelOpt?.options || [] }))
+      } catch {
+        // 探测失败：记为空列表，下拉退化为 agent 级单项（使用默认模型）
+        if (alive) setReviewModelsMap((prev) => (agentType in prev ? prev : { ...prev, [agentType]: [] }))
+      }
+    }
+    agents.forEach((a) => { loadModels(a.type) })
+    return () => { alive = false }
+  }, [newReviewMode, agents])
+
   async function reloadStatus() {
     if (!workspaceId) return
     try {
@@ -154,13 +195,23 @@ export default function TaskManagerView({ workspaceId, cwd, agents, restoreSessi
     if (!prompt) { onError(t('taskmanager.promptRequired')); return }
     const title = newTitle.trim() || prompt.split('\n')[0].slice(0, 40)
     const agentType = (newAgent || agents[0]?.type || '').trim()
+    // review 三态：跟随全局不传 review；开启时携带 reviewer 配置；关闭传 {enabled:false}
+    let review: TaskReviewConfig | undefined
+    if (newReviewMode === 'on') {
+      review = { enabled: true }
+      if (newReviewAgent) { review.agent_type = newReviewAgent; review.model_value = newReviewModel }
+      if (newReviewMaxRounds > 0) review.max_rounds = newReviewMaxRounds
+    } else if (newReviewMode === 'off') {
+      review = { enabled: false }
+    }
     setBusy(true)
     try {
-      await upsertTask(workspaceId, { id: genTaskId(), title, detail: prompt, agent_type: agentType, priority: newPriority })
+      await upsertTask(workspaceId, { id: genTaskId(), title, detail: prompt, agent_type: agentType, priority: newPriority, review })
       setShowNewForm(false)
       setNewTitle('')
       setNewPrompt('')
       setNewPriority('p1')
+      resetNewReview()
       await reloadDef()
     } catch (e) {
       onError(String((e as Error)?.message || e))
@@ -169,11 +220,19 @@ export default function TaskManagerView({ workspaceId, cwd, agents, restoreSessi
     }
   }
 
+  function resetNewReview() {
+    setNewReviewMode('inherit')
+    setNewReviewAgent('')
+    setNewReviewModel('')
+    setNewReviewMaxRounds(0)
+  }
+
   function cancelNewForm() {
     setShowNewForm(false)
     setNewTitle('')
     setNewPrompt('')
     setNewPriority('p1')
+    resetNewReview()
   }
 
   // 手动启动单个任务。
@@ -400,6 +459,39 @@ export default function TaskManagerView({ workspaceId, cwd, agents, restoreSessi
                     <option value="p1">{t('taskmanager.priority_p1')}</option>
                     <option value="p2">{t('taskmanager.priority_p2')}</option>
                   </select>
+                  {/* review 三态：跟随全局 / 开启 / 关闭 */}
+                  <select
+                    className={styles.formSelect}
+                    value={newReviewMode}
+                    onChange={(e) => setNewReviewMode(e.target.value as 'inherit' | 'on' | 'off')}
+                    aria-label={t('taskmanager.review')}
+                  >
+                    <option value="inherit">{t('taskmanager.reviewInherit')}</option>
+                    <option value="on">{t('taskmanager.reviewOn')}</option>
+                    <option value="off">{t('taskmanager.reviewOff')}</option>
+                  </select>
+                  {newReviewMode === 'on' && (
+                    <>
+                      <AgentModelSelector
+                        agents={agents}
+                        modelsByAgent={reviewModelsMap}
+                        filters={selectorFilters}
+                        selectedAgent={newReviewAgent}
+                        selectedModel={newReviewModel}
+                        placeholder={t('taskmanager.reviewAgentFollow')}
+                        className={styles.formSelect}
+                        onSelect={(agentType, modelValue) => { setNewReviewAgent(agentType); setNewReviewModel(modelValue) }}
+                      />
+                      <input
+                        className={styles.formInput}
+                        type="number" min={1} max={10}
+                        value={newReviewMaxRounds || ''}
+                        onChange={(e) => setNewReviewMaxRounds(Math.max(0, Math.floor(Number(e.target.value) || 0)))}
+                        placeholder={t('taskmanager.reviewRoundsPlaceholder')}
+                        aria-label={t('taskmanager.reviewMaxRounds')}
+                      />
+                    </>
+                  )}
                   <div className={styles.formActions}>
                     <button type="button" className={styles.formCancel} onClick={cancelNewForm} disabled={busy}>
                       {t('taskmanager.cancel')}
@@ -444,6 +536,17 @@ export default function TaskManagerView({ workspaceId, cwd, agents, restoreSessi
                         <span className={`${styles.taskPriority} ${styles[`priority_${task.priority || 'p1'}`] || ''}`}>
                           {t(`taskmanager.priority_${task.priority || 'p1'}`)}
                         </span>
+                        {/* review 结果：完成后展示通过/未通过，审查意见放 title 提示 */}
+                        {typeof task.review_passed === 'boolean' && (
+                          <span
+                            className={`${styles.taskReview} ${task.review_passed ? styles.reviewPassed : styles.reviewFailed}`}
+                            title={task.review_feedback || ''}
+                          >
+                            {task.review_passed
+                              ? t('taskmanager.reviewPassed')
+                              : t('taskmanager.reviewFailed', { rounds: task.review_rounds || 0 })}
+                          </span>
+                        )}
                         <span className={`${styles.taskStatus} ${styles[`status_${task.status}`] || ''}`}>
                           {t(`taskmanager.status_${task.status}`)}
                         </span>

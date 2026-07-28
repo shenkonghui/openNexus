@@ -108,6 +108,8 @@ type upsertTaskRequest struct {
 	ModelValue string   `json:"model_value"`
 	Priority   string   `json:"priority"`
 	DependsOn  []string `json:"depends_on"`
+	// Review 任务级 review 覆盖；nil = 跟随全局任务设置。
+	Review *models.TaskReviewConfig `json:"review"`
 }
 
 // UpsertTask POST /api/v1/taskmanager/tasks?workspace_id=123 — 新增/更新单个任务。
@@ -129,6 +131,10 @@ func (h *TaskManagerHandler) UpsertTask(c *gin.Context) {
 		ModelValue: strings.TrimSpace(req.ModelValue),
 		Priority:   models.NormalizeTaskPriority(req.Priority),
 		DependsOn:  req.DependsOn,
+		Review:     req.Review,
+	}
+	if task.Review != nil && task.Review.MaxRounds < 0 {
+		task.Review.MaxRounds = 0
 	}
 	if task.ID == "" {
 		Fail(c, http.StatusBadRequest, "INVALID_REQUEST", "任务 id 不能为空")

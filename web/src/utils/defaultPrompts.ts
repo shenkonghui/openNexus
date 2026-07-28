@@ -1,7 +1,7 @@
 import i18n from '../i18n'
 
 // 内置默认提示词的中英对照。与后端 services.DefaultNoteClassifyPrompt /
-// DefaultTaskTagPrompt / DefaultTaskTitlePrompt 保持一致（含 legacy 旧默认值）。
+// DefaultTaskTagPrompt / DefaultTaskTitlePrompt / DefaultTaskReviewPrompt 保持一致（含 legacy 旧默认值）。
 // 若 textarea 的值命中任一默认值，则按当前界面语言显示对应版本；否则原样返回（用户已自定义）。
 interface PromptPair {
   zh: string
@@ -56,6 +56,39 @@ Output only a JSON array, e.g. ["backend","mysql"], with no other text.`,
     en: `Generate a short title for the following task (no more than 15 words, no quotes or brackets, capturing the core intent of the task).
 Task description: {{prompt}}
 Output only the title text, with no other content.`,
+  },
+  {
+    // 编排任务 review
+    zh: `你是一个严格的任务审查助手。请根据任务要求、执行 agent 的最终回复和代码改动，判断任务是否已经真正完成。
+
+任务标题：{{title}}
+任务要求：
+{{detail}}
+
+执行 agent 的最终回复：
+{{result}}
+
+代码改动：
+{{diff}}
+
+判断标准：任务要求的功能/修改是否全部落实；代码改动是否与任务要求相符；是否存在明显遗漏或半成品。
+仅输出 JSON 对象，例如 {"passed": false, "feedback": "未实现 XX，建议补充 YY"}，不要输出其他任何文字。
+passed 为 true 表示任务已完成；为 false 时 feedback 必须给出未通过原因与具体修复建议。`,
+    en: `You are a strict task review assistant. Based on the task requirements, the executing agent's final reply, and the code changes, determine whether the task has truly been completed.
+
+Task title: {{title}}
+Task requirements:
+{{detail}}
+
+Executing agent's final reply:
+{{result}}
+
+Code changes:
+{{diff}}
+
+Criteria: whether all required features/changes are implemented; whether the code changes match the task requirements; whether there are obvious omissions or half-finished work.
+Output only a JSON object, e.g. {"passed": false, "feedback": "XX not implemented, suggest adding YY"}, with no other text.
+passed being true means the task is complete; when false, feedback must explain the failure reasons and give concrete fix suggestions.`,
   },
   {
     // 文档编辑助手

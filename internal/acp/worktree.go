@@ -62,6 +62,42 @@ func runGit(repoPath string, args ...string) error {
 	return nil
 }
 
+// worktreeDiffMaxBytes 是 WorktreeDiff 输出的上限，防止巨大 diff 撞爆 review prompt。
+const worktreeDiffMaxBytes = 50 * 1024
+
+// WorktreeDiff 返回 worktree 相对 HEAD 的改动概览：git status --short + git diff HEAD。
+// 未跟踪文件体现在 status 段（?? 前缀）。输出截断到 worktreeDiffMaxBytes，
+// 供 review agent 审查任务产出使用。
+func WorktreeDiff(wtPath string) (string, error) {
+	if strings.TrimSpace(wtPath) == "" {
+		return "", fmt.Errorf("wtPath 不能为空")
+	}
+	status, err := exec.Command("git", "-C", wtPath, "status", "--short").CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("git status: %s", strings.TrimSpace(string(status)))
+	}
+	diff, err := exec.Command("git", "-C", wtPath, "diff", "HEAD").CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("git diff: %s", strings.TrimSpace(string(diff)))
+	}
+	var sb strings.Builder
+	if s := strings.TrimSpace(string(status)); s != "" {
+		sb.WriteString("## git status --short\n")
+		sb.WriteString(s)
+		sb.WriteString("\n\n")
+	}
+	if d := strings.TrimSpace(string(diff)); d != "" {
+		sb.WriteString("## git diff HEAD\n")
+		sb.WriteString(d)
+		sb.WriteString("\n")
+	}
+	out := sb.String()
+	if len(out) > worktreeDiffMaxBytes {
+		out = out[:worktreeDiffMaxBytes] + "\n...(diff 过长，已截断)"
+	}
+	return out, nil
+}
+
 // CreateWorktree 在 repoPath 仓库中创建一个新分支 branch 并检出到 destPath。
 // 若 destPath 已存在则返回错误。base 为空时从当前 HEAD 创建。
 func CreateWorktree(repoPath, branch, destPath, base string) error {

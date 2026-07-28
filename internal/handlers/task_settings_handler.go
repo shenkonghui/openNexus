@@ -30,6 +30,11 @@ type taskSettingsItem struct {
 	TagPrompt        string   `json:"tag_prompt"`
 	TitlePrompt      string   `json:"title_prompt"`
 	DocEditPrompt    string   `json:"doc_edit_prompt"`
+	ReviewEnabled    bool     `json:"review_enabled"`
+	ReviewAgentType  string   `json:"review_agent_type"`
+	ReviewModelValue string   `json:"review_model_value"`
+	ReviewMaxRounds  int      `json:"review_max_rounds"`
+	ReviewPrompt     string   `json:"review_prompt"`
 }
 
 type taskSettingsRequest struct {
@@ -41,6 +46,11 @@ type taskSettingsRequest struct {
 	TagPrompt        string `json:"tag_prompt"`
 	TitlePrompt      string `json:"title_prompt"`
 	DocEditPrompt    string `json:"doc_edit_prompt"`
+	ReviewEnabled    bool   `json:"review_enabled"`
+	ReviewAgentType  string `json:"review_agent_type"`
+	ReviewModelValue string `json:"review_model_value"`
+	ReviewMaxRounds  int    `json:"review_max_rounds"`
+	ReviewPrompt     string `json:"review_prompt"`
 }
 
 // toItem 把存储模型转换为返回给前端的结构（标签 JSON 解析为数组，空提示词填默认）。
@@ -56,6 +66,14 @@ func (h *TaskSettingsHandler) toItem(s *models.TaskSettings) taskSettingsItem {
 	docEditPrompt := strings.TrimSpace(s.DocEditPrompt)
 	if docEditPrompt == "" {
 		docEditPrompt = services.DefaultDocEditPrompt
+	}
+	reviewPrompt := strings.TrimSpace(s.ReviewPrompt)
+	if reviewPrompt == "" {
+		reviewPrompt = services.DefaultTaskReviewPrompt
+	}
+	reviewMaxRounds := s.ReviewMaxRounds
+	if reviewMaxRounds <= 0 {
+		reviewMaxRounds = services.DefaultTaskReviewMaxRounds
 	}
 	tags := []string{}
 	if raw := strings.TrimSpace(s.Tags); raw != "" {
@@ -76,6 +94,11 @@ func (h *TaskSettingsHandler) toItem(s *models.TaskSettings) taskSettingsItem {
 		TagPrompt:        tagPrompt,
 		TitlePrompt:      titlePrompt,
 		DocEditPrompt:    docEditPrompt,
+		ReviewEnabled:    s.ReviewEnabled,
+		ReviewAgentType:  s.ReviewAgentType,
+		ReviewModelValue: s.ReviewModelValue,
+		ReviewMaxRounds:  reviewMaxRounds,
+		ReviewPrompt:     reviewPrompt,
 	}
 }
 
@@ -107,6 +130,10 @@ func (h *TaskSettingsHandler) UpdateSettings(c *gin.Context) {
 		return
 	}
 	tagBytes, _ := json.Marshal(uniqTags(req.Tags))
+	reviewMaxRounds := req.ReviewMaxRounds
+	if reviewMaxRounds < 0 {
+		reviewMaxRounds = 0
+	}
 	s := &models.TaskSettings{
 		UserID:          uid,
 		AutoTagEnabled:  req.AutoTagEnabled,
@@ -117,6 +144,11 @@ func (h *TaskSettingsHandler) UpdateSettings(c *gin.Context) {
 		TagPrompt:       strings.TrimSpace(req.TagPrompt),
 		TitlePrompt:     strings.TrimSpace(req.TitlePrompt),
 		DocEditPrompt:   strings.TrimSpace(req.DocEditPrompt),
+		ReviewEnabled:    req.ReviewEnabled,
+		ReviewAgentType:  strings.TrimSpace(req.ReviewAgentType),
+		ReviewModelValue: strings.TrimSpace(req.ReviewModelValue),
+		ReviewMaxRounds:  reviewMaxRounds,
+		ReviewPrompt:     strings.TrimSpace(req.ReviewPrompt),
 	}
 	if err := h.settingsRepo.Upsert(s); err != nil {
 		Fail(c, http.StatusInternalServerError, "INTERNAL", "保存任务设置失败")

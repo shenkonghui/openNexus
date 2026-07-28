@@ -38,6 +38,10 @@ func (m *mockTMExecutor) RunPromptOnce(_ context.Context, _, _, _ string) (strin
 	return "", errors.New("mock 不支持 RunPromptOnce")
 }
 
+func (m *mockTMExecutor) RunSubAgent(_ context.Context, _ acp.SubAgentRunConfig) (string, error) {
+	return "", errors.New("mock 不支持 RunSubAgent")
+}
+
 func (m *mockTMExecutor) Prompt(_ context.Context, _, _ string) (<-chan models.Message, error) {
 	ch := make(chan models.Message)
 	close(ch)

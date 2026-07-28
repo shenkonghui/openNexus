@@ -2,6 +2,16 @@ import { apiFetch, getBaseURL, getAuthHeaders } from './client'
 
 export type TaskPriority = 'p0' | 'p1' | 'p2'
 
+/** 任务级 review 配置；任务上缺省时跟随全局任务设置 */
+export interface TaskReviewConfig {
+  enabled: boolean
+  /** reviewer agent；空 = 用全局 reviewer 配置 */
+  agent_type?: string
+  model_value?: string
+  /** 最大 review 轮数；<=0 用全局值 */
+  max_rounds?: number
+}
+
 export interface TaskManagerTask {
   id: string
   title: string
@@ -10,14 +20,20 @@ export interface TaskManagerTask {
   model_value?: string
   /** 优先级：p0 / p1 / p2，缺省 p1 */
   priority?: TaskPriority | string
+  /** 任务级 review 覆盖；缺省跟随全局 */
+  review?: TaskReviewConfig
   session_id?: string
   db_session_id?: number
-  status: string // pending|queued|running|done|failed|canceled|interrupt
+  status: string // pending|queued|running|reviewing|done|failed|canceled|interrupt
   branch?: string
   worktree_path?: string
   started_at?: string
   finished_at?: string
   error?: string
+  /** review 运行时结果 */
+  review_rounds?: number
+  review_passed?: boolean
+  review_feedback?: string
   depends_on?: string[]
 }
 
@@ -46,7 +62,7 @@ export function saveTaskManager(workspaceId: number, def: TaskManagerDef): Promi
 // 新增/更新单个任务
 export function upsertTask(
   workspaceId: number,
-  task: { id: string; title: string; detail: string; agent_type: string; model_value?: string; priority?: string; depends_on?: string[] },
+  task: { id: string; title: string; detail: string; agent_type: string; model_value?: string; priority?: string; depends_on?: string[]; review?: TaskReviewConfig },
 ): Promise<{ data: TaskManagerTask }> {
   return apiFetch(`/taskmanager/tasks${qs(workspaceId)}`, {
     method: 'POST',
