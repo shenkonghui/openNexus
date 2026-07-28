@@ -2289,20 +2289,25 @@ func (s *Service) ListCommands(sessionID string) ([]acp.AvailableCommand, error)
 	}
 	s.mu.RUnlock()
 	merged := s.mergeCommands(agentCmds, cwd)
-	// 追加内置 -opennexus 命令（goal 循环 / 会话 YOLO），供 "/" 弹窗展示；命令名带后缀不与原生命令冲突
+	return appendBuiltinCommands(merged), nil
+}
+
+// appendBuiltinCommands 追加内置 -opennexus 命令（goal 循环 / 会话 YOLO），供 "/" 弹窗展示。
+// 命令名带后缀不与原生命令冲突；已存在同名命令时跳过。
+func appendBuiltinCommands(cmds []acp.AvailableCommand) []acp.AvailableCommand {
 	for _, builtin := range []acp.AvailableCommand{builtinGoalCommand(), builtinYoloCommand()} {
 		exists := false
-		for _, c := range merged {
+		for _, c := range cmds {
 			if c.Name == builtin.Name {
 				exists = true
 				break
 			}
 		}
 		if !exists {
-			merged = append(merged, builtin)
+			cmds = append(cmds, builtin)
 		}
 	}
-	return merged, nil
+	return cmds
 }
 
 // sessionCwd 返回会话的工作目录。
@@ -2471,13 +2476,13 @@ func (s *Service) CachedModelOptions(agentType string) []acp.SessionConfigOption
 	return nil
 }
 
-// CachedCommands 返回指定 agent 类型的 slash command（Agent 原生 + 配置的 commands）。
-// cwd 非空时一并扫描项目级 commands 目录。
+// CachedCommands 返回指定 agent 类型的 slash command（Agent 原生 + 配置的 commands + 内置命令）。
+// cwd 非空时一并扫描项目级 commands 目录。新建任务页 /agents/:type/commands 使用。
 func (s *Service) CachedCommands(agentType string, cwd string) []acp.AvailableCommand {
 	s.mu.RLock()
 	agentCmds := s.agentCommands[agentType]
 	s.mu.RUnlock()
-	return s.mergeCommands(agentCmds, cwd)
+	return appendBuiltinCommands(s.mergeCommands(agentCmds, cwd))
 }
 
 // CachedModes 返回指定 agent 类型缓存的 session mode（来自探测或已有会话）。
