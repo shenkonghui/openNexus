@@ -75,6 +75,26 @@ func NormalizeTaskStatus(status string) string {
 	}
 }
 
+// goal 在任务上的展示状态（写入 tasks.json 的 goal 字段，供任务列表展示）。
+const (
+	TaskGoalStatusActive     = "active"     // goal 生效中（agent 工作/自动续轮）
+	TaskGoalStatusEvaluating = "evaluating" // 正在评估是否达成
+	TaskGoalStatusAchieved   = "achieved"   // 已达成
+	TaskGoalStatusStopped    = "stopped"    // 已终止（超限/评估失败/续轮失败）
+)
+
+// TaskGoalState 是会话 goal 循环在任务条目上的状态快照。
+// goal 本身是会话内存态（服务重启即清空）；每次状态变化经 GoalStateNotifier
+// 同步到 tasks.json，使任务列表能展示 goal 进展；nil 表示该任务无 goal。
+type TaskGoalState struct {
+	Condition  string    `json:"condition"`
+	Status     string    `json:"status"` // 见 TaskGoalStatus* 常量
+	Turns      int       `json:"turns"`  // 已自动续轮次数
+	LastReason string    `json:"last_reason,omitempty"`
+	Roles      []string  `json:"roles,omitempty"` // 自动选取的评估角色名
+	UpdatedAt  time.Time `json:"updated_at"`
+}
+
 // TaskSchedule 是定时任务调度配置；nil 表示非定时任务。
 // 统一进 tasks.json 后，ScheduledTask 与 TaskManagerTask 共享同一套结构。
 type TaskSchedule struct {
@@ -126,6 +146,8 @@ type TaskManagerTask struct {
 	StartedAt    *time.Time `json:"started_at,omitempty"`
 	FinishedAt   *time.Time `json:"finished_at,omitempty"`
 	Error        string     `json:"error,omitempty"`
+	// Goal 是会话 goal 循环的状态快照（GoalStateNotifier 同步写入）；nil 表示无 goal。
+	Goal *TaskGoalState `json:"goal,omitempty"`
 
 	// 可扩展：任务间依赖（v1 仅做数据层，引擎按并发上限调度）。
 	DependsOn []string `json:"depends_on,omitempty"`

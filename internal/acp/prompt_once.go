@@ -15,6 +15,12 @@ const promptOnceTimeout = 60 * time.Second
 
 // RunPromptOnce 在临时 ACP 会话中发送 prompt 并收集 assistant 文本，不落库。
 func (s *Service) RunPromptOnce(ctx context.Context, agentType, modelValue, prompt string) (string, error) {
+	return s.RunPromptOnceStream(ctx, agentType, modelValue, prompt, nil)
+}
+
+// RunPromptOnceStream 同 RunPromptOnce，额外在每收到一段 assistant 文本时回调 onText（增量），
+// 供调用方实时展示临时会话的输出（如 goal 评估子框）。onText 为 nil 时行为不变。
+func (s *Service) RunPromptOnceStream(ctx context.Context, agentType, modelValue, prompt string, onText func(delta string)) (string, error) {
 	if _, err := s.GetBackend(agentType); err != nil {
 		return "", err
 	}
@@ -65,6 +71,9 @@ func (s *Service) RunPromptOnce(ctx context.Context, agentType, modelValue, prom
 			idle.Reset(promptOnceTimeout)
 			if u.AgentMessageChunk != nil && u.AgentMessageChunk.Content.Text != nil {
 				sb.WriteString(u.AgentMessageChunk.Content.Text.Text)
+				if onText != nil {
+					onText(u.AgentMessageChunk.Content.Text.Text)
+				}
 			}
 		case <-idle.C:
 			if sb.Len() > 0 {

@@ -2,6 +2,16 @@ import { apiFetch, getBaseURL, getAuthHeaders } from './client'
 
 export type TaskPriority = 'p0' | 'p1' | 'p2'
 
+/** goal 生命周期状态（后端 GoalStateChanged 写回 tasks.json） */
+export interface TaskGoalState {
+  condition: string
+  status: string // active|evaluating|achieved|stopped
+  turns: number
+  last_reason?: string
+  roles?: string[]
+  updated_at: string
+}
+
 export interface TaskManagerTask {
   id: string
   title: string
@@ -19,6 +29,8 @@ export interface TaskManagerTask {
   finished_at?: string
   error?: string
   depends_on?: string[]
+  /** goal 状态（会话设定 /opennexus-goal 后同步） */
+  goal?: TaskGoalState
 }
 
 export interface TaskManagerDef {

@@ -266,6 +266,8 @@ func main() {
 	// prompt 流结束时回调任务管理，同步 tasks.json 中会话登记任务的状态
 	//（登记条目不经过编排器，无此回调则完成后永远显示执行中）。
 	acpSvc.SetPromptFinishedNotifier(tmSvc)
+	// goal 生命周期变化时回调任务管理，把状态写回 tasks.json 供任务列表展示 goal 徽标。
+	acpSvc.SetGoalStateNotifier(tmSvc)
 
 	// 工具调用历史：ACP 流与终端桥接双路记录，供「工具调用记录」页面查询
 	toolCallRepo := repository.NewToolCallRecordRepository(db)

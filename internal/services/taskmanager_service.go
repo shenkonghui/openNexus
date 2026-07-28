@@ -708,6 +708,53 @@ func (s *TaskManagerService) PromptFinished(dbSessionID uint, runStatus string) 
 	})
 }
 
+// GoalStateChanged 实现 acp.GoalStateNotifier：goal 生命周期变化时把状态快照写回
+// tasks.json 中对应会话的任务条目（state 为 nil 表示 goal 已清除，保留末态供展示），
+// 写入触发 SSE 事件，任务列表自动刷新 goal 徽标。
+func (s *TaskManagerService) GoalStateChanged(dbSessionID uint, state *models.TaskGoalState) {
+	cwd, taskID := s.taskForSession(dbSessionID)
+	if taskID == "" {
+		return
+	}
+	s.updateTask(cwd, taskID, func(t *models.TaskManagerTask) {
+		if state == nil {
+			// 手动清除：未达终态时标记为已终止，已达成/已终止的末态保留
+			if t.Goal != nil && t.Goal.Status != models.TaskGoalStatusAchieved && t.Goal.Status != models.TaskGoalStatusStopped {
+				t.Goal.Status = models.TaskGoalStatusStopped
+				t.Goal.LastReason = "已手动清除"
+				t.Goal.UpdatedAt = time.Now()
+			}
+			return
+		}
+		t.Goal = state
+	})
+}
+
+// taskForSession 按 db 会话 ID 定位其在 tasks.json 中登记的任务（会话→工作区 cwd→任务）。
+func (s *TaskManagerService) taskForSession(dbSessionID uint) (cwd, taskID string) {
+	if dbSessionID == 0 || s.exec == nil {
+		return "", ""
+	}
+	sess, err := s.exec.GetSessionByDBID(dbSessionID)
+	if err != nil || sess == nil || sess.WorkspaceID == nil {
+		return "", ""
+	}
+	ws, err := s.exec.FindWorkspaceByID(*sess.WorkspaceID)
+	if err != nil || ws == nil || strings.TrimSpace(ws.Cwd) == "" {
+		return "", ""
+	}
+	def, err := s.storeFor(ws.Cwd).Load()
+	if err != nil {
+		return "", ""
+	}
+	for i := range def.Tasks {
+		if id := def.Tasks[i].DBSessionID; id != nil && *id == dbSessionID {
+			return ws.Cwd, def.Tasks[i].ID
+		}
+	}
+	return "", ""
+}
+
 // firstLine 取 prompt 首行并截断到 maxLen 字符，用于任务标题兜底。
 func firstLine(prompt string, maxLen int) string {
 	s := strings.TrimSpace(prompt)
