@@ -1,0 +1,217 @@
+.panel {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-surface);
+  overflow: hidden;
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-muted);
+  flex-shrink: 0;
+  overflow-x: auto;
+}
+
+.filters {
+  display: flex;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+
+.filterBtn {
+  padding: 3px 8px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  color: var(--text-muted);
+  font-size: 11px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.filterBtn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.filterBtnActive {
+  background: var(--accent-subtle);
+  color: var(--accent);
+  border-color: var(--accent-border);
+}
+
+.totalHint {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.iconBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  background: transparent;
+  border: none;
+  border-radius: 5px;
+  color: var(--text-muted);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.iconBtn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.spin {
+  animation: recSpin 1s linear infinite;
+}
+
+@keyframes recSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.error {
+  padding: 6px 12px;
+  font-size: 12px;
+  color: var(--danger, #c0392b);
+  background: var(--bg-muted);
+  border-bottom: 1px solid var(--border);
+}
+
+.body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px 0 12px;
+}
+
+.empty {
+  padding: 32px 16px;
+  color: var(--text-muted);
+  text-align: center;
+  font-size: 13px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.entry {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border-subtle, var(--border));
+  font-size: 12px;
+  min-width: 0;
+}
+
+.entry:hover {
+  background: var(--bg-hover);
+}
+
+.kindIcon {
+  display: flex;
+  color: var(--text-muted);
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.entryMain {
+  flex: 1;
+  min-width: 0;
+}
+
+.entryTitle {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+}
+
+.command {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+  background: var(--bg-muted);
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+
+.titleText {
+  color: var(--text-primary);
+}
+
+.entrySub {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--text-muted);
+  min-width: 0;
+}
+
+.cwd {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.exitOk {
+  color: var(--success, #2e7d32);
+  flex-shrink: 0;
+}
+
+.exitBad {
+  color: var(--danger, #c0392b);
+  flex-shrink: 0;
+}
+
+.statusIcon {
+  display: flex;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.stDone {
+  color: var(--success, #2e7d32);
+}
+
+.stFailed {
+  color: var(--danger, #c0392b);
+}
+
+.stRunning {
+  color: var(--accent);
+}
+
+.stPending {
+  color: var(--text-muted);
+}
+
+.loadMoreBtn {
+  display: block;
+  margin: 10px auto;
+  padding: 5px 14px;
+  background: var(--bg-muted);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-primary);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.loadMoreBtn:hover {
+  background: var(--bg-hover);
+}

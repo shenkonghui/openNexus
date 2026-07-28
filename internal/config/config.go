@@ -118,11 +118,13 @@ func (s *SelectorConfig) normalize() error {
 }
 
 type AgentsConfig struct {
-	Workspace  WorkspaceConfig  `yaml:"workspace"`
-	Skills     SkillsConfig     `yaml:"skills"`
-	Commands   CommandsConfig   `yaml:"commands"`
-	Rules      RulesConfig      `yaml:"rules"`
-	SubAgents  SubAgentsConfig  `yaml:"subagents"`
+	Workspace WorkspaceConfig `yaml:"workspace"`
+	Skills    SkillsConfig    `yaml:"skills"`
+	Commands  CommandsConfig  `yaml:"commands"`
+	Rules     RulesConfig     `yaml:"rules"`
+	SubAgents SubAgentsConfig `yaml:"subagents"`
+	// GoalRoles 配置 goal 评估角色扫描目录（markdown 文件：frontmatter 含 name/description/agent/model/skills，正文当评估 prompt 模板）。
+	GoalRoles  GoalRolesConfig  `yaml:"goal_roles"`
 	MCP        MCPConfig        `yaml:"mcp"`
 	ClaudeCode ClaudeCodeConfig `yaml:"claude_code"`
 	// Selector 控制前端 agent+模型 合并下拉框的可见项。
@@ -160,6 +162,14 @@ type SubAgentsConfig struct {
 	// UserDirs 用户级 subagents 根目录（绝对路径或 ~/ 开头），默认 ~/.agents/agents。
 	UserDirs []string `yaml:"user_dirs"`
 	// ProjectDirs 项目级 subagents 相对工作区 cwd 的子目录，默认 .agents/agents。
+	ProjectDirs []string `yaml:"project_dirs"`
+}
+
+// GoalRolesConfig 配置 goal 评估角色扫描目录（文件式角色定义，goal 评估时自动选取）。
+type GoalRolesConfig struct {
+	// UserDirs 用户级 goal-roles 根目录（绝对路径或 ~/ 开头），默认 ~/.agents/goal-roles。
+	UserDirs []string `yaml:"user_dirs"`
+	// ProjectDirs 项目级 goal-roles 相对工作区 cwd 的子目录，默认 .agents/goal-roles。
 	ProjectDirs []string `yaml:"project_dirs"`
 }
 
@@ -347,6 +357,9 @@ func (c *Config) Validate() error {
 	if err := c.Agents.SubAgents.normalize(); err != nil {
 		return err
 	}
+	if err := c.Agents.GoalRoles.normalize(); err != nil {
+		return err
+	}
 	if err := c.Agents.MCP.normalize(); err != nil {
 		return err
 	}
@@ -513,6 +526,31 @@ func (s *SubAgentsConfig) normalize() error {
 	}
 	if len(s.ProjectDirs) == 0 {
 		s.ProjectDirs = []string{".agents/agents"}
+	}
+	return nil
+}
+
+// normalize 填充 goal-roles 默认值并展开路径。
+func (g *GoalRolesConfig) normalize() error {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("获取用户主目录以设置 goal_roles 路径: %w", err)
+	}
+	if len(g.UserDirs) == 0 {
+		g.UserDirs = []string{filepath.Join(home, ".agents", "goal-roles")}
+	} else {
+		resolved := make([]string, 0, len(g.UserDirs))
+		for _, p := range g.UserDirs {
+			abs, err := expandPath(p)
+			if err != nil {
+				return fmt.Errorf("goal_roles.user_dirs 路径 %q 无效: %w", p, err)
+			}
+			resolved = append(resolved, abs)
+		}
+		g.UserDirs = resolved
+	}
+	if len(g.ProjectDirs) == 0 {
+		g.ProjectDirs = []string{".agents/goal-roles"}
 	}
 	return nil
 }

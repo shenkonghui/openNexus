@@ -6,6 +6,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	acplocal "opennexus/internal/acp"
 	"opennexus/internal/models"
 	"opennexus/internal/repository"
 )
@@ -13,10 +14,18 @@ import (
 // GoalSettingsHandler 处理通用 goal 循环设置（评估 agent/模型 + 限制条件）。
 type GoalSettingsHandler struct {
 	settingsRepo *repository.GoalSettingsRepository
+	// goalRoles 返回当前扫描到的评估角色 + 主用户目录（通常是 acp.Service.GoalRolesSnapshot），
+	// 在 main 中通过 SetGoalRolesProvider 注入；未注入时 Roles 接口返回空列表。
+	goalRoles func(cwd string) ([]acplocal.GoalRoleDef, string)
 }
 
 func NewGoalSettingsHandler(settingsRepo *repository.GoalSettingsRepository) *GoalSettingsHandler {
 	return &GoalSettingsHandler{settingsRepo: settingsRepo}
+}
+
+// SetGoalRolesProvider 注入评估角色扫描器（独立 setter，不动构造函数签名）。
+func (h *GoalSettingsHandler) SetGoalRolesProvider(fn func(cwd string) ([]acplocal.GoalRoleDef, string)) {
+	h.goalRoles = fn
 }
 
 type goalSettingsItem struct {
@@ -83,4 +92,19 @@ func (h *GoalSettingsHandler) UpdateSettings(c *gin.Context) {
 		return
 	}
 	Success(c, http.StatusOK, goalSettingsToItem(saved))
+}
+
+// Roles GET /api/v1/goal/roles?path=...
+// 扫描 goal 评估角色定义文件（path 可选：指定工作区时连同 project 角色一起返回），
+// 并附带主用户目录供前端新建角色文件。文件的增删改复用 /filesystem/file|create|entry。
+func (h *GoalSettingsHandler) Roles(c *gin.Context) {
+	if h.goalRoles == nil {
+		Success(c, http.StatusOK, gin.H{"roles": []acplocal.GoalRoleDef{}, "user_dir": ""})
+		return
+	}
+	roles, userDir := h.goalRoles(strings.TrimSpace(c.Query("path")))
+	if roles == nil {
+		roles = []acplocal.GoalRoleDef{}
+	}
+	Success(c, http.StatusOK, gin.H{"roles": roles, "user_dir": userDir})
 }

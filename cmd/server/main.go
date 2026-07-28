@@ -171,6 +171,7 @@ func main() {
 		messagesDir = filepath.Join(os.TempDir(), "opennexus-messages")
 	}
 	acpSvc := acp.NewService(db, messagesDir, cfg.Agents.Workspace, cfg.Agents.Skills, cfg.Agents.Commands, cfg.Agents.Rules, cfg.Agents.SubAgents)
+	acpSvc.SetGoalRoleDirs(cfg.Agents.GoalRoles)
 	acpSvc.SetDebugConfig(cfg.Debug)
 	// 注入 acp_connections 心跳表仓库：主 server 写入连接 PID/活动时间/心跳，
 	// 供独立 watchdog 进程读取判定空闲与主程序存活。
@@ -302,6 +303,8 @@ func main() {
 	goalSettingsRepo := repository.NewGoalSettingsRepository(db)
 	acpSvc.SetGoalSettingsRepo(goalSettingsRepo)
 	goalSettingsH := handlers.NewGoalSettingsHandler(goalSettingsRepo)
+	// 设置页「评估角色」管理：角色列表由 acp 服务扫描（目录随软重载热刷新）。
+	goalSettingsH.SetGoalRolesProvider(acpSvc.GoalRolesSnapshot)
 
 	// 全局权限规则（yolo / 白名单 / 黑名单）：配置来自 config.yaml，设置页保存时写回文件并热更新到所有连接
 	permSettingsH := handlers.NewPermissionSettingsHandler(cfgPath, agentRouter)

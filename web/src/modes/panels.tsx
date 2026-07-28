@@ -8,8 +8,10 @@ import DocWorkspace, { type DocEditMode } from '../components/DocWorkspace'
 import WorkspaceFileEditor from '../components/WorkspaceFileEditor'
 import FileExplorer from '../components/FileExplorer'
 import GitPanel from '../components/GitPanel'
+import CapabilityPanel from '../components/CapabilityPanel'
+import SessionRecordsPanel from '../components/SessionRecordsPanel'
 import { useFileViewer } from '../context/FileViewerContext'
-import { Folder, SquareTerminal, Pencil, Bug, MessageSquare, BookOpenText, Globe, GitBranch } from 'lucide-react'
+import { Folder, SquareTerminal, Pencil, Bug, MessageSquare, BookOpenText, Globe, GitBranch, Blocks, History } from 'lucide-react'
 import type { PanelDef, PanelCtx } from './types'
 import ChatPanel from './ChatPanel'
 
@@ -205,6 +207,19 @@ function renderGit(ctx: PanelCtx) {
   return <GitPanel cwd={ctx.cwd || ''} />
 }
 
+function renderCapabilities(ctx: PanelCtx) {
+  // 会话已存在时取会话 agent；新建任务页回退到下拉选中的 agent
+  const agentType = ctx.session?.agent_type || ctx.selectedAgent || ''
+  if (!agentType) return <EmptyPanel hintKey="panel.requireSession" />
+  return <CapabilityPanel agentType={agentType} commands={ctx.commands} skills={ctx.skills} />
+}
+
+function renderRecords(ctx: PanelCtx) {
+  if (!ctx.sessionId) return <EmptyPanel hintKey="panel.requireSession" />
+  // 消息条数作为刷新信号：agent 产生新工具调用后列表防抖跟进
+  return <SessionRecordsPanel sessionId={ctx.sessionId} refreshSignal={ctx.messages.length} />
+}
+
 /** 面板注册表。新增面板在此加一条；新增模式只需在 MODES 引用面板 id。 */
 export const PANELS: PanelDef[] = [
   { id: 'chat', titleKey: 'panel.chat', icon: <MessageSquare size={14} />, render: renderChat },
@@ -215,4 +230,6 @@ export const PANELS: PanelDef[] = [
   { id: 'debug', titleKey: 'panel.debug', icon: <Bug size={14} />, render: renderDebug },
   { id: 'browser', titleKey: 'panel.browser', icon: <Globe size={14} />, render: renderBrowser },
   { id: 'doc-preview', titleKey: 'panel.docPreview', icon: <BookOpenText size={14} />, render: renderDocPreview },
+  { id: 'capabilities', titleKey: 'panel.capabilities', icon: <Blocks size={14} />, render: renderCapabilities },
+  { id: 'records', titleKey: 'panel.records', icon: <History size={14} />, render: renderRecords },
 ]
