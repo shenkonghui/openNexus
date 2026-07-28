@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -112,7 +113,7 @@ func newServer(prefsRepo *repository.UserAgentPrefsRepository, wsResolver Worksp
 	addTool("delete_task", func() {
 		mcp.AddTool(srv, &mcp.Tool{
 			Name:        "delete_task",
-			Description: "按 task_id 删除编排任务。若任务正在运行会先停止并清理其 worktree。",
+			Description: "按 task_id 删除编排任务，task_id 支持 glob 模式（如 t12*，默认开启，可一次匹配多个任务批量删除）。若任务正在运行会先停止并清理其 worktree。",
 		}, func(ctx context.Context, _ *mcp.CallToolRequest, in deleteTaskIn) (*mcp.CallToolResult, deleteTaskOut, error) {
 			return handleDeleteTask(ctx, wsResolver, orchCreator, in)
 		})
@@ -121,7 +122,7 @@ func newServer(prefsRepo *repository.UserAgentPrefsRepository, wsResolver Worksp
 	addTool("start_task", func() {
 		mcp.AddTool(srv, &mcp.Tool{
 			Name:        "start_task",
-			Description: "启动编排任务。task_id 留空则启动全部待执行（pending/failed/canceled/interrupt）任务，否则仅启动指定任务。任务在其专属 git worktree 内执行。",
+			Description: "启动编排任务。task_id 留空则启动全部待执行（pending/failed/canceled/interrupt）任务，否则仅启动指定任务；task_id 支持 glob 模式（如 t12*，默认开启）批量启动。任务在其专属 git worktree 内执行。",
 		}, func(ctx context.Context, _ *mcp.CallToolRequest, in startTaskIn) (*mcp.CallToolResult, startTaskOut, error) {
 			return handleStartTask(ctx, wsResolver, orchCreator, in)
 		})
@@ -130,7 +131,7 @@ func newServer(prefsRepo *repository.UserAgentPrefsRepository, wsResolver Worksp
 	addTool("stop_task", func() {
 		mcp.AddTool(srv, &mcp.Tool{
 			Name:        "stop_task",
-			Description: "停止编排任务。task_id 留空则停止全部运行中/排队中任务，否则仅停止指定任务。",
+			Description: "停止编排任务。task_id 留空则停止全部运行中/排队中任务，否则仅停止指定任务；task_id 支持 glob 模式（如 t12*，默认开启）批量停止。",
 		}, func(ctx context.Context, _ *mcp.CallToolRequest, in stopTaskIn) (*mcp.CallToolResult, stopTaskOut, error) {
 			return handleStopTask(ctx, wsResolver, orchCreator, in)
 		})
@@ -191,6 +192,40 @@ func resolveInheritedAgentType(prefsRepo *repository.UserAgentPrefsRepository, u
 		return "", fmt.Errorf("任务配置为继承父 agent，但用户尚未使用过任何 agent")
 	}
 	return last, nil
+}
+
+// hasGlobMeta 报告 pattern 是否包含 glob 元字符（*?[）。
+func hasGlobMeta(pattern string) bool {
+	return strings.ContainsAny(pattern, "*?[")
+}
+
+// expandTaskIDs 将 task_id 解析为具体任务 id 列表，供 delete/start/stop 批量操作。
+// glob 模式默认开启（globFlag 为 nil 或 true）：pattern 含 glob 元字符时按 path.Match
+// 匹配现有任务 id，返回全部命中的 id，无命中时报错；glob 关闭或 pattern 不含元字符时
+// 按字面 id 原样返回（存在性由具体操作校验）。
+func expandTaskIDs(orchCreator TaskManagerTaskCreator, cwd, pattern string, globFlag *bool) ([]string, error) {
+	globEnabled := globFlag == nil || *globFlag
+	if !globEnabled || !hasGlobMeta(pattern) {
+		return []string{pattern}, nil
+	}
+	def, err := orchCreator.Load(cwd)
+	if err != nil {
+		return nil, fmt.Errorf("读取 tasks.json: %w", err)
+	}
+	var ids []string
+	for _, t := range def.Tasks {
+		ok, merr := path.Match(pattern, t.ID)
+		if merr != nil {
+			return nil, fmt.Errorf("glob 模式非法: %s", pattern)
+		}
+		if ok {
+			ids = append(ids, t.ID)
+		}
+	}
+	if len(ids) == 0 {
+		return nil, fmt.Errorf("没有匹配 %q 的任务", pattern)
+	}
+	return ids, nil
 }
 
 // resolveTaskCwd 校验工作区归属并返回 (uid, workspaceID, cwd)。所有编排工具共用此解析逻辑。
@@ -364,13 +399,15 @@ func handleUpdateTask(ctx context.Context, prefsRepo *repository.UserAgentPrefsR
 // ====== delete_task ======
 
 type deleteTaskIn struct {
-	TaskID      string `json:"task_id" jsonschema:"要删除的任务 id"`
+	TaskID      string `json:"task_id" jsonschema:"要删除的任务 id，支持 glob 模式（如 t12*）批量匹配"`
+	Glob        *bool  `json:"glob,omitempty" jsonschema:"是否启用 glob 模式匹配 task_id，默认开启；传 false 则按字面 id 精确匹配"`
 	WorkspaceID uint   `json:"workspace_id,omitempty" jsonschema:"工作区 ID"`
 }
 
 type deleteTaskOut struct {
-	TaskID  string `json:"task_id"`
-	Deleted bool   `json:"deleted"`
+	TaskID  string   `json:"task_id"`
+	Deleted bool     `json:"deleted"`
+	TaskIDs []string `json:"task_ids,omitempty"` // 实际删除的任务 id 列表（glob 批量匹配时）
 }
 
 func handleDeleteTask(ctx context.Context, wsResolver WorkspaceResolver, orchCreator TaskManagerTaskCreator, in deleteTaskIn) (*mcp.CallToolResult, deleteTaskOut, error) {
@@ -385,22 +422,34 @@ func handleDeleteTask(ctx context.Context, wsResolver WorkspaceResolver, orchCre
 	if taskID == "" {
 		return nil, deleteTaskOut{}, fmt.Errorf("task_id 必填")
 	}
-	if err := orchCreator.DeleteTask(cwd, taskID); err != nil {
-		return nil, deleteTaskOut{}, fmt.Errorf("删除编排任务失败: %w", err)
+	ids, err := expandTaskIDs(orchCreator, cwd, taskID, in.Glob)
+	if err != nil {
+		return nil, deleteTaskOut{}, err
 	}
-	return nil, deleteTaskOut{TaskID: taskID, Deleted: true}, nil
+	var failed []string
+	for _, id := range ids {
+		if derr := orchCreator.DeleteTask(cwd, id); derr != nil {
+			failed = append(failed, fmt.Sprintf("%s: %v", id, derr))
+		}
+	}
+	if len(failed) > 0 {
+		return nil, deleteTaskOut{}, fmt.Errorf("删除编排任务失败: %s", strings.Join(failed, "; "))
+	}
+	return nil, deleteTaskOut{TaskID: taskID, Deleted: true, TaskIDs: ids}, nil
 }
 
 // ====== start_task ======
 
 type startTaskIn struct {
-	TaskID      string `json:"task_id,omitempty" jsonschema:"要启动的任务 id，留空则启动全部待执行任务"`
+	TaskID      string `json:"task_id,omitempty" jsonschema:"要启动的任务 id，留空则启动全部待执行任务，支持 glob 模式（如 t12*）批量匹配"`
+	Glob        *bool  `json:"glob,omitempty" jsonschema:"是否启用 glob 模式匹配 task_id，默认开启；传 false 则按字面 id 精确匹配"`
 	WorkspaceID uint   `json:"workspace_id,omitempty" jsonschema:"工作区 ID"`
 }
 
 type startTaskOut struct {
-	Started bool   `json:"started"`
-	TaskID  string `json:"task_id,omitempty"`
+	Started bool     `json:"started"`
+	TaskID  string   `json:"task_id,omitempty"`
+	TaskIDs []string `json:"task_ids,omitempty"` // 实际启动的任务 id 列表（glob 批量匹配时）
 }
 
 func handleStartTask(ctx context.Context, wsResolver WorkspaceResolver, orchCreator TaskManagerTaskCreator, in startTaskIn) (*mcp.CallToolResult, startTaskOut, error) {
@@ -412,22 +461,34 @@ func handleStartTask(ctx context.Context, wsResolver WorkspaceResolver, orchCrea
 		return nil, startTaskOut{}, fmt.Errorf("编排任务创建未配置")
 	}
 	taskID := strings.TrimSpace(in.TaskID)
-	if err := orchCreator.Start(ctx, cwd, wsID, uid, taskID); err != nil {
-		return nil, startTaskOut{}, fmt.Errorf("启动编排任务失败: %w", err)
+	out := startTaskOut{Started: true, TaskID: taskID}
+	ids := []string{taskID}
+	if taskID != "" {
+		if ids, err = expandTaskIDs(orchCreator, cwd, taskID, in.Glob); err != nil {
+			return nil, startTaskOut{}, err
+		}
+		out.TaskIDs = ids
 	}
-	return nil, startTaskOut{Started: true, TaskID: taskID}, nil
+	for _, id := range ids {
+		if serr := orchCreator.Start(ctx, cwd, wsID, uid, id); serr != nil {
+			return nil, startTaskOut{}, fmt.Errorf("启动编排任务失败: %w", serr)
+		}
+	}
+	return nil, out, nil
 }
 
 // ====== stop_task ======
 
 type stopTaskIn struct {
-	TaskID      string `json:"task_id,omitempty" jsonschema:"要停止的任务 id，留空则停止全部运行中任务"`
+	TaskID      string `json:"task_id,omitempty" jsonschema:"要停止的任务 id，留空则停止全部运行中任务，支持 glob 模式（如 t12*）批量匹配"`
+	Glob        *bool  `json:"glob,omitempty" jsonschema:"是否启用 glob 模式匹配 task_id，默认开启；传 false 则按字面 id 精确匹配"`
 	WorkspaceID uint   `json:"workspace_id,omitempty" jsonschema:"工作区 ID"`
 }
 
 type stopTaskOut struct {
-	Stopped bool   `json:"stopped"`
-	TaskID  string `json:"task_id,omitempty"`
+	Stopped bool     `json:"stopped"`
+	TaskID  string   `json:"task_id,omitempty"`
+	TaskIDs []string `json:"task_ids,omitempty"` // 实际停止的任务 id 列表（glob 批量匹配时）
 }
 
 func handleStopTask(ctx context.Context, wsResolver WorkspaceResolver, orchCreator TaskManagerTaskCreator, in stopTaskIn) (*mcp.CallToolResult, stopTaskOut, error) {
@@ -439,10 +500,20 @@ func handleStopTask(ctx context.Context, wsResolver WorkspaceResolver, orchCreat
 		return nil, stopTaskOut{}, fmt.Errorf("编排任务创建未配置")
 	}
 	taskID := strings.TrimSpace(in.TaskID)
-	if err := orchCreator.Stop(cwd, taskID); err != nil {
-		return nil, stopTaskOut{}, fmt.Errorf("停止编排任务失败: %w", err)
+	out := stopTaskOut{Stopped: true, TaskID: taskID}
+	ids := []string{taskID}
+	if taskID != "" {
+		if ids, err = expandTaskIDs(orchCreator, cwd, taskID, in.Glob); err != nil {
+			return nil, stopTaskOut{}, err
+		}
+		out.TaskIDs = ids
 	}
-	return nil, stopTaskOut{Stopped: true, TaskID: taskID}, nil
+	for _, id := range ids {
+		if serr := orchCreator.Stop(cwd, id); serr != nil {
+			return nil, stopTaskOut{}, fmt.Errorf("停止编排任务失败: %w", serr)
+		}
+	}
+	return nil, out, nil
 }
 
 // ====== send_prompt ======
