@@ -158,8 +158,9 @@ func parseGoalRoleMarkdown(filename string, content []byte) (GoalRoleDef, bool) 
 }
 
 // selectGoalRoles 用小模型根据完成条件从候选角色中自动选取评估角色（可多选，多角色会签评估）。
+// onText 非 nil 时接收选取过程的流式输出（内嵌到主会话评估子框）。
 // 返回空切片表示无匹配/选取失败，调用方回退内置评估逻辑。
-func (s *Service) selectGoalRoles(ctx context.Context, evalAgent, evalModel, condition string, roles []GoalRoleDef) []GoalRoleDef {
+func (s *Service) selectGoalRoles(ctx context.Context, evalAgent, evalModel, condition string, roles []GoalRoleDef, onText func(string)) []GoalRoleDef {
 	if len(roles) == 0 {
 		return nil
 	}
@@ -177,7 +178,7 @@ func (s *Service) selectGoalRoles(ctx context.Context, evalAgent, evalModel, con
 候选角色：
 %s`, condition, list.String())
 
-	out, err := s.RunPromptOnce(ctx, evalAgent, evalModel, prompt)
+	out, err := s.RunPromptOnceStream(ctx, evalAgent, evalModel, prompt, onText)
 	if err != nil {
 		return nil
 	}

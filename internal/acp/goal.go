@@ -159,12 +159,16 @@ func (s *Service) interceptGoal(session *models.Session, sessionID, prompt strin
 		}
 		s.setGoal(sessionID, arg)
 		s.recordGoalEvent(session, "设定 goal："+arg, models.ToolCallStatusCompleted)
+		if g, ok := s.getGoal(sessionID); ok {
+			s.notifyGoalState(session, models.TaskGoalStatusActive, &g, "")
+		}
 		slog.Info("goal 已设定", "session", sessionID, "agent", session.AgentType, "chars", len(arg))
 		*promptForAgent = "请朝以下目标持续工作。每轮结束后系统会自动评估是否达成，未达成会要求你继续，无需向用户确认。\n\n目标（完成条件）：\n" + arg
 		return false, nil
 	case "clear":
 		if s.clearGoal(sessionID) {
 			s.recordGoalEvent(session, "goal 已手动清除", models.ToolCallStatusCompleted)
+			s.notifyGoalState(session, "", nil, "")
 			return true, s.syntheticCommandReply(session, prompt, "✅ goal 已清除，本会话不再自动续轮。", executionID)
 		}
 		return true, s.syntheticCommandReply(session, prompt, "当前会话没有生效中的 goal。", executionID)
@@ -235,6 +239,33 @@ func (s *Service) goalNotify(session *models.Session, text string) {
 	}
 }
 
+// notifyGoalState 把 goal 状态快照回调给任务管理（若已接线），由任务侧写回 tasks.json，
+// 使任务列表能展示 goal 生命周期（生效中/评估中/已达成/已终止）。g 为 nil 表示 goal 已清除。
+// reason 非空时覆盖 g.LastReason 作为最近说明（终止原因/评估结论）。
+func (s *Service) notifyGoalState(session *models.Session, status string, g *sessionGoal, reason string) {
+	if s.goalStateNotifier == nil || session == nil {
+		return
+	}
+	if g == nil {
+		s.goalStateNotifier.GoalStateChanged(session.ID, nil)
+		return
+	}
+	if reason == "" {
+		reason = g.LastReason
+	}
+	state := &models.TaskGoalState{
+		Condition:  g.Condition,
+		Status:     status,
+		Turns:      g.Turns,
+		LastReason: reason,
+		UpdatedAt:  time.Now(),
+	}
+	for _, r := range g.Roles {
+		state.Roles = append(state.Roles, r.Name)
+	}
+	s.goalStateNotifier.GoalStateChanged(session.ID, state)
+}
+
 // goalOnTurnEnd 在 prompt 流正常结束（finalStatus=done）后被调用（独立 goroutine）。
 // 有生效 goal 时评估是否达成并决定续轮/清除。
 func (s *Service) goalOnTurnEnd(sessionID string) {
@@ -285,14 +316,18 @@ func (s *Service) evaluateAndContinueGoal(sessionID string, g *sessionGoal) {
 	}
 	if g.Turns >= maxTurns {
 		s.clearGoal(sessionID)
-		s.recordGoalEvent(session, fmt.Sprintf("goal 终止：自动续轮达到上限（%d 次）", maxTurns), models.ToolCallStatusFailed)
-		s.goalNotify(session, fmt.Sprintf("⏹️ goal 已终止：自动续轮达到上限（%d 次）。可重新 /opennexus-goal 设定。", maxTurns))
+		reason := fmt.Sprintf("自动续轮达到上限（%d 次）", maxTurns)
+		s.recordGoalEvent(session, "goal 终止："+reason, models.ToolCallStatusFailed)
+		s.notifyGoalState(session, models.TaskGoalStatusStopped, g, reason)
+		s.goalNotify(session, fmt.Sprintf("⏹️ goal 已终止：%s。可重新 /opennexus-goal 设定。", reason))
 		return
 	}
 	if time.Since(g.StartedAt) >= maxDuration {
 		s.clearGoal(sessionID)
-		s.recordGoalEvent(session, fmt.Sprintf("goal 终止：持续时间超过上限（%s）", maxDuration), models.ToolCallStatusFailed)
-		s.goalNotify(session, fmt.Sprintf("⏹️ goal 已终止：持续时间超过上限（%s）。可重新 /opennexus-goal 设定。", maxDuration))
+		reason := fmt.Sprintf("持续时间超过上限（%s）", maxDuration)
+		s.recordGoalEvent(session, "goal 终止："+reason, models.ToolCallStatusFailed)
+		s.notifyGoalState(session, models.TaskGoalStatusStopped, g, reason)
+		s.goalNotify(session, fmt.Sprintf("⏹️ goal 已终止：%s。可重新 /opennexus-goal 设定。", reason))
 		return
 	}
 
@@ -304,8 +339,14 @@ func (s *Service) evaluateAndContinueGoal(sessionID string, g *sessionGoal) {
 		var selected []GoalRoleDef
 		if len(roles) > 0 {
 			selCtx, selCancel := context.WithTimeout(context.Background(), goalEvalCallTimeout)
-			selected = s.selectGoalRoles(selCtx, evalAgent, evalModel, g.Condition, roles)
+			selBox := s.startGoalEvalBox(session, "🎯 goal 评估角色选取")
+			selected = s.selectGoalRoles(selCtx, evalAgent, evalModel, g.Condition, roles, selBox.OnText)
 			selCancel()
+			if len(selected) > 0 {
+				selBox.Finish(false, "→ 选定评估角色："+goalRoleNames(selected))
+			} else {
+				selBox.Finish(false, "→ 无匹配角色，使用内置评估")
+			}
 		}
 		// 锁内发布，避免 status 分支并发读到写了一半的 slice header
 		s.goalMu.Lock()
@@ -321,11 +362,14 @@ func (s *Service) evaluateAndContinueGoal(sessionID string, g *sessionGoal) {
 		}
 	}
 
+	s.notifyGoalState(session, models.TaskGoalStatusEvaluating, g, "")
+
 	achieved, reason, evalErr := s.runGoalEvaluation(session, g, evalAgent, evalModel, transcript)
 	if evalErr != nil {
 		// 评估失败保守终止，避免无评估依据地无限续轮
 		s.clearGoal(sessionID)
 		s.recordGoalEvent(session, fmt.Sprintf("goal 评估失败：%v", evalErr), models.ToolCallStatusFailed)
+		s.notifyGoalState(session, models.TaskGoalStatusStopped, g, fmt.Sprintf("评估失败：%v", evalErr))
 		s.goalNotify(session, fmt.Sprintf("⚠️ goal 评估失败（%v），已停止自动续轮。可重新 /opennexus-goal 设定。", evalErr))
 		return
 	}
@@ -337,6 +381,7 @@ func (s *Service) evaluateAndContinueGoal(sessionID string, g *sessionGoal) {
 			recTitle += "（" + reason + "）"
 		}
 		s.recordGoalEvent(session, recTitle, models.ToolCallStatusCompleted)
+		s.notifyGoalState(session, models.TaskGoalStatusAchieved, g, reason)
 		msg := "🎯 goal 已达成，自动续轮结束。"
 		if reason != "" {
 			msg += "\n评估：" + reason
@@ -358,6 +403,8 @@ func (s *Service) evaluateAndContinueGoal(sessionID string, g *sessionGoal) {
 	}
 	s.goalMu.Unlock()
 
+	s.notifyGoalState(session, models.TaskGoalStatusActive, g, reason)
+
 	contPrompt := "自动评估：goal 尚未达成，请继续。\n\n目标（完成条件）：\n" + g.Condition
 	if reason != "" {
 		contPrompt += "\n\n未达成原因：" + reason
@@ -374,6 +421,7 @@ func (s *Service) evaluateAndContinueGoal(sessionID string, g *sessionGoal) {
 	if err != nil {
 		s.clearGoal(sessionID)
 		s.recordGoalEvent(session, fmt.Sprintf("goal 自动续轮失败：%v", err), models.ToolCallStatusFailed)
+		s.notifyGoalState(session, models.TaskGoalStatusStopped, g, fmt.Sprintf("自动续轮失败：%v", err))
 		s.goalNotify(session, fmt.Sprintf("⚠️ goal 自动续轮失败（%v），已停止。", err))
 		return
 	}
@@ -388,7 +436,7 @@ func (s *Service) evaluateAndContinueGoal(sessionID string, g *sessionGoal) {
 // 任一角色评估调用失败即返回 err（调用方保守终止）。
 func (s *Service) runGoalEvaluation(session *models.Session, g *sessionGoal, evalAgent, evalModel, transcript string) (bool, string, error) {
 	if len(g.Roles) == 0 {
-		verdict, err := s.runGoalEvalOnce(evalAgent, evalModel, buildGoalEvalPrompt(nil, g.Condition, transcript))
+		verdict, err := s.runGoalEvalOnce(session, "🎯 goal 评估", evalAgent, evalModel, buildGoalEvalPrompt(nil, g.Condition, transcript))
 		if err != nil {
 			return false, "", err
 		}
@@ -407,7 +455,7 @@ func (s *Service) runGoalEvaluation(session *models.Session, g *sessionGoal, eva
 		} else if role.Model != "" {
 			rModel = role.Model
 		}
-		verdict, err := s.runGoalEvalOnce(rAgent, rModel, buildGoalEvalPrompt(role, g.Condition, transcript))
+		verdict, err := s.runGoalEvalOnce(session, "🎯 goal 评估 · "+role.Name, rAgent, rModel, buildGoalEvalPrompt(role, g.Condition, transcript))
 		if err != nil {
 			return false, "", fmt.Errorf("角色 %s 评估失败: %w", role.Name, err)
 		}
@@ -438,11 +486,19 @@ func (s *Service) runGoalEvaluation(session *models.Session, g *sessionGoal, eva
 	return achieved, strings.Join(reasons, "；"), nil
 }
 
-// runGoalEvalOnce 带超时执行一次评估调用（临时会话）。
-func (s *Service) runGoalEvalOnce(agent, model, prompt string) (string, error) {
+// runGoalEvalOnce 带超时执行一次评估调用（临时会话），
+// 输出经评估子框内嵌到主会话（tool_call 折叠框，流式落盘）。
+func (s *Service) runGoalEvalOnce(session *models.Session, title, agent, model, prompt string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), goalEvalCallTimeout)
 	defer cancel()
-	return s.RunPromptOnce(ctx, agent, model, prompt)
+	box := s.startGoalEvalBox(session, title)
+	out, err := s.RunPromptOnceStream(ctx, agent, model, prompt, box.OnText)
+	if err != nil {
+		box.Finish(true, fmt.Sprintf("⚠️ 评估调用失败：%v", err))
+	} else {
+		box.Finish(false, "")
+	}
+	return out, err
 }
 
 // parseGoalVerdict 解析评估器输出：首行 YES/NO，次行理由。

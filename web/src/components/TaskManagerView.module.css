@@ -300,6 +300,74 @@
   color: var(--warning);
 }
 
+/* goal 徽标：任务头部展示 goal 生命周期状态 */
+.taskGoal {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-weight: 500;
+  background: var(--bg-hover);
+  color: var(--text-muted);
+  flex-shrink: 0;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.goal_active {
+  background: var(--info-bg);
+  color: var(--info);
+}
+
+.goal_evaluating {
+  background: var(--warning-bg);
+  color: var(--warning);
+}
+
+.goal_achieved {
+  background: var(--success-bg);
+  color: var(--success);
+}
+
+.goal_stopped {
+  background: var(--bg-hover);
+  color: var(--text-muted);
+}
+
+/* goal 详情块：展开任务后展示完成条件/角色/最近评估 */
+.taskGoalDetail {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  padding: 6px 10px;
+  background: var(--bg-hover);
+  border-radius: 4px;
+  color: var(--text-secondary);
+}
+
+.taskGoalDetailRow {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.taskGoalCondition {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.taskGoalMeta {
+  color: var(--text-muted);
+  word-break: break-word;
+}
+
 .taskMeta {
   display: flex;
   gap: 4px;

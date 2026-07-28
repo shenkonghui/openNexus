@@ -13,9 +13,11 @@ import LoadingSpinner from './LoadingSpinner'
 import TaskManagerChatPanel from './TaskManagerChatPanel'
 import SplitPane from './SplitPane'
 import styles from './TaskManagerView.module.css'
-import { ChevronRight, ChevronDown, MessagesSquare, GitBranch, Plus, FileJson, List, Play, PlayCircle, Square, Trash2 } from 'lucide-react'
+import { ChevronRight, ChevronDown, MessagesSquare, GitBranch, Plus, FileJson, List, Play, PlayCircle, Square, Trash2, Target } from 'lucide-react'
 
 const ACTIVE_STATUSES = new Set(['queued', 'running'])
+
+const GOAL_STATUSES = new Set(['active', 'evaluating', 'achieved', 'stopped'])
 
 // 生成一个不与现有任务冲突的短 id（客户端新建任务用）。
 function genTaskId(): string {
@@ -441,6 +443,16 @@ export default function TaskManagerView({ workspaceId, cwd, agents, restoreSessi
                             <span className={styles.taskBranchName}>{task.branch}</span>
                           </span>
                         )}
+                        {task.goal && GOAL_STATUSES.has(task.goal.status) && (
+                          <span
+                            className={`${styles.taskGoal} ${styles[`goal_${task.goal.status}`] || ''}`}
+                            title={`${task.goal.condition}${task.goal.last_reason ? `\n${task.goal.last_reason}` : ''}`}
+                          >
+                            <Target size={11} />
+                            {t(`taskmanager.goal_${task.goal.status}`)}
+                            {task.goal.status === 'active' && task.goal.turns > 0 ? ` ×${task.goal.turns}` : ''}
+                          </span>
+                        )}
                         <span className={`${styles.taskPriority} ${styles[`priority_${task.priority || 'p1'}`] || ''}`}>
                           {t(`taskmanager.priority_${task.priority || 'p1'}`)}
                         </span>
@@ -497,6 +509,21 @@ export default function TaskManagerView({ workspaceId, cwd, agents, restoreSessi
                           </div>
                         )}
                         {task.error && <div className={styles.taskError}>{task.error}</div>}
+                        {task.goal && GOAL_STATUSES.has(task.goal.status) && (
+                          <div className={styles.taskGoalDetail}>
+                            <div className={styles.taskGoalDetailRow}>
+                              <Target size={12} style={{ flexShrink: 0 }} />
+                              <span>{t(`taskmanager.goal_${task.goal.status}`)}{task.goal.turns > 0 ? ` · ${t('taskmanager.goalTurns', { count: task.goal.turns })}` : ''}</span>
+                            </div>
+                            <div className={styles.taskGoalCondition}>{task.goal.condition}</div>
+                            {task.goal.roles && task.goal.roles.length > 0 && (
+                              <div className={styles.taskGoalMeta}>{t('taskmanager.goalRoles')}: {task.goal.roles.join('、')}</div>
+                            )}
+                            {task.goal.last_reason && (
+                              <div className={styles.taskGoalMeta}>{t('taskmanager.goalLastEval')}: {task.goal.last_reason}</div>
+                            )}
+                          </div>
+                        )}
                         {task.started_at && (
                           <div className={styles.taskTime}>
                             {t('taskmanager.startedAt')}: {new Date(task.started_at).toLocaleString()}

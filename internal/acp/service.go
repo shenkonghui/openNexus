@@ -129,6 +129,9 @@ type Service struct {
 	// promptFinished 可选：prompt 流结束时通知外部（如任务管理同步 tasks.json 状态）。nil 则跳过。
 	promptFinished PromptFinishedNotifier
 
+	// goalStateNotifier 可选：goal 状态变化时通知外部（同步 tasks.json 的 goal 字段）。nil 则跳过。
+	goalStateNotifier GoalStateNotifier
+
 	// toolCallRecords 可选：工具调用历史仓库（SetToolCallRecordRepo 注入）。nil 则不记录。
 	toolCallRecords *repository.ToolCallRecordRepository
 
@@ -188,6 +191,17 @@ type PromptFinishedNotifier interface {
 // SetPromptFinishedNotifier 注入 prompt 结束通知器。
 func (s *Service) SetPromptFinishedNotifier(n PromptFinishedNotifier) {
 	s.promptFinished = n
+}
+
+// GoalStateNotifier 在会话 goal 状态变化时被回调（state=nil 表示 goal 已清除），
+// 由 *services.TaskManagerService 实现：同步 tasks.json 中登记任务的 goal 字段。
+type GoalStateNotifier interface {
+	GoalStateChanged(dbSessionID uint, state *models.TaskGoalState)
+}
+
+// SetGoalStateNotifier 注入 goal 状态通知器。
+func (s *Service) SetGoalStateNotifier(n GoalStateNotifier) {
+	s.goalStateNotifier = n
 }
 
 // NewService 创建新的 Service。
