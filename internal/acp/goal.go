@@ -36,6 +36,9 @@ const (
 	// goalTranscriptMaxMsgs / goalTranscriptMaxChars 控制送评的对话摘录规模。
 	goalTranscriptMaxMsgs  = 40
 	goalTranscriptMaxChars = 8000
+	// goalEvalCallTimeout 单次评估/选角调用的总时长上限（RunPromptOnce 内部另有空闲超时），
+	// 评估 agent 思考/调工具阶段可能较长，给足余量避免误杀。
+	goalEvalCallTimeout = 5 * time.Minute
 )
 
 // sessionGoal 是单个会话的 goal 内存态（服务重启即清空，goal 不跨重启存活）。
@@ -300,7 +303,7 @@ func (s *Service) evaluateAndContinueGoal(sessionID string, g *sessionGoal) {
 		roles, _ := s.GoalRolesSnapshot(sessionCwd(session, s.workspaces))
 		var selected []GoalRoleDef
 		if len(roles) > 0 {
-			selCtx, selCancel := context.WithTimeout(context.Background(), promptOnceTimeout+30*time.Second)
+			selCtx, selCancel := context.WithTimeout(context.Background(), goalEvalCallTimeout)
 			selected = s.selectGoalRoles(selCtx, evalAgent, evalModel, g.Condition, roles)
 			selCancel()
 		}
@@ -437,7 +440,7 @@ func (s *Service) runGoalEvaluation(session *models.Session, g *sessionGoal, eva
 
 // runGoalEvalOnce 带超时执行一次评估调用（临时会话）。
 func (s *Service) runGoalEvalOnce(agent, model, prompt string) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), promptOnceTimeout+30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), goalEvalCallTimeout)
 	defer cancel()
 	return s.RunPromptOnce(ctx, agent, model, prompt)
 }

@@ -9,6 +9,8 @@ import (
 	"github.com/coder/acp-go-sdk"
 )
 
+// promptOnceTimeout 是空闲超时：连续这么久收不到任何 session update 才判定 agent 无响应；
+// agent 思考/调工具阶段会持续产生非文本 update，不会误杀慢模型。总时长由调用方 ctx 控制。
 const promptOnceTimeout = 60 * time.Second
 
 // RunPromptOnce 在临时 ACP 会话中发送 prompt 并收集 assistant 文本，不落库。
@@ -43,8 +45,8 @@ func (s *Service) RunPromptOnce(ctx context.Context, agentType, modelValue, prom
 		return "", err
 	}
 
-	runCtx, cancel := context.WithTimeout(ctx, promptOnceTimeout)
-	defer cancel()
+	idle := time.NewTimer(promptOnceTimeout)
+	defer idle.Stop()
 
 	var sb strings.Builder
 	for {
@@ -53,10 +55,23 @@ func (s *Service) RunPromptOnce(ctx context.Context, agentType, modelValue, prom
 			if !ok {
 				return strings.TrimSpace(sb.String()), nil
 			}
+			// 任意 update 都说明 agent 存活，重置空闲计时
+			if !idle.Stop() {
+				select {
+				case <-idle.C:
+				default:
+				}
+			}
+			idle.Reset(promptOnceTimeout)
 			if u.AgentMessageChunk != nil && u.AgentMessageChunk.Content.Text != nil {
 				sb.WriteString(u.AgentMessageChunk.Content.Text.Text)
 			}
-		case <-runCtx.Done():
+		case <-idle.C:
+			if sb.Len() > 0 {
+				return strings.TrimSpace(sb.String()), nil
+			}
+			return "", fmt.Errorf("agent 响应超时")
+		case <-ctx.Done():
 			if sb.Len() > 0 {
 				return strings.TrimSpace(sb.String()), nil
 			}
