@@ -1,0 +1,385 @@
+package acp
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"strings"
+	"time"
+
+	"github.com/coder/acp-go-sdk"
+
+	"opennexus/internal/models"
+	"opennexus/internal/repository"
+)
+
+// 通用 goal 循环：让不原生支持 /goal 的 agent 也能"朝目标持续工作"。
+//
+// 机制（对齐 Claude Code /goal 的 prompt-based Stop hook 语义）：
+//  1. /goal <条件>  设定 goal 并改写为 directive 发给 agent 开始工作；
+//  2. 每轮 prompt 正常结束（finalStatus=done）后，goalOnTurnEnd 用小模型评估
+//     对话是否满足完成条件（RunPromptOnce 临时会话，不落库）；
+//  3. 未达成则携带评估理由自动续轮，达成/超限则清除 goal 并留言。
+//
+// 若 agent 命令列表已含原生 goal（如 claude-code），拦截跳过、原样透传。
+
+// goal 循环的默认限制（GoalSettings 对应字段为 0 时生效）。
+const (
+	defaultGoalMaxTurns    = 20
+	defaultGoalMaxDuration = 60 * time.Minute
+	// goalMaxConditionLen 完成条件上限（对齐 Claude Code /goal 的 4000 字符）。
+	goalMaxConditionLen = 4000
+	// goalTranscriptMaxMsgs / goalTranscriptMaxChars 控制送评的对话摘录规模。
+	goalTranscriptMaxMsgs  = 40
+	goalTranscriptMaxChars = 8000
+)
+
+// sessionGoal 是单个会话的 goal 内存态（服务重启即清空，goal 不跨重启存活）。
+type sessionGoal struct {
+	Condition  string
+	StartedAt  time.Time
+	Turns      int    // 已自动续轮次数
+	LastReason string // 最近一次评估理由
+	Evaluating bool   // 评估进行中（防重入）
+}
+
+// SetGoalSettingsRepo 注入 goal 设置仓库（评估 agent/模型 + 限制条件）。
+func (s *Service) SetGoalSettingsRepo(repo *repository.GoalSettingsRepository) {
+	s.goalSettings = repo
+}
+
+// goalClearAliases 是清除 goal 的子命令别名（对齐 Claude Code）。
+var goalClearAliases = map[string]bool{
+	"clear": true, "stop": true, "off": true, "reset": true, "none": true, "cancel": true,
+}
+
+// parseGoalCommand 解析 "/goal ..." 输入。ok=false 表示不是 goal 命令。
+// action 取值：set（arg=完成条件）/ status / clear。
+func parseGoalCommand(prompt string) (action, arg string, ok bool) {
+	trimmed := strings.TrimSpace(prompt)
+	if trimmed != "/goal" && !strings.HasPrefix(trimmed, "/goal ") && !strings.HasPrefix(trimmed, "/goal\n") {
+		return "", "", false
+	}
+	rest := strings.TrimSpace(strings.TrimPrefix(trimmed, "/goal"))
+	if rest == "" {
+		return "status", "", true
+	}
+	if goalClearAliases[strings.ToLower(rest)] {
+		return "clear", "", true
+	}
+	if strings.EqualFold(rest, "status") {
+		return "status", "", true
+	}
+	return "set", rest, true
+}
+
+// agentHasNativeGoal 判断会话 agent 是否原生支持 goal 命令（含则透传不拦截）。
+func (s *Service) agentHasNativeGoal(sessionID, agentType string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	cmds := s.commands[sessionID]
+	if len(cmds) == 0 {
+		cmds = s.agentCommands[agentType]
+	}
+	for _, c := range cmds {
+		if c.Name == "goal" {
+			return true
+		}
+	}
+	return false
+}
+
+// builtinGoalCommand 是内置 goal 命令描述，供非原生 agent 的 "/" 弹窗展示。
+func builtinGoalCommand() acp.AvailableCommand {
+	return acp.AvailableCommand{
+		Name:        "goal",
+		Description: "设定目标并自动续轮直至达成（status 查看 / clear 清除）",
+		Input: &acp.AvailableCommandInput{
+			Unstructured: &acp.UnstructuredCommandInput{Hint: "<完成条件> | status | clear"},
+		},
+	}
+}
+
+func (s *Service) getGoal(sessionID string) (*sessionGoal, bool) {
+	s.goalMu.Lock()
+	defer s.goalMu.Unlock()
+	g, ok := s.goals[sessionID]
+	return g, ok
+}
+
+func (s *Service) setGoal(sessionID, condition string) {
+	s.goalMu.Lock()
+	defer s.goalMu.Unlock()
+	s.goals[sessionID] = &sessionGoal{Condition: condition, StartedAt: time.Now()}
+}
+
+func (s *Service) clearGoal(sessionID string) bool {
+	s.goalMu.Lock()
+	defer s.goalMu.Unlock()
+	_, ok := s.goals[sessionID]
+	delete(s.goals, sessionID)
+	return ok
+}
+
+// interceptGoal 在 PromptWithExecution 入口处拦截 /goal 命令。
+// 返回 handled=true 时调用方直接返回 ch（status/clear 走合成回复，不打扰 agent）；
+// handled=false 时继续正常流程，set 场景会把 *promptForAgent 改写为 goal directive。
+func (s *Service) interceptGoal(session *models.Session, sessionID, prompt string, executionID *uint, promptForAgent *string) (handled bool, ch <-chan models.Message) {
+	action, arg, ok := parseGoalCommand(prompt)
+	if !ok {
+		return false, nil
+	}
+	// 原生支持（如 claude-code）时透传给 agent 自己处理
+	if s.agentHasNativeGoal(sessionID, session.AgentType) {
+		return false, nil
+	}
+	switch action {
+	case "set":
+		if len(arg) > goalMaxConditionLen {
+			return true, s.goalSyntheticReply(session, prompt, fmt.Sprintf("⚠️ goal 完成条件过长（%d 字符），上限 %d 字符。", len(arg), goalMaxConditionLen), executionID)
+		}
+		s.setGoal(sessionID, arg)
+		slog.Info("goal 已设定", "session", sessionID, "agent", session.AgentType, "chars", len(arg))
+		*promptForAgent = "请朝以下目标持续工作。每轮结束后系统会自动评估是否达成，未达成会要求你继续，无需向用户确认。\n\n目标（完成条件）：\n" + arg
+		return false, nil
+	case "clear":
+		if s.clearGoal(sessionID) {
+			return true, s.goalSyntheticReply(session, prompt, "✅ goal 已清除，本会话不再自动续轮。", executionID)
+		}
+		return true, s.goalSyntheticReply(session, prompt, "当前会话没有生效中的 goal。", executionID)
+	default: // status
+		g, ok := s.getGoal(sessionID)
+		if !ok {
+			return true, s.goalSyntheticReply(session, prompt, "当前会话没有生效中的 goal。用 /goal <完成条件> 设定。", executionID)
+		}
+		text := fmt.Sprintf("🎯 goal 生效中\n\n完成条件：%s\n\n已自动续轮：%d 次\n持续时间：%s", g.Condition, g.Turns, time.Since(g.StartedAt).Round(time.Second))
+		if g.LastReason != "" {
+			text += "\n最近评估：" + g.LastReason
+		}
+		return true, s.goalSyntheticReply(session, prompt, text, executionID)
+	}
+}
+
+// goalSyntheticReply 持久化"用户命令 + 合成回复"两条消息，返回已含消息并关闭的 channel。
+// 用于 status/clear 这类不需要打扰 agent 的本地命令回复。
+func (s *Service) goalSyntheticReply(session *models.Session, prompt, reply string, executionID *uint) <-chan models.Message {
+	seq := s.getNextSequence(session.SessionID)
+	userMsg := MapUpdate(session.SessionID, session.ID, seq+1, acp.SessionUpdate{
+		UserMessageChunk: &acp.SessionUpdateUserMessageChunk{
+			Content:       acp.ContentBlock{Text: &acp.ContentBlockText{Text: prompt, Type: "text"}},
+			SessionUpdate: "user_message_chunk",
+		},
+	})
+	userMsg.ExecutionID = executionID
+	agentMsg := MapUpdate(session.SessionID, session.ID, seq+2, acp.SessionUpdate{
+		AgentMessageChunk: &acp.SessionUpdateAgentMessageChunk{
+			Content:       acp.ContentBlock{Text: &acp.ContentBlockText{Text: reply, Type: "text"}},
+			SessionUpdate: "agent_message_chunk",
+		},
+	})
+	agentMsg.ExecutionID = executionID
+	out := make(chan models.Message, 2)
+	for _, m := range []models.Message{userMsg, agentMsg} {
+		if err := s.messages.Create(&m); err != nil {
+			slog.Error("持久化 goal 合成消息失败", "session", session.SessionID, "sequence", m.Sequence, "err", err)
+		}
+		out <- m
+	}
+	close(out)
+	return out
+}
+
+// goalNotify 向会话追加一条 goal 系统留言（评估结论 / 终止原因），持久化并广播（若有订阅者）。
+func (s *Service) goalNotify(session *models.Session, text string) {
+	seq := s.getNextSequence(session.SessionID) + 1
+	msg := MapUpdate(session.SessionID, session.ID, seq, acp.SessionUpdate{
+		AgentMessageChunk: &acp.SessionUpdateAgentMessageChunk{
+			Content:       acp.ContentBlock{Text: &acp.ContentBlockText{Text: text, Type: "text"}},
+			SessionUpdate: "agent_message_chunk",
+		},
+	})
+	if err := s.messages.Create(&msg); err != nil {
+		slog.Error("持久化 goal 留言失败", "session", session.SessionID, "err", err)
+	}
+	s.mu.RLock()
+	bc := s.activePrompts[session.SessionID]
+	s.mu.RUnlock()
+	if bc != nil {
+		bc.broadcast(msg)
+	}
+}
+
+// goalOnTurnEnd 在 prompt 流正常结束（finalStatus=done）后被调用（独立 goroutine）。
+// 有生效 goal 时评估是否达成并决定续轮/清除。
+func (s *Service) goalOnTurnEnd(sessionID string) {
+	s.goalMu.Lock()
+	g, ok := s.goals[sessionID]
+	if !ok || g.Evaluating {
+		s.goalMu.Unlock()
+		return
+	}
+	g.Evaluating = true
+	s.goalMu.Unlock()
+	defer func() {
+		s.goalMu.Lock()
+		if cur, ok := s.goals[sessionID]; ok {
+			cur.Evaluating = false
+		}
+		s.goalMu.Unlock()
+	}()
+	s.evaluateAndContinueGoal(sessionID, g)
+}
+
+// evaluateAndContinueGoal 执行一次 goal 评估：限制检查 → 小模型评估 → 续轮或终止。
+func (s *Service) evaluateAndContinueGoal(sessionID string, g *sessionGoal) {
+	session, err := s.GetSession(sessionID)
+	if err != nil {
+		s.clearGoal(sessionID)
+		return
+	}
+
+	// 限制条件（评估 agent/模型也来自同一设置）
+	maxTurns := defaultGoalMaxTurns
+	maxDuration := defaultGoalMaxDuration
+	evalAgent := session.AgentType
+	evalModel := ""
+	if s.goalSettings != nil {
+		if gs, err := s.goalSettings.FindByUserID(session.UserID); err == nil {
+			if gs.MaxTurns > 0 {
+				maxTurns = gs.MaxTurns
+			}
+			if gs.MaxDurationMinutes > 0 {
+				maxDuration = time.Duration(gs.MaxDurationMinutes) * time.Minute
+			}
+			if strings.TrimSpace(gs.AgentType) != "" {
+				evalAgent = strings.TrimSpace(gs.AgentType)
+				evalModel = strings.TrimSpace(gs.ModelValue)
+			}
+		}
+	}
+	if g.Turns >= maxTurns {
+		s.clearGoal(sessionID)
+		s.goalNotify(session, fmt.Sprintf("⏹️ goal 已终止：自动续轮达到上限（%d 次）。可重新 /goal 设定。", maxTurns))
+		return
+	}
+	if time.Since(g.StartedAt) >= maxDuration {
+		s.clearGoal(sessionID)
+		s.goalNotify(session, fmt.Sprintf("⏹️ goal 已终止：持续时间超过上限（%s）。可重新 /goal 设定。", maxDuration))
+		return
+	}
+
+	transcript := s.goalTranscript(session.SessionID)
+	evalPrompt := fmt.Sprintf(`你是任务完成度评估器。判断以下对话是否已满足给定的完成条件。
+只输出两行：第一行 YES 或 NO（YES=已完全满足条件）；第二行用一句话说明理由。
+不要输出其他内容。
+
+完成条件：
+%s
+
+最近对话摘录：
+%s`, g.Condition, transcript)
+
+	evalCtx, cancel := context.WithTimeout(context.Background(), promptOnceTimeout+30*time.Second)
+	defer cancel()
+	verdict, err := s.RunPromptOnce(evalCtx, evalAgent, evalModel, evalPrompt)
+	if err != nil {
+		// 评估失败保守终止，避免无评估依据地无限续轮
+		s.clearGoal(sessionID)
+		s.goalNotify(session, fmt.Sprintf("⚠️ goal 评估失败（%v），已停止自动续轮。可重新 /goal 设定。", err))
+		return
+	}
+
+	achieved, reason := parseGoalVerdict(verdict)
+	g.LastReason = reason
+	if achieved {
+		s.clearGoal(sessionID)
+		msg := "🎯 goal 已达成，自动续轮结束。"
+		if reason != "" {
+			msg += "\n评估：" + reason
+		}
+		s.goalNotify(session, msg)
+		slog.Info("goal 达成", "session", sessionID, "turns", g.Turns)
+		return
+	}
+
+	// 未达成：自动续轮
+	s.goalMu.Lock()
+	if cur, ok := s.goals[sessionID]; ok {
+		cur.Turns++
+		cur.LastReason = reason
+	} else {
+		// 评估期间被用户 clear/cancel，放弃续轮
+		s.goalMu.Unlock()
+		return
+	}
+	s.goalMu.Unlock()
+
+	contPrompt := "自动评估：goal 尚未达成，请继续。\n\n目标（完成条件）：\n" + g.Condition
+	if reason != "" {
+		contPrompt += "\n\n未达成原因：" + reason
+	}
+	contPrompt += "\n\n请继续推进直到满足完成条件，无需向用户确认。"
+	slog.Info("goal 未达成，自动续轮", "session", sessionID, "turn", g.Turns, "reason", reason)
+
+	ch, err := s.PromptWithExecution(context.Background(), sessionID, contPrompt, nil)
+	if err != nil {
+		s.clearGoal(sessionID)
+		s.goalNotify(session, fmt.Sprintf("⚠️ goal 自动续轮失败（%v），已停止。", err))
+		return
+	}
+	// 必须消费主订阅 channel，否则 buffer 满会阻塞 prompt 消费 goroutine；
+	// 前端经 5s 轮询 + subscribeStream 断点续传照常收到消息。
+	for range ch {
+	}
+}
+
+// parseGoalVerdict 解析评估器输出：首行 YES/NO，次行理由。
+// 首行无法识别时视为未达成（保守），整段输出作为理由。
+func parseGoalVerdict(out string) (achieved bool, reason string) {
+	lines := strings.SplitN(strings.TrimSpace(out), "\n", 2)
+	head := strings.ToUpper(strings.TrimSpace(strings.Trim(lines[0], "*`# ")))
+	if len(lines) > 1 {
+		reason = strings.TrimSpace(lines[1])
+	}
+	if strings.HasPrefix(head, "YES") {
+		return true, reason
+	}
+	if strings.HasPrefix(head, "NO") {
+		return false, reason
+	}
+	return false, strings.TrimSpace(out)
+}
+
+// goalTranscript 取最近的用户/助手文本消息拼装评估用对话摘录。
+func (s *Service) goalTranscript(stableSessionID string) string {
+	msgs, err := s.messages.FindBySessionIDLastN(stableSessionID, goalTranscriptMaxMsgs)
+	if err != nil {
+		return "(无法读取对话记录)"
+	}
+	var sb strings.Builder
+	for _, m := range msgs {
+		if m.Kind != models.MessageKindUserMessageChunk && m.Kind != models.MessageKindAgentMessageChunk {
+			continue
+		}
+		text := strings.TrimSpace(m.Content)
+		if text == "" {
+			continue
+		}
+		role := "assistant"
+		if m.Role == models.MessageRoleUser {
+			role = "user"
+		}
+		sb.WriteString(role)
+		sb.WriteString(": ")
+		sb.WriteString(text)
+		sb.WriteString("\n")
+	}
+	out := sb.String()
+	if len(out) > goalTranscriptMaxChars {
+		out = "...(前文省略)\n" + out[len(out)-goalTranscriptMaxChars:]
+	}
+	if strings.TrimSpace(out) == "" {
+		return "(暂无文本对话)"
+	}
+	return out
+}

@@ -1,12 +1,13 @@
 import { useState, useEffect, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
-import { X, SlidersHorizontal, Bot, Wrench, StickyNote, ListTodo, Shield, Monitor } from 'lucide-react'
+import { X, SlidersHorizontal, Bot, Wrench, StickyNote, ListTodo, Shield, Monitor, Target } from 'lucide-react'
 import { listAgentConfigs, updateAgentConfig, deleteAgentConfig, refreshRegistry, getRegistryDefault, updateAgentFromRegistry } from '../api/agentConfigs'
 import type { RegistryRefreshResult } from '../api/agentConfigs'
 import { listAgents, getAgentModels, probeAgentConfigs, clearAgentProbeCache } from '../api/agents'
 import { getNoteSettings, updateNoteSettings, generateNoteMCPToken } from '../api/notes'
 import { getTaskSettings, updateTaskSettings } from '../api/tasks'
+import { getGoalSettings, updateGoalSettings } from '../api/goal'
 import { getPermissionSettings, updatePermissionSettings } from '../api/permissions'
 import { reloadProgram, updateSelectorFilters } from '../api/config'
 import { getAgentPrefs, patchAgentPrefs } from '../api/agentPrefs'
@@ -23,10 +24,10 @@ import LoadingSpinner from './LoadingSpinner'
 import i18n from '../i18n'
 import styles from './SettingsDialog.module.css'
 
-export type SettingsTab = 'language' | 'agent' | 'classify' | 'config' | 'task' | 'permission' | 'system'
+export type SettingsTab = 'language' | 'agent' | 'classify' | 'config' | 'task' | 'goal' | 'permission' | 'system'
 
 export function parseSettingsTab(raw: string | null): SettingsTab {
-  if (raw === 'agent' || raw === 'classify' || raw === 'config' || raw === 'task' || raw === 'permission' || raw === 'system') return raw
+  if (raw === 'agent' || raw === 'classify' || raw === 'config' || raw === 'task' || raw === 'goal' || raw === 'permission' || raw === 'system') return raw
   return 'language'
 }
 
@@ -102,6 +103,15 @@ export default function SettingsDialog({ initialTab = 'language', onClose }: Pro
   const [taskTitlePrompt, setTaskTitlePrompt] = useState('')
   const [taskSettingsSaving, setTaskSettingsSaving] = useState(false)
   const [taskSettingsSaved, setTaskSettingsSaved] = useState(false)
+  // goal 设置状态（通用 /goal 循环：评估 agent/模型 + 限制条件）
+  const [goalAgent, setGoalAgent] = useState('')
+  const [goalModel, setGoalModel] = useState('')
+  const [goalMaxTurns, setGoalMaxTurns] = useState(0)
+  const [goalMaxDuration, setGoalMaxDuration] = useState(0)
+  const [goalModelOptions, setGoalModelOptions] = useState<ModelOption[]>([])
+  const [goalModelProbing, setGoalModelProbing] = useState(false)
+  const [goalSettingsSaving, setGoalSettingsSaving] = useState(false)
+  const [goalSettingsSaved, setGoalSettingsSaved] = useState(false)
   // 权限规则设置（白名单 / 黑名单 / 询问名单；mode 由侧栏全局 YOLO 开关控制，保存时保留）
   const [permMode, setPermMode] = useState<'normal' | 'yolo'>('normal')
   const [permAllow, setPermAllow] = useState('')
@@ -173,6 +183,45 @@ export default function SettingsDialog({ initialTab = 'language', onClose }: Pro
     return () => { alive = false }
   }, [tab, noteAgent, t])
 
+  // 进入 goal 页且选择了评估 agent 时加载其可用模型列表（优先会话缓存，回退探测）
+  useEffect(() => {
+    if (tab !== 'goal' || !goalAgent) {
+      return
+    }
+    let alive = true
+    setGoalModelProbing(true)
+
+    async function loadGoalModels() {
+      try {
+        const cached = await getAgentModels(goalAgent)
+        if (!alive) return
+        const fromSession = cached.data.model_options || []
+        if (fromSession.length > 0 && fromSession[0].options.length > 0) {
+          setGoalModelOptions(fromSession)
+          return
+        }
+
+        const probed = await probeAgentConfigs(goalAgent)
+        if (!alive) return
+        const modelOpt = findModelConfigOption(probed.data.config_options || [])
+        if (modelOpt && modelOpt.options.length > 0) {
+          setGoalModelOptions([modelOptFromConfig(modelOpt)])
+        } else {
+          setGoalModelOptions([])
+        }
+      } catch (err) {
+        if (!alive) return
+        setGoalModelOptions([])
+        setError(err instanceof Error ? err.message : t('common.failed'))
+      } finally {
+        if (alive) setGoalModelProbing(false)
+      }
+    }
+
+    loadGoalModels()
+    return () => { alive = false }
+  }, [tab, goalAgent, t])
+
   // 进入 agent 页时加载各 agent 的可用模型列表（优先会话缓存，回退探测）。
   useEffect(() => {
     if (tab !== 'agent' || agents.length === 0) return
@@ -204,8 +253,9 @@ export default function SettingsDialog({ initialTab = 'language', onClose }: Pro
   async function loadData() {
     setLoading(true); setError('')
     try {
-      const [cfgResp, agentsResp, noteSettingsResp, taskSettingsResp, permResp] = await Promise.all([
+      const [cfgResp, agentsResp, noteSettingsResp, taskSettingsResp, permResp, goalSettingsResp] = await Promise.all([
         listAgentConfigs(), listAgents(), getNoteSettings(), getTaskSettings(), getPermissionSettings(),
+        getGoalSettings().catch(() => ({ data: { agent_type: '', model_value: '', max_turns: 0, max_duration_minutes: 0 } })),
       ])
       setConfigs(cfgResp.data.agent_configs || [])
       setAgents(agentsResp.data.agents || [])
@@ -229,6 +279,11 @@ export default function SettingsDialog({ initialTab = 'language', onClose }: Pro
       setTaskTags(ts.tags || [])
       setTaskTagPrompt(ts.tag_prompt || '')
       setTaskTitlePrompt(ts.title_prompt || '')
+      // goal 设置
+      setGoalAgent(goalSettingsResp.data.agent_type || '')
+      setGoalModel(goalSettingsResp.data.model_value || '')
+      setGoalMaxTurns(goalSettingsResp.data.max_turns || 0)
+      setGoalMaxDuration(goalSettingsResp.data.max_duration_minutes || 0)
       // 权限规则设置（保留全局 YOLO mode，避免保存名单时误关）
       const ps = permResp.data
       setPermMode(ps.mode === 'yolo' ? 'yolo' : 'normal')
@@ -372,6 +427,48 @@ export default function SettingsDialog({ initialTab = 'language', onClose }: Pro
       setError(err instanceof Error ? err.message : t('common.failed'))
     } finally {
       setTaskSettingsSaving(false)
+    }
+  }
+
+  async function handleProbeGoalModel() {
+    if (!goalAgent) return
+    setGoalModelProbing(true); setError('')
+    try {
+      clearAgentProbeCache(goalAgent)
+      const r = await probeAgentConfigs(goalAgent, { force: true })
+      const modelOpt = findModelConfigOption(r.data.config_options || [])
+      if (modelOpt && modelOpt.options.length > 0) {
+        setGoalModelOptions([modelOptFromConfig(modelOpt)])
+      } else {
+        setGoalModelOptions([])
+        setError(t('scheduledTask.probeHint'))
+      }
+    } catch (err) {
+      setGoalModelOptions([])
+      setError(err instanceof Error ? err.message : t('common.failed'))
+    } finally {
+      setGoalModelProbing(false)
+    }
+  }
+
+  async function handleSaveGoalSettings() {
+    setGoalSettingsSaving(true); setError(''); setGoalSettingsSaved(false)
+    try {
+      const resp = await updateGoalSettings({
+        agent_type: goalAgent,
+        model_value: goalModel,
+        max_turns: goalMaxTurns,
+        max_duration_minutes: goalMaxDuration,
+      })
+      setGoalAgent(resp.data.agent_type || '')
+      setGoalModel(resp.data.model_value || '')
+      setGoalMaxTurns(resp.data.max_turns || 0)
+      setGoalMaxDuration(resp.data.max_duration_minutes || 0)
+      setGoalSettingsSaved(true)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t('common.failed'))
+    } finally {
+      setGoalSettingsSaving(false)
     }
   }
 
@@ -550,6 +647,7 @@ export default function SettingsDialog({ initialTab = 'language', onClose }: Pro
       items: [
         { key: 'task', icon: <ListTodo size={15} />, label: t('settings.tabTask') },
         { key: 'classify', icon: <StickyNote size={15} />, label: t('settings.tabClassify') },
+        { key: 'goal', icon: <Target size={15} />, label: t('settings.tabGoal') },
       ],
     },
   ]
@@ -991,6 +1089,100 @@ export default function SettingsDialog({ initialTab = 'language', onClose }: Pro
                       {taskSettingsSaving ? t('common.saving') : t('common.save')}
                     </button>
                     {taskSettingsSaved && (
+                      <span className={styles.savedHint}>{t('settings.taskSettingsSaved')}</span>
+                    )}
+                  </div>
+                </>
+              )}
+
+              {tab === 'goal' && (
+                <>
+                  <p className={styles.hint}>{t('settings.goalHint')}</p>
+
+                  <div className={styles.defaultSection}>
+                    {/* 评估 agent：空 = 使用会话自身 agent */}
+                    <label className={styles.label}>{t('settings.goalAgent')}</label>
+                    <p className={styles.sectionHint}>{t('settings.goalAgentHint')}</p>
+                    <select className={styles.input} value={goalAgent}
+                      onChange={(e) => {
+                        setGoalAgent(e.target.value)
+                        setGoalModel('')
+                        setGoalModelOptions([])
+                      }}
+                    >
+                      <option value="">{t('settings.goalAgentDefault')}</option>
+                      {agents.map((a) => (
+                        <option key={a.type} value={a.type}>{a.display_name}（{a.type}）</option>
+                      ))}
+                    </select>
+                    {goalAgent && (
+                      <>
+                        <label className={styles.label}>{t('settings.goalModel')}</label>
+                        <div className={styles.inlineRow}>
+                          {goalModelOptions.length > 0 && goalModelOptions[0].options.length > 0 ? (
+                            <select className={styles.input} value={goalModel}
+                              onChange={(e) => setGoalModel(e.target.value)}
+                            >
+                              <option value="">{t('scheduledTask.defaultModel')}</option>
+                              {goalModelOptions[0].options.map((o) => (
+                                <option key={o.value} value={o.value}>
+                                  {o.name !== o.value ? `${o.name} (${o.value})` : o.value}
+                                </option>
+                              ))}
+                            </select>
+                          ) : (
+                            <input className={styles.input} type="text" value={goalModel}
+                              onChange={(e) => setGoalModel(e.target.value)}
+                              placeholder={t('scheduledTask.modelValuePlaceholder')}
+                            />
+                          )}
+                          <button type="button" className={styles.secondaryBtn}
+                            onClick={handleProbeGoalModel}
+                            disabled={goalModelProbing}
+                            title={t('scheduledTask.probeTitle')}
+                          >{goalModelProbing ? t('common.loading') : t('scheduledTask.probeConfig')}</button>
+                        </div>
+                        <p className={styles.sectionHint}>
+                          {goalModelProbing
+                            ? t('common.loading')
+                            : goalModelOptions.length === 0
+                              ? t('scheduledTask.probeHint')
+                              : t('scheduledTask.probeDone')}
+                        </p>
+                      </>
+                    )}
+
+                    {/* 限制条件：0 = 使用默认值 */}
+                    <label className={styles.label}>{t('settings.goalMaxTurns')}</label>
+                    <p className={styles.sectionHint}>{t('settings.goalMaxTurnsHint')}</p>
+                    <input
+                      className={styles.input}
+                      type="number"
+                      min={0}
+                      max={1000}
+                      value={goalMaxTurns}
+                      placeholder="20"
+                      onChange={(e) => setGoalMaxTurns(Math.min(1000, Math.max(0, Number(e.target.value) || 0)))}
+                    />
+                    <label className={styles.label}>{t('settings.goalMaxDuration')}</label>
+                    <p className={styles.sectionHint}>{t('settings.goalMaxDurationHint')}</p>
+                    <input
+                      className={styles.input}
+                      type="number"
+                      min={0}
+                      max={10080}
+                      value={goalMaxDuration}
+                      placeholder="60"
+                      onChange={(e) => setGoalMaxDuration(Math.min(10080, Math.max(0, Number(e.target.value) || 0)))}
+                    />
+
+                    <button type="button" className={styles.saveNoteBtn}
+                      disabled={goalSettingsSaving}
+                      onClick={handleSaveGoalSettings}
+                    >
+                      {goalSettingsSaving ? t('common.saving') : t('common.save')}
+                    </button>
+                    {goalSettingsSaved && (
                       <span className={styles.savedHint}>{t('settings.taskSettingsSaved')}</span>
                     )}
                   </div>

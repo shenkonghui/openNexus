@@ -300,6 +300,17 @@ export interface TaskSettings {
   title_prompt: string;
 }
 
+// goal 设置：通用 /goal 循环的评估 agent/模型 + 限制条件
+export interface GoalSettings {
+  // 评估器 agent（空 = 使用会话自身 agent）与模型
+  agent_type: string;
+  model_value: string;
+  // 最大自动续轮次数（0 = 默认 20）
+  max_turns: number;
+  // 最长持续时间（分钟，0 = 默认 60）
+  max_duration_minutes: number;
+}
+
 // 全局权限规则配置（白名单 / 询问名单 / 黑名单，对所有会话生效）。
 // mode=yolo 为全局 YOLO（侧栏左下角开关）；会话级 yolo 仍可单独开启。
 // 规则按 agent 上报的工具调用标题匹配，支持 `*` 通配符（如 "Bash(git status *)"）。

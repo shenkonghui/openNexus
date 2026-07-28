@@ -56,9 +56,10 @@ func TestSetup_RegistersP5Routes(t *testing.T) {
 	noteH := handlers.NewNoteHandler(noteRepo, noteSettingsRepo, nil, "", "")
 	taskSettingsRepo := repository.NewTaskSettingsRepository(db)
 	taskSettingsH := handlers.NewTaskSettingsHandler(taskSettingsRepo)
+	goalSettingsH := handlers.NewGoalSettingsHandler(repository.NewGoalSettingsRepository(db))
 	agentPrefsH := handlers.NewAgentPrefsHandler(repository.NewUserAgentPrefsRepository(db))
 	logH := handlers.NewLogHandler(logging.NewLogHub(0))
-	engine := Setup(authSvc, jwtSvc, agentRouter, agentCfgH, nil, schedTaskH, noteH, taskSettingsH, agentPrefsH, nil, nil, logH, nil, nil, nil, nil, nil, nil, skillsCfg, commandsCfg, rulesCfg, config.SubAgentsConfig{}, config.SelectorConfig{}, gin.TestMode, "", false)
+	engine := Setup(authSvc, jwtSvc, agentRouter, agentCfgH, nil, schedTaskH, noteH, taskSettingsH, goalSettingsH, agentPrefsH, nil, nil, logH, nil, nil, nil, nil, nil, nil, skillsCfg, commandsCfg, rulesCfg, config.SubAgentsConfig{}, config.SelectorConfig{}, gin.TestMode, "", false)
 
 	want := []string{
 		"GET /api/v1/agents",
@@ -87,6 +88,8 @@ func TestSetup_RegistersP5Routes(t *testing.T) {
 		"GET /api/v1/logs/stream",
 		"GET /api/v1/agent-prefs",
 		"PATCH /api/v1/agent-prefs",
+		"GET /api/v1/goal/settings",
+		"PUT /api/v1/goal/settings",
 	}
 	got := make(map[string]bool)
 	for _, ri := range engine.Routes() {

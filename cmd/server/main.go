@@ -298,6 +298,11 @@ func main() {
 	taskSettingsH := handlers.NewTaskSettingsHandler(taskSettingsRepo)
 	agentPrefsH := handlers.NewAgentPrefsHandler(repository.NewUserAgentPrefsRepository(db))
 
+	// 通用 goal 循环（/goal 命令）：评估 agent/模型 + 限制条件，注入 ACP 服务驱动自动续轮
+	goalSettingsRepo := repository.NewGoalSettingsRepository(db)
+	acpSvc.SetGoalSettingsRepo(goalSettingsRepo)
+	goalSettingsH := handlers.NewGoalSettingsHandler(goalSettingsRepo)
+
 	// 全局权限规则（yolo / 白名单 / 黑名单）：配置来自 config.yaml，设置页保存时写回文件并热更新到所有连接
 	permSettingsH := handlers.NewPermissionSettingsHandler(cfgPath, agentRouter)
 
@@ -335,7 +340,7 @@ func main() {
 	subAgentH := handlers.NewSubAgentHandler(noteSettingsRepo, cfg.Agents.MCP.ConfigPath, publicBase)
 	subAgentH.SyncAllSubagentMCP()
 
-	engine := router.Setup(authSvc, jwtSvc, agentRouter, agentCfgH, registryH, schedTaskH, noteH, taskSettingsH, agentPrefsH, configH, mcpH, logH, debugH, subAgentH, tmH, permSettingsH, toolCallH, tmSvc, cfg.Agents.Skills, cfg.Agents.Commands, cfg.Agents.Rules, cfg.Agents.SubAgents, cfg.Agents.Selector, cfg.Server.Mode, cfg.Server.WebDist, cfg.Auth.AutoLogin)
+	engine := router.Setup(authSvc, jwtSvc, agentRouter, agentCfgH, registryH, schedTaskH, noteH, taskSettingsH, goalSettingsH, agentPrefsH, configH, mcpH, logH, debugH, subAgentH, tmH, permSettingsH, toolCallH, tmSvc, cfg.Agents.Skills, cfg.Agents.Commands, cfg.Agents.Rules, cfg.Agents.SubAgents, cfg.Agents.Selector, cfg.Server.Mode, cfg.Server.WebDist, cfg.Auth.AutoLogin)
 	engine.Any("/mcp/notes", gin.WrapH(notesmcp.Handler(noteRepo, noteSettingsRepo)))
 	engine.Any("/mcp/notes/*path", gin.WrapH(notesmcp.Handler(noteRepo, noteSettingsRepo)))
 	// taskmanager MCP server：主 agent 通过 MCP 工具管理工作区任务（tasks.json）。

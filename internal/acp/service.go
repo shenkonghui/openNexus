@@ -158,6 +158,12 @@ type Service struct {
 	// terminalEnabled 握手时是否向 agent 声明 terminal 能力。默认 true；
 	// 由 SetTerminalEnabled 注入（config.yaml agents.terminal_enabled）。
 	terminalEnabled bool
+
+	// goals 按稳定 session_id 记录生效中的通用 goal（/goal 命令，内存态不跨重启）。
+	// goalSettings 可选：评估 agent/模型与限制条件（SetGoalSettingsRepo 注入）。nil 用默认限制。
+	goals        map[string]*sessionGoal
+	goalMu       sync.Mutex
+	goalSettings *repository.GoalSettingsRepository
 }
 
 // TaskMetaTrigger 由任务元数据服务实现，发起任务时异步调用以打标签和生成标题。
@@ -201,6 +207,7 @@ func NewService(db *gorm.DB, messagesDir string, wsConfig config.WorkspaceConfig
 		agentCommands:           make(map[string][]acp.AvailableCommand),
 		agentModes:              make(map[string][]acp.SessionMode),
 		activePrompts:           make(map[string]*msgBroadcaster),
+		goals:                   make(map[string]*sessionGoal),
 		runningTasks:            repository.NewRunningTaskRepository(db),
 		wsConfig:                wsConfig,
 		skillUserDirs:           append([]string(nil), skillsConfig.UserDirs...),
@@ -1335,6 +1342,12 @@ func (s *Service) PromptWithExecution(ctx context.Context, sessionID, prompt str
 	if err != nil {
 		return nil, err
 	}
+	// /goal 命令拦截：agent 原生支持时透传；否则由通用 goal 控制器处理
+	// （status/clear 本地合成回复直接返回；set 把发给 agent 的 prompt 改写为 goal directive）。
+	promptForAgent := prompt
+	if handled, goalCh := s.interceptGoal(session, sessionID, prompt, executionID, &promptForAgent); handled {
+		return goalCh, nil
+	}
 	// error/closed 会话：发送前尝试自动恢复（复用共享连接、重建 ACP 会话并注入最近历史），
 	// 成功后状态回到 active 继续发送；恢复失败才返回 ErrSessionNotActive。
 	reconnected := false
@@ -1433,7 +1446,7 @@ func (s *Service) PromptWithExecution(ctx context.Context, sessionID, prompt str
 	}
 
 	acpSID := agentSessionID(session)
-	agentPrompt := s.expandPrompt(sessionID, session, prompt)
+	agentPrompt := s.expandPrompt(sessionID, session, promptForAgent)
 
 	// 注入工作区附加目录上下文，让 AI 知晓可访问的额外目录
 	if dirCtx := s.workspaceDirContext(session); dirCtx != "" {
@@ -1552,6 +1565,11 @@ func (s *Service) PromptWithExecution(ctx context.Context, sessionID, prompt str
 			// 通知任务管理同步 tasks.json 中会话登记任务的状态（否则登记条目永远显示运行中）
 			if s.promptFinished != nil {
 				s.promptFinished.PromptFinished(session.ID, finalStatus)
+			}
+			// goal 循环：本轮正常结束后评估是否达成、决定是否自动续轮（无 goal 时立即返回）。
+			// 独立 goroutine：评估走临时会话可能耗时，不阻塞本 prompt 收尾。
+			if finalStatus == models.RunningTaskStatusDone {
+				go s.goalOnTurnEnd(sessionID)
 			}
 			// 最后释放 prompt ctx（goroutine 退出即本 prompt 终结）。放在末尾确保上面
 			// 的 promptCtx.Err() 超时检查已完成。
@@ -1816,6 +1834,10 @@ func (s *Service) PromptWithExecution(ctx context.Context, sessionID, prompt str
 
 // CancelSession 取消正在进行的 prompt。
 func (s *Service) CancelSession(ctx context.Context, sessionID string) error {
+	// 用户主动取消视为放弃 goal：否则取消后流正常关闭（finalStatus=done）会误触发自动续轮。
+	if s.clearGoal(sessionID) {
+		slog.Info("会话取消，goal 已清除", "session", sessionID)
+	}
 	conn, ok := s.connForSession(sessionID)
 	if !ok {
 		return ErrSessionNotFound
@@ -2262,7 +2284,19 @@ func (s *Service) ListCommands(sessionID string) ([]acp.AvailableCommand, error)
 		agentCmds = s.agentCommands[session.AgentType]
 	}
 	s.mu.RUnlock()
-	return s.mergeCommands(agentCmds, cwd), nil
+	merged := s.mergeCommands(agentCmds, cwd)
+	// 非原生支持 goal 的 agent 追加内置 goal 命令（通用 goal 循环），供 "/" 弹窗展示
+	hasGoal := false
+	for _, c := range merged {
+		if c.Name == "goal" {
+			hasGoal = true
+			break
+		}
+	}
+	if !hasGoal {
+		merged = append(merged, builtinGoalCommand())
+	}
+	return merged, nil
 }
 
 // sessionCwd 返回会话的工作目录。
