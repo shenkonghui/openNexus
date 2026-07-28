@@ -13,15 +13,19 @@ import (
 	"opennexus/internal/repository"
 )
 
-// 通用 goal 循环：让不原生支持 /goal 的 agent 也能"朝目标持续工作"。
+// 通用 goal 循环：让所有 agent 都能"朝目标持续工作"。
 //
 // 机制（对齐 Claude Code /goal 的 prompt-based Stop hook 语义）：
-//  1. /goal <条件>  设定 goal 并改写为 directive 发给 agent 开始工作；
+//  1. /goal-opennexus <条件>  设定 goal 并改写为 directive 发给 agent 开始工作；
 //  2. 每轮 prompt 正常结束（finalStatus=done）后，goalOnTurnEnd 用小模型评估
 //     对话是否满足完成条件（RunPromptOnce 临时会话，不落库）；
 //  3. 未达成则携带评估理由自动续轮，达成/超限则清除 goal 并留言。
 //
-// 若 agent 命令列表已含原生 goal（如 claude-code），拦截跳过、原样透传。
+// 命令名带 -opennexus 后缀，避免与 agent 原生 /goal（如 claude-code）冲突，
+// 两者可共存：原生 /goal 仍由 agent 自己处理，本命令始终走通用循环。
+
+// goalCommandName 是通用 goal 循环的 slash 命令名。
+const goalCommandName = "goal-opennexus"
 
 // goal 循环的默认限制（GoalSettings 对应字段为 0 时生效）。
 const (
@@ -53,14 +57,15 @@ var goalClearAliases = map[string]bool{
 	"clear": true, "stop": true, "off": true, "reset": true, "none": true, "cancel": true,
 }
 
-// parseGoalCommand 解析 "/goal ..." 输入。ok=false 表示不是 goal 命令。
+// parseGoalCommand 解析 "/goal-opennexus ..." 输入。ok=false 表示不是 goal 命令。
 // action 取值：set（arg=完成条件）/ status / clear。
 func parseGoalCommand(prompt string) (action, arg string, ok bool) {
 	trimmed := strings.TrimSpace(prompt)
-	if trimmed != "/goal" && !strings.HasPrefix(trimmed, "/goal ") && !strings.HasPrefix(trimmed, "/goal\n") {
+	cmd := "/" + goalCommandName
+	if trimmed != cmd && !strings.HasPrefix(trimmed, cmd+" ") && !strings.HasPrefix(trimmed, cmd+"\n") {
 		return "", "", false
 	}
-	rest := strings.TrimSpace(strings.TrimPrefix(trimmed, "/goal"))
+	rest := strings.TrimSpace(strings.TrimPrefix(trimmed, cmd))
 	if rest == "" {
 		return "status", "", true
 	}
@@ -73,26 +78,10 @@ func parseGoalCommand(prompt string) (action, arg string, ok bool) {
 	return "set", rest, true
 }
 
-// agentHasNativeGoal 判断会话 agent 是否原生支持 goal 命令（含则透传不拦截）。
-func (s *Service) agentHasNativeGoal(sessionID, agentType string) bool {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	cmds := s.commands[sessionID]
-	if len(cmds) == 0 {
-		cmds = s.agentCommands[agentType]
-	}
-	for _, c := range cmds {
-		if c.Name == "goal" {
-			return true
-		}
-	}
-	return false
-}
-
-// builtinGoalCommand 是内置 goal 命令描述，供非原生 agent 的 "/" 弹窗展示。
+// builtinGoalCommand 是内置 goal 命令描述，供 "/" 弹窗展示（所有 agent 通用）。
 func builtinGoalCommand() acp.AvailableCommand {
 	return acp.AvailableCommand{
-		Name:        "goal",
+		Name:        goalCommandName,
 		Description: "设定目标并自动续轮直至达成（status 查看 / clear 清除）",
 		Input: &acp.AvailableCommandInput{
 			Unstructured: &acp.UnstructuredCommandInput{Hint: "<完成条件> | status | clear"},
@@ -121,7 +110,7 @@ func (s *Service) clearGoal(sessionID string) bool {
 	return ok
 }
 
-// interceptGoal 在 PromptWithExecution 入口处拦截 /goal 命令。
+// interceptGoal 在 PromptWithExecution 入口处拦截 /goal-opennexus 命令（所有 agent 通用）。
 // 返回 handled=true 时调用方直接返回 ch（status/clear 走合成回复，不打扰 agent）；
 // handled=false 时继续正常流程，set 场景会把 *promptForAgent 改写为 goal directive。
 func (s *Service) interceptGoal(session *models.Session, sessionID, prompt string, executionID *uint, promptForAgent *string) (handled bool, ch <-chan models.Message) {
@@ -129,14 +118,10 @@ func (s *Service) interceptGoal(session *models.Session, sessionID, prompt strin
 	if !ok {
 		return false, nil
 	}
-	// 原生支持（如 claude-code）时透传给 agent 自己处理
-	if s.agentHasNativeGoal(sessionID, session.AgentType) {
-		return false, nil
-	}
 	switch action {
 	case "set":
 		if len(arg) > goalMaxConditionLen {
-			return true, s.goalSyntheticReply(session, prompt, fmt.Sprintf("⚠️ goal 完成条件过长（%d 字符），上限 %d 字符。", len(arg), goalMaxConditionLen), executionID)
+			return true, s.syntheticCommandReply(session, prompt, fmt.Sprintf("⚠️ goal 完成条件过长（%d 字符），上限 %d 字符。", len(arg), goalMaxConditionLen), executionID)
 		}
 		s.setGoal(sessionID, arg)
 		slog.Info("goal 已设定", "session", sessionID, "agent", session.AgentType, "chars", len(arg))
@@ -144,25 +129,25 @@ func (s *Service) interceptGoal(session *models.Session, sessionID, prompt strin
 		return false, nil
 	case "clear":
 		if s.clearGoal(sessionID) {
-			return true, s.goalSyntheticReply(session, prompt, "✅ goal 已清除，本会话不再自动续轮。", executionID)
+			return true, s.syntheticCommandReply(session, prompt, "✅ goal 已清除，本会话不再自动续轮。", executionID)
 		}
-		return true, s.goalSyntheticReply(session, prompt, "当前会话没有生效中的 goal。", executionID)
+		return true, s.syntheticCommandReply(session, prompt, "当前会话没有生效中的 goal。", executionID)
 	default: // status
 		g, ok := s.getGoal(sessionID)
 		if !ok {
-			return true, s.goalSyntheticReply(session, prompt, "当前会话没有生效中的 goal。用 /goal <完成条件> 设定。", executionID)
+			return true, s.syntheticCommandReply(session, prompt, "当前会话没有生效中的 goal。用 /goal-opennexus <完成条件> 设定。", executionID)
 		}
 		text := fmt.Sprintf("🎯 goal 生效中\n\n完成条件：%s\n\n已自动续轮：%d 次\n持续时间：%s", g.Condition, g.Turns, time.Since(g.StartedAt).Round(time.Second))
 		if g.LastReason != "" {
 			text += "\n最近评估：" + g.LastReason
 		}
-		return true, s.goalSyntheticReply(session, prompt, text, executionID)
+		return true, s.syntheticCommandReply(session, prompt, text, executionID)
 	}
 }
 
-// goalSyntheticReply 持久化"用户命令 + 合成回复"两条消息，返回已含消息并关闭的 channel。
+// syntheticCommandReply 持久化"用户命令 + 合成回复"两条消息，返回已含消息并关闭的 channel。
 // 用于 status/clear 这类不需要打扰 agent 的本地命令回复。
-func (s *Service) goalSyntheticReply(session *models.Session, prompt, reply string, executionID *uint) <-chan models.Message {
+func (s *Service) syntheticCommandReply(session *models.Session, prompt, reply string, executionID *uint) <-chan models.Message {
 	seq := s.getNextSequence(session.SessionID)
 	userMsg := MapUpdate(session.SessionID, session.ID, seq+1, acp.SessionUpdate{
 		UserMessageChunk: &acp.SessionUpdateUserMessageChunk{
@@ -259,12 +244,12 @@ func (s *Service) evaluateAndContinueGoal(sessionID string, g *sessionGoal) {
 	}
 	if g.Turns >= maxTurns {
 		s.clearGoal(sessionID)
-		s.goalNotify(session, fmt.Sprintf("⏹️ goal 已终止：自动续轮达到上限（%d 次）。可重新 /goal 设定。", maxTurns))
+		s.goalNotify(session, fmt.Sprintf("⏹️ goal 已终止：自动续轮达到上限（%d 次）。可重新 /goal-opennexus 设定。", maxTurns))
 		return
 	}
 	if time.Since(g.StartedAt) >= maxDuration {
 		s.clearGoal(sessionID)
-		s.goalNotify(session, fmt.Sprintf("⏹️ goal 已终止：持续时间超过上限（%s）。可重新 /goal 设定。", maxDuration))
+		s.goalNotify(session, fmt.Sprintf("⏹️ goal 已终止：持续时间超过上限（%s）。可重新 /goal-opennexus 设定。", maxDuration))
 		return
 	}
 
@@ -285,7 +270,7 @@ func (s *Service) evaluateAndContinueGoal(sessionID string, g *sessionGoal) {
 	if err != nil {
 		// 评估失败保守终止，避免无评估依据地无限续轮
 		s.clearGoal(sessionID)
-		s.goalNotify(session, fmt.Sprintf("⚠️ goal 评估失败（%v），已停止自动续轮。可重新 /goal 设定。", err))
+		s.goalNotify(session, fmt.Sprintf("⚠️ goal 评估失败（%v），已停止自动续轮。可重新 /goal-opennexus 设定。", err))
 		return
 	}
 

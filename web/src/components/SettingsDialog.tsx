@@ -108,8 +108,6 @@ export default function SettingsDialog({ initialTab = 'language', onClose }: Pro
   const [goalModel, setGoalModel] = useState('')
   const [goalMaxTurns, setGoalMaxTurns] = useState(0)
   const [goalMaxDuration, setGoalMaxDuration] = useState(0)
-  const [goalModelOptions, setGoalModelOptions] = useState<ModelOption[]>([])
-  const [goalModelProbing, setGoalModelProbing] = useState(false)
   const [goalSettingsSaving, setGoalSettingsSaving] = useState(false)
   const [goalSettingsSaved, setGoalSettingsSaved] = useState(false)
   // 权限规则设置（白名单 / 黑名单 / 询问名单；mode 由侧栏全局 YOLO 开关控制，保存时保留）
@@ -183,48 +181,10 @@ export default function SettingsDialog({ initialTab = 'language', onClose }: Pro
     return () => { alive = false }
   }, [tab, noteAgent, t])
 
-  // 进入 goal 页且选择了评估 agent 时加载其可用模型列表（优先会话缓存，回退探测）
+  // 进入 agent / goal 页时加载各 agent 的可用模型列表（优先会话缓存，回退探测），
+  // 供「默认 Agent·模型」与「goal 评估 Agent·模型」合并下拉共用。
   useEffect(() => {
-    if (tab !== 'goal' || !goalAgent) {
-      return
-    }
-    let alive = true
-    setGoalModelProbing(true)
-
-    async function loadGoalModels() {
-      try {
-        const cached = await getAgentModels(goalAgent)
-        if (!alive) return
-        const fromSession = cached.data.model_options || []
-        if (fromSession.length > 0 && fromSession[0].options.length > 0) {
-          setGoalModelOptions(fromSession)
-          return
-        }
-
-        const probed = await probeAgentConfigs(goalAgent)
-        if (!alive) return
-        const modelOpt = findModelConfigOption(probed.data.config_options || [])
-        if (modelOpt && modelOpt.options.length > 0) {
-          setGoalModelOptions([modelOptFromConfig(modelOpt)])
-        } else {
-          setGoalModelOptions([])
-        }
-      } catch (err) {
-        if (!alive) return
-        setGoalModelOptions([])
-        setError(err instanceof Error ? err.message : t('common.failed'))
-      } finally {
-        if (alive) setGoalModelProbing(false)
-      }
-    }
-
-    loadGoalModels()
-    return () => { alive = false }
-  }, [tab, goalAgent, t])
-
-  // 进入 agent 页时加载各 agent 的可用模型列表（优先会话缓存，回退探测）。
-  useEffect(() => {
-    if (tab !== 'agent' || agents.length === 0) return
+    if ((tab !== 'agent' && tab !== 'goal') || agents.length === 0) return
     let alive = true
 
     async function loadAgentModels(agentType: string) {
@@ -427,27 +387,6 @@ export default function SettingsDialog({ initialTab = 'language', onClose }: Pro
       setError(err instanceof Error ? err.message : t('common.failed'))
     } finally {
       setTaskSettingsSaving(false)
-    }
-  }
-
-  async function handleProbeGoalModel() {
-    if (!goalAgent) return
-    setGoalModelProbing(true); setError('')
-    try {
-      clearAgentProbeCache(goalAgent)
-      const r = await probeAgentConfigs(goalAgent, { force: true })
-      const modelOpt = findModelConfigOption(r.data.config_options || [])
-      if (modelOpt && modelOpt.options.length > 0) {
-        setGoalModelOptions([modelOptFromConfig(modelOpt)])
-      } else {
-        setGoalModelOptions([])
-        setError(t('scheduledTask.probeHint'))
-      }
-    } catch (err) {
-      setGoalModelOptions([])
-      setError(err instanceof Error ? err.message : t('common.failed'))
-    } finally {
-      setGoalModelProbing(false)
     }
   }
 
@@ -1100,57 +1039,35 @@ export default function SettingsDialog({ initialTab = 'language', onClose }: Pro
                   <p className={styles.hint}>{t('settings.goalHint')}</p>
 
                   <div className={styles.defaultSection}>
-                    {/* 评估 agent：空 = 使用会话自身 agent */}
+                    {/* 评估 Agent·模型 合并下拉（与默认 Agent 设置同一控件，含 selector.filters 过滤）；空 = 会话自身 agent */}
                     <label className={styles.label}>{t('settings.goalAgent')}</label>
                     <p className={styles.sectionHint}>{t('settings.goalAgentHint')}</p>
-                    <select className={styles.input} value={goalAgent}
-                      onChange={(e) => {
-                        setGoalAgent(e.target.value)
-                        setGoalModel('')
-                        setGoalModelOptions([])
-                      }}
-                    >
-                      <option value="">{t('settings.goalAgentDefault')}</option>
-                      {agents.map((a) => (
-                        <option key={a.type} value={a.type}>{a.display_name}（{a.type}）</option>
-                      ))}
-                    </select>
-                    {goalAgent && (
-                      <>
-                        <label className={styles.label}>{t('settings.goalModel')}</label>
-                        <div className={styles.inlineRow}>
-                          {goalModelOptions.length > 0 && goalModelOptions[0].options.length > 0 ? (
-                            <select className={styles.input} value={goalModel}
-                              onChange={(e) => setGoalModel(e.target.value)}
-                            >
-                              <option value="">{t('scheduledTask.defaultModel')}</option>
-                              {goalModelOptions[0].options.map((o) => (
-                                <option key={o.value} value={o.value}>
-                                  {o.name !== o.value ? `${o.name} (${o.value})` : o.value}
-                                </option>
-                              ))}
-                            </select>
-                          ) : (
-                            <input className={styles.input} type="text" value={goalModel}
-                              onChange={(e) => setGoalModel(e.target.value)}
-                              placeholder={t('scheduledTask.modelValuePlaceholder')}
-                            />
-                          )}
-                          <button type="button" className={styles.secondaryBtn}
-                            onClick={handleProbeGoalModel}
-                            disabled={goalModelProbing}
-                            title={t('scheduledTask.probeTitle')}
-                          >{goalModelProbing ? t('common.loading') : t('scheduledTask.probeConfig')}</button>
-                        </div>
-                        <p className={styles.sectionHint}>
-                          {goalModelProbing
-                            ? t('common.loading')
-                            : goalModelOptions.length === 0
-                              ? t('scheduledTask.probeHint')
-                              : t('scheduledTask.probeDone')}
-                        </p>
-                      </>
-                    )}
+                    <div className={styles.defaultRow}>
+                      <AgentModelSelector
+                        agents={agents}
+                        modelsByAgent={defaultModelsMap}
+                        filters={linesToList(selectorFiltersText)}
+                        selectedAgent={goalAgent}
+                        selectedModel={goalModel}
+                        placeholder={t('settings.goalAgentDefault')}
+                        className={styles.input}
+                        onSelect={(agentType, modelValue) => {
+                          setGoalAgent(agentType)
+                          setGoalModel(modelValue)
+                          setGoalSettingsSaved(false)
+                        }}
+                      />
+                      <button type="button" className={styles.secondaryBtn}
+                        onClick={handleProbeDefaultModels}
+                        disabled={defaultModelsProbing}
+                        title={t('scheduledTask.probeTitle')}
+                      >{defaultModelsProbing ? t('common.loading') : t('scheduledTask.probeConfig')}</button>
+                      {goalAgent && (
+                        <button type="button" className={styles.clearDefaultBtn}
+                          onClick={() => { setGoalAgent(''); setGoalModel(''); setGoalSettingsSaved(false) }}
+                        >{t('common.cancel')}</button>
+                      )}
+                    </div>
 
                     {/* 限制条件：0 = 使用默认值 */}
                     <label className={styles.label}>{t('settings.goalMaxTurns')}</label>

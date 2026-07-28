@@ -159,7 +159,7 @@ type Service struct {
 	// 由 SetTerminalEnabled 注入（config.yaml agents.terminal_enabled）。
 	terminalEnabled bool
 
-	// goals 按稳定 session_id 记录生效中的通用 goal（/goal 命令，内存态不跨重启）。
+	// goals 按稳定 session_id 记录生效中的通用 goal（/goal-opennexus 命令，内存态不跨重启）。
 	// goalSettings 可选：评估 agent/模型与限制条件（SetGoalSettingsRepo 注入）。nil 用默认限制。
 	goals        map[string]*sessionGoal
 	goalMu       sync.Mutex
@@ -1342,8 +1342,12 @@ func (s *Service) PromptWithExecution(ctx context.Context, sessionID, prompt str
 	if err != nil {
 		return nil, err
 	}
-	// /goal 命令拦截：agent 原生支持时透传；否则由通用 goal 控制器处理
+	// 内置 -opennexus 命令拦截（客户端侧处理，不发给 agent，不与原生命令冲突）：
+	// /yolo-opennexus 开关会话 YOLO；/goal-opennexus 由通用 goal 控制器处理
 	// （status/clear 本地合成回复直接返回；set 把发给 agent 的 prompt 改写为 goal directive）。
+	if handled, yoloCh := s.interceptYolo(session, sessionID, prompt, executionID); handled {
+		return yoloCh, nil
+	}
 	promptForAgent := prompt
 	if handled, goalCh := s.interceptGoal(session, sessionID, prompt, executionID, &promptForAgent); handled {
 		return goalCh, nil
@@ -2285,16 +2289,18 @@ func (s *Service) ListCommands(sessionID string) ([]acp.AvailableCommand, error)
 	}
 	s.mu.RUnlock()
 	merged := s.mergeCommands(agentCmds, cwd)
-	// 非原生支持 goal 的 agent 追加内置 goal 命令（通用 goal 循环），供 "/" 弹窗展示
-	hasGoal := false
-	for _, c := range merged {
-		if c.Name == "goal" {
-			hasGoal = true
-			break
+	// 追加内置 -opennexus 命令（goal 循环 / 会话 YOLO），供 "/" 弹窗展示；命令名带后缀不与原生命令冲突
+	for _, builtin := range []acp.AvailableCommand{builtinGoalCommand(), builtinYoloCommand()} {
+		exists := false
+		for _, c := range merged {
+			if c.Name == builtin.Name {
+				exists = true
+				break
+			}
 		}
-	}
-	if !hasGoal {
-		merged = append(merged, builtinGoalCommand())
+		if !exists {
+			merged = append(merged, builtin)
+		}
 	}
 	return merged, nil
 }
