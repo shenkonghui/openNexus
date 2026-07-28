@@ -1,9 +1,12 @@
 package taskmanagermcp
 
 import (
+	"context"
 	"testing"
 
 	"github.com/google/jsonschema-go/jsonschema"
+
+	"opennexus/internal/models"
 )
 
 // TestNewServerDoesNotPanic 验证 newServer 在依赖项缺失（nil）时也能安全构造，
@@ -44,4 +47,83 @@ func TestTaskManagerJSONSchemaTagsValid(t *testing.T) {
 	t.Run("sendPromptIn", func(t *testing.T) { _, err := jsonschema.For[sendPromptIn](nil); check(t, err) })
 	t.Run("setMaxParallelIn", func(t *testing.T) { _, err := jsonschema.For[setMaxParallelIn](nil); check(t, err) })
 	t.Run("listTasksIn", func(t *testing.T) { _, err := jsonschema.For[listTasksIn](nil); check(t, err) })
+}
+
+// fakeTaskCreator 仅实现 Load，供 expandTaskIDs 测试使用。
+type fakeTaskCreator struct {
+	def models.TaskManagerDef
+}
+
+func (f *fakeTaskCreator) UpsertTask(string, models.TaskManagerTask) error { return nil }
+func (f *fakeTaskCreator) DeleteTask(string, string) error                 { return nil }
+func (f *fakeTaskCreator) SetMaxParallel(string, int) error                { return nil }
+func (f *fakeTaskCreator) Stop(string, string) error                       { return nil }
+func (f *fakeTaskCreator) Start(context.Context, string, uint, uint, string) error {
+	return nil
+}
+func (f *fakeTaskCreator) Load(string) (*models.TaskManagerDef, error) {
+	d := f.def
+	return &d, nil
+}
+func (f *fakeTaskCreator) SendPrompt(context.Context, string, string, string) error { return nil }
+
+// TestExpandTaskIDs 验证 task_id 的 glob 展开行为：默认开启、可显式关闭、
+// 无元字符时按字面返回、无命中时报错。
+func TestExpandTaskIDs(t *testing.T) {
+	creator := &fakeTaskCreator{def: models.TaskManagerDef{Tasks: []models.TaskManagerTask{
+		{ID: "t100"}, {ID: "t101"}, {ID: "x200"},
+	}}}
+	boolPtr := func(b bool) *bool { return &b }
+
+	t.Run("默认开启glob批量匹配", func(t *testing.T) {
+		ids, err := expandTaskIDs(creator, "/cwd", "t1*", nil)
+		if err != nil {
+			t.Fatalf("expandTaskIDs: %v", err)
+		}
+		if len(ids) != 2 || ids[0] != "t100" || ids[1] != "t101" {
+			t.Fatalf("期望 [t100 t101]，实际 %v", ids)
+		}
+	})
+
+	t.Run("显式开启与默认一致", func(t *testing.T) {
+		ids, err := expandTaskIDs(creator, "/cwd", "?200", boolPtr(true))
+		if err != nil {
+			t.Fatalf("expandTaskIDs: %v", err)
+		}
+		if len(ids) != 1 || ids[0] != "x200" {
+			t.Fatalf("期望 [x200]，实际 %v", ids)
+		}
+	})
+
+	t.Run("关闭glob时按字面返回", func(t *testing.T) {
+		ids, err := expandTaskIDs(creator, "/cwd", "t1*", boolPtr(false))
+		if err != nil {
+			t.Fatalf("expandTaskIDs: %v", err)
+		}
+		if len(ids) != 1 || ids[0] != "t1*" {
+			t.Fatalf("期望字面 [t1*]，实际 %v", ids)
+		}
+	})
+
+	t.Run("无元字符时不加载任务直接返回", func(t *testing.T) {
+		ids, err := expandTaskIDs(creator, "/cwd", "t100", nil)
+		if err != nil {
+			t.Fatalf("expandTaskIDs: %v", err)
+		}
+		if len(ids) != 1 || ids[0] != "t100" {
+			t.Fatalf("期望 [t100]，实际 %v", ids)
+		}
+	})
+
+	t.Run("无命中时报错", func(t *testing.T) {
+		if _, err := expandTaskIDs(creator, "/cwd", "zzz*", nil); err == nil {
+			t.Fatal("期望无命中报错，实际成功")
+		}
+	})
+
+	t.Run("非法模式报错", func(t *testing.T) {
+		if _, err := expandTaskIDs(creator, "/cwd", "[", nil); err == nil {
+			t.Fatal("期望非法 glob 模式报错，实际成功")
+		}
+	})
 }
