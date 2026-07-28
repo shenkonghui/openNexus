@@ -100,6 +100,15 @@ func main() {
 		return
 	}
 
+	// `opennexus acp-bridge`：agent 常驻守护进程（UDS ↔ agent stdio 透传）。
+	// 由主 server 以 Setsid 拉起，主 server 重启后重新拨号 socket 即可复用原 agent。
+	if len(os.Args) > 1 && os.Args[1] == "acp-bridge" {
+		if err := acp.RunBridgeDaemon(os.Args[2:]); err != nil {
+			log.Fatalf("acp-bridge 退出: %v", err)
+		}
+		return
+	}
+
 	// 启动早期扩充 PATH：GUI/launchd 启动的进程 PATH 不含 nvm、Homebrew 等目录，
 	// 会导致通过 npm exec 启动的 agent 子进程找不到 npm/node。
 	// 必须早于任何 agent 进程拉起（含下方的 PreconnectAllAsync）。
@@ -184,6 +193,13 @@ func main() {
 	acpSvc.SetFailedTaskAutoRetryOnce(cfg.Agents.FailedTaskAutoRetryOnceEnabled())
 	// ACP terminal 能力：开启后 agent 的 shell 由本服务代执行并在网页终端面板展示。
 	acpSvc.SetTerminalEnabled(cfg.Agents.TerminalBridgeEnabled())
+	// agent 常驻模式：agent 挂在独立 acp-bridge 进程下（UDS 透传），主程序重启只断
+	// socket，重启后重新拨号复用原 agent 进程与内存上下文（Windows 不支持，强制关闭）。
+	persistentAgents := cfg.Agents.PersistentAgentsEnabled()
+	if persistentAgents {
+		acpSvc.SetBridgeMode(true, acp.ResolveBridgeSocketDir(filepath.Dir(cfg.Database.Path)))
+		log.Printf("agent 常驻模式已启用（acp-bridge + UDS，主程序重启不重启 agent）")
+	}
 	// 全局权限规则（yolo/白名单/黑名单）来自 config.yaml 的 permissions 段。
 	// 启动时立即下发到 service（须在 PreconnectAllAsync 前，使新连接建连即拿到规则）。
 	acpSvc.ApplyPermissions(cfg.Permissions.Mode, cfg.Permissions.Allow, cfg.Permissions.Ask, cfg.Permissions.Deny)
@@ -223,18 +239,28 @@ func main() {
 	// 主 server 被 SIGKILL 或 panic 退出时，shutdown 逻辑不会执行，残留的 agent 进程
 	// 由独立进程组存活（Setsid），若 watchdog 也一并死亡则无人清理。此处在新连接建立前扫杀，
 	// 既清除孤儿又避免误杀即将建立的新连接（此时 pool 尚空）。
-	if n, err := acp.KillOrphanACPProcesses(); err != nil {
-		log.Printf("启动清理 acp 孤儿进程失败: %v", err)
-	} else if n > 0 {
-		log.Printf("启动清理：已扫杀 %d 个残留 acp 孤儿进程", n)
-	}
-	if err := acpConnRepo.DeleteAll(); err != nil {
-		log.Printf("启动清理心跳表脏行失败: %v", err)
+	// 常驻模式下跳过扫杀与清表：残留 bridge/agent 正是要复用的常驻进程，
+	// 心跳表行是重连拨号的依据；真正的死进程由 ReattachPersistentConnections 甄别清理。
+	if !persistentAgents {
+		if n, err := acp.KillOrphanACPProcesses(); err != nil {
+			log.Printf("启动清理 acp 孤儿进程失败: %v", err)
+		} else if n > 0 {
+			log.Printf("启动清理：已扫杀 %d 个残留 acp 孤儿进程", n)
+		}
+		if err := acpConnRepo.DeleteAll(); err != nil {
+			log.Printf("启动清理心跳表脏行失败: %v", err)
+		}
 	}
 
 	// 启动健康检查与自动重连 goroutine（定期检查连接状态，断开自动重连）。
 	// 同时启动心跳续约 goroutine，向 acp_connections 表续约，供 watchdog 判活。
 	acpSvc.StartHealthCheck()
+	// 常驻模式：按心跳表存量行重新拨号复用上次退出前的常驻 agent（死进程清理、活进程重连）。
+	// 须在 StartHealthCheck 之后（心跳已续约，旧 watchdog 不会误判失联）、Preconnect 之前
+	//（先复用存活连接，Preconnect 对已在 pool 中的 agent 天然跳过）。
+	if persistentAgents {
+		acpSvc.ReattachPersistentConnections()
+	}
 	// 异步为所有已注册 agent 预建立共享 ACP 连接（每类 agent 一个常驻进程）。
 	// 每个 agent 独立 goroutine 连接，不阻塞服务启动；连接失败由健康检查自动重连。
 	acpSvc.PreconnectAllAsync()
@@ -396,10 +422,14 @@ func main() {
 	stopWithTimeout("定时任务调度器", 3*time.Second, schedulerSvc.Stop)
 	// 兜底清理：扫杀可能残留的 acp 孤儿进程（正常退出已由 StopHealthCheck 关闭内存连接，
 	// 此处覆盖崩溃恢复遗留或未被 pool 跟踪的进程）。
-	if n, err := acp.KillOrphanACPProcesses(); err != nil {
-		log.Printf("清理 acp 孤儿进程失败: %v", err)
-	} else if n > 0 {
-		log.Printf("已清理 %d 个 acp 孤儿进程", n)
+	// 常驻模式下跳过：StopHealthCheck 已 Detach（只断 socket），bridge/agent 留待下次
+	// 启动复用；若主程序不再回来，watchdog 心跳超时后兜底清理。
+	if !persistentAgents {
+		if n, err := acp.KillOrphanACPProcesses(); err != nil {
+			log.Printf("清理 acp 孤儿进程失败: %v", err)
+		} else if n > 0 {
+			log.Printf("已清理 %d 个 acp 孤儿进程", n)
+		}
 	}
 	os.Exit(0)
 }

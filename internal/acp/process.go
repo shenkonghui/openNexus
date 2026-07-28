@@ -140,6 +140,12 @@ func (p *Process) Stdout() io.ReadCloser {
 	return p.stdout
 }
 
+// Detach 对直连进程无「仅断开」语义：agent 是本进程子进程，stdio 随连接关闭失效，
+// 等价于 Stop。常驻语义由 bridgeTransport.Detach 提供。
+func (p *Process) Detach() error {
+	return p.Stop()
+}
+
 // Stop 停止子进程。
 // 先关闭 stdin，再向进程组发送 SIGTERM 并等待 stopGracePeriod；
 // 若进程仍存活则升级为 SIGKILL 强制终止整个进程组（含孙进程）。
