@@ -102,6 +102,28 @@ func (s *Service) setGoal(sessionID, condition string) {
 	s.goals[sessionID] = &sessionGoal{Condition: condition, StartedAt: time.Now()}
 }
 
+// recordGoalEvent 把 goal 生命周期事件写入工具调用记录（kind=goal），
+// 使会话「记录」面板与工具调用记录页能看到设定/评估/续轮/终止轨迹。
+func (s *Service) recordGoalEvent(session *models.Session, title, status string) {
+	if s.toolCallRecords == nil || session == nil {
+		return
+	}
+	now := time.Now()
+	rec := &models.ToolCallRecord{
+		UserID:      session.UserID,
+		DBSessionID: session.ID,
+		ToolCallID:  fmt.Sprintf("goal:%s:%d", session.SessionID, now.UnixNano()),
+		Kind:        "goal",
+		Title:       title,
+		Status:      status,
+		StartedAt:   now,
+		FinishedAt:  &now,
+	}
+	if err := s.toolCallRecords.Create(rec); err != nil {
+		slog.Warn("创建 goal 事件记录失败", "session", session.SessionID, "err", err)
+	}
+}
+
 func (s *Service) clearGoal(sessionID string) bool {
 	s.goalMu.Lock()
 	defer s.goalMu.Unlock()
@@ -124,11 +146,13 @@ func (s *Service) interceptGoal(session *models.Session, sessionID, prompt strin
 			return true, s.syntheticCommandReply(session, prompt, fmt.Sprintf("⚠️ goal 完成条件过长（%d 字符），上限 %d 字符。", len(arg), goalMaxConditionLen), executionID)
 		}
 		s.setGoal(sessionID, arg)
+		s.recordGoalEvent(session, "设定 goal："+arg, models.ToolCallStatusCompleted)
 		slog.Info("goal 已设定", "session", sessionID, "agent", session.AgentType, "chars", len(arg))
 		*promptForAgent = "请朝以下目标持续工作。每轮结束后系统会自动评估是否达成，未达成会要求你继续，无需向用户确认。\n\n目标（完成条件）：\n" + arg
 		return false, nil
 	case "clear":
 		if s.clearGoal(sessionID) {
+			s.recordGoalEvent(session, "goal 已手动清除", models.ToolCallStatusCompleted)
 			return true, s.syntheticCommandReply(session, prompt, "✅ goal 已清除，本会话不再自动续轮。", executionID)
 		}
 		return true, s.syntheticCommandReply(session, prompt, "当前会话没有生效中的 goal。", executionID)
@@ -244,11 +268,13 @@ func (s *Service) evaluateAndContinueGoal(sessionID string, g *sessionGoal) {
 	}
 	if g.Turns >= maxTurns {
 		s.clearGoal(sessionID)
+		s.recordGoalEvent(session, fmt.Sprintf("goal 终止：自动续轮达到上限（%d 次）", maxTurns), models.ToolCallStatusFailed)
 		s.goalNotify(session, fmt.Sprintf("⏹️ goal 已终止：自动续轮达到上限（%d 次）。可重新 /opennexus-goal 设定。", maxTurns))
 		return
 	}
 	if time.Since(g.StartedAt) >= maxDuration {
 		s.clearGoal(sessionID)
+		s.recordGoalEvent(session, fmt.Sprintf("goal 终止：持续时间超过上限（%s）", maxDuration), models.ToolCallStatusFailed)
 		s.goalNotify(session, fmt.Sprintf("⏹️ goal 已终止：持续时间超过上限（%s）。可重新 /opennexus-goal 设定。", maxDuration))
 		return
 	}
@@ -270,6 +296,7 @@ func (s *Service) evaluateAndContinueGoal(sessionID string, g *sessionGoal) {
 	if err != nil {
 		// 评估失败保守终止，避免无评估依据地无限续轮
 		s.clearGoal(sessionID)
+		s.recordGoalEvent(session, fmt.Sprintf("goal 评估失败：%v", err), models.ToolCallStatusFailed)
 		s.goalNotify(session, fmt.Sprintf("⚠️ goal 评估失败（%v），已停止自动续轮。可重新 /opennexus-goal 设定。", err))
 		return
 	}
@@ -278,6 +305,11 @@ func (s *Service) evaluateAndContinueGoal(sessionID string, g *sessionGoal) {
 	g.LastReason = reason
 	if achieved {
 		s.clearGoal(sessionID)
+		recTitle := "goal 评估：已达成"
+		if reason != "" {
+			recTitle += "（" + reason + "）"
+		}
+		s.recordGoalEvent(session, recTitle, models.ToolCallStatusCompleted)
 		msg := "🎯 goal 已达成，自动续轮结束。"
 		if reason != "" {
 			msg += "\n评估：" + reason
@@ -304,11 +336,17 @@ func (s *Service) evaluateAndContinueGoal(sessionID string, g *sessionGoal) {
 		contPrompt += "\n\n未达成原因：" + reason
 	}
 	contPrompt += "\n\n请继续推进直到满足完成条件，无需向用户确认。"
+	recTitle := fmt.Sprintf("goal 评估：未达成，自动续轮（第 %d 次）", g.Turns)
+	if reason != "" {
+		recTitle += "：" + reason
+	}
+	s.recordGoalEvent(session, recTitle, models.ToolCallStatusCompleted)
 	slog.Info("goal 未达成，自动续轮", "session", sessionID, "turn", g.Turns, "reason", reason)
 
 	ch, err := s.PromptWithExecution(context.Background(), sessionID, contPrompt, nil)
 	if err != nil {
 		s.clearGoal(sessionID)
+		s.recordGoalEvent(session, fmt.Sprintf("goal 自动续轮失败：%v", err), models.ToolCallStatusFailed)
 		s.goalNotify(session, fmt.Sprintf("⚠️ goal 自动续轮失败（%v），已停止。", err))
 		return
 	}
