@@ -45,6 +45,9 @@ type sessionGoal struct {
 	Turns      int    // 已自动续轮次数
 	LastReason string // 最近一次评估理由
 	Evaluating bool   // 评估进行中（防重入）
+	// Role 自动选取的评估角色（nil=无匹配，走内置评估）；RoleResolved 每个 goal 只选一次。
+	Role         *GoalRoleDef
+	RoleResolved bool
 }
 
 // SetGoalSettingsRepo 注入 goal 设置仓库（评估 agent/模型 + 限制条件）。
@@ -162,6 +165,9 @@ func (s *Service) interceptGoal(session *models.Session, sessionID, prompt strin
 			return true, s.syntheticCommandReply(session, prompt, "当前会话没有生效中的 goal。用 /opennexus-goal <完成条件> 设定。", executionID)
 		}
 		text := fmt.Sprintf("🎯 goal 生效中\n\n完成条件：%s\n\n已自动续轮：%d 次\n持续时间：%s", g.Condition, g.Turns, time.Since(g.StartedAt).Round(time.Second))
+		if g.Role != nil {
+			text += "\n评估角色：" + g.Role.Name + "（自动选取）"
+		}
 		if g.LastReason != "" {
 			text += "\n最近评估：" + g.LastReason
 		}
@@ -280,15 +286,31 @@ func (s *Service) evaluateAndContinueGoal(sessionID string, g *sessionGoal) {
 	}
 
 	transcript := s.goalTranscript(session.SessionID)
-	evalPrompt := fmt.Sprintf(`你是任务完成度评估器。判断以下对话是否已满足给定的完成条件。
-只输出两行：第一行 YES 或 NO（YES=已完全满足条件）；第二行用一句话说明理由。
-不要输出其他内容。
 
-完成条件：
-%s
-
-最近对话摘录：
-%s`, g.Condition, transcript)
+	// 首次评估时自动选取评估角色（文件式定义，无候选/选取失败则回退内置评估）。
+	if !g.RoleResolved {
+		g.RoleResolved = true
+		roles, _ := s.GoalRolesSnapshot(sessionCwd(session, s.workspaces))
+		if len(roles) > 0 {
+			selCtx, selCancel := context.WithTimeout(context.Background(), promptOnceTimeout+30*time.Second)
+			g.Role = s.selectGoalRole(selCtx, evalAgent, evalModel, g.Condition, roles)
+			selCancel()
+			if g.Role != nil {
+				s.recordGoalEvent(session, fmt.Sprintf("goal 评估角色选定：%s", g.Role.Name), models.ToolCallStatusCompleted)
+				s.goalNotify(session, fmt.Sprintf("🎭 goal 评估角色已自动选定：%s（%s）", g.Role.Name, g.Role.Description))
+			}
+		}
+	}
+	// 评估 agent/model 优先级：角色 > GoalSettings > 会话 agent。
+	if g.Role != nil {
+		if g.Role.Agent != "" {
+			evalAgent = g.Role.Agent
+			evalModel = g.Role.Model
+		} else if g.Role.Model != "" {
+			evalModel = g.Role.Model
+		}
+	}
+	evalPrompt := buildGoalEvalPrompt(g.Role, g.Condition, transcript)
 
 	evalCtx, cancel := context.WithTimeout(context.Background(), promptOnceTimeout+30*time.Second)
 	defer cancel()

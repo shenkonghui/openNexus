@@ -629,6 +629,80 @@
   color: var(--danger, #cf222e);
 }
 
+/* goal 评估角色列表（文件式定义管理区） */
+.roleList {
+  list-style: none;
+  margin: 0 0 10px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.roleItem {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+}
+
+.roleMain {
+  flex: 1;
+  min-width: 0;
+}
+
+.roleHead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.roleName {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.roleScope {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+}
+
+.roleDesc {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+  word-break: break-word;
+}
+
+.roleMeta {
+  margin: 3px 0 0;
+  font-size: 11px;
+  color: var(--text-tertiary);
+  font-family: 'IBM Plex Mono', 'Monaco', 'Menlo', monospace;
+}
+
+.roleActions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.roleEditor {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border);
+}
+
 /* 窄屏：弹窗铺满、导航压缩 */
 @media (max-width: 720px) {
   .overlay {

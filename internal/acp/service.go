@@ -103,6 +103,9 @@ type Service struct {
 	ruleProjectDirs     []string
 	subAgentUserDirs    []string
 	subAgentProjectDirs []string
+	// goalRoleUserDirs/goalRoleProjectDirs goal 评估角色扫描目录（SetGoalRoleDirs 注入）。
+	goalRoleUserDirs    []string
+	goalRoleProjectDirs []string
 
 	// 健康检查与自动重连控制
 	hcCtx        context.Context

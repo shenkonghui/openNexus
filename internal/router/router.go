@@ -252,6 +252,8 @@ func Setup(authSvc *services.AuthService, jwtSvc *services.JWTService, agentRout
 				{
 					goal.GET("/settings", goalSettingsH.GetSettings)
 					goal.PUT("/settings", goalSettingsH.UpdateSettings)
+					// 评估角色列表（文件式定义；增删改走 /filesystem 通用文件接口）
+					goal.GET("/roles", goalSettingsH.Roles)
 				}
 			}
 

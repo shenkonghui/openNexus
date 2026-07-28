@@ -7,7 +7,8 @@ import type { RegistryRefreshResult } from '../api/agentConfigs'
 import { listAgents, getAgentModels, probeAgentConfigs, clearAgentProbeCache } from '../api/agents'
 import { getNoteSettings, updateNoteSettings, generateNoteMCPToken } from '../api/notes'
 import { getTaskSettings, updateTaskSettings } from '../api/tasks'
-import { getGoalSettings, updateGoalSettings } from '../api/goal'
+import { getGoalSettings, updateGoalSettings, listGoalRoles, type GoalRole } from '../api/goal'
+import { readWorkspaceFile, writeWorkspaceFile, deleteWorkspaceEntry } from '../api/filesystem'
 import { getPermissionSettings, updatePermissionSettings } from '../api/permissions'
 import { reloadProgram, updateSelectorFilters } from '../api/config'
 import { getAgentPrefs, patchAgentPrefs } from '../api/agentPrefs'
@@ -110,6 +111,13 @@ export default function SettingsDialog({ initialTab = 'language', onClose }: Pro
   const [goalMaxDuration, setGoalMaxDuration] = useState(0)
   const [goalSettingsSaving, setGoalSettingsSaving] = useState(false)
   const [goalSettingsSaved, setGoalSettingsSaved] = useState(false)
+  // goal 评估角色管理（文件式定义：列表来自 /goal/roles，文件增删改走 /filesystem 通用接口）
+  const [goalRoles, setGoalRoles] = useState<GoalRole[]>([])
+  const [goalRolesDir, setGoalRolesDir] = useState('')
+  const [roleNewName, setRoleNewName] = useState('')
+  const [roleEditPath, setRoleEditPath] = useState('')
+  const [roleEditContent, setRoleEditContent] = useState('')
+  const [roleEditSaving, setRoleEditSaving] = useState(false)
   // 权限规则设置（白名单 / 黑名单 / 询问名单；mode 由侧栏全局 YOLO 开关控制，保存时保留）
   const [permMode, setPermMode] = useState<'normal' | 'yolo'>('normal')
   const [permAllow, setPermAllow] = useState('')
@@ -209,6 +217,18 @@ export default function SettingsDialog({ initialTab = 'language', onClose }: Pro
     agents.forEach((a) => { loadAgentModels(a.type) })
     return () => { alive = false }
   }, [tab, agents])
+
+  // 进入 goal 页时加载评估角色列表（用户目录作用域，project 角色随会话 cwd 生效不在此管理）。
+  useEffect(() => {
+    if (tab !== 'goal') return
+    let alive = true
+    listGoalRoles().then((resp) => {
+      if (!alive) return
+      setGoalRoles(resp.data.roles || [])
+      setGoalRolesDir(resp.data.user_dir || '')
+    }).catch(() => { /* 接口不可用时隐藏角色区的列表内容即可 */ })
+    return () => { alive = false }
+  }, [tab])
 
   async function loadData() {
     setLoading(true); setError('')
@@ -408,6 +428,60 @@ export default function SettingsDialog({ initialTab = 'language', onClose }: Pro
       setError(err instanceof Error ? err.message : t('common.failed'))
     } finally {
       setGoalSettingsSaving(false)
+    }
+  }
+
+  async function refreshGoalRoles() {
+    try {
+      const resp = await listGoalRoles()
+      setGoalRoles(resp.data.roles || [])
+      setGoalRolesDir(resp.data.user_dir || '')
+    } catch { /* 列表刷新失败不阻断操作结果 */ }
+  }
+
+  // 编辑已有角色：读取 .md 原文到内联编辑器
+  async function handleEditGoalRole(role: GoalRole) {
+    setError('')
+    try {
+      const resp = await readWorkspaceFile(role.location)
+      setRoleEditPath(role.location)
+      setRoleEditContent(resp.data.content)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t('common.failed'))
+    }
+  }
+
+  // 新建角色：生成 frontmatter 模板并打开编辑器，保存时才落盘到用户目录
+  function handleNewGoalRole() {
+    const name = roleNewName.trim().replace(/\s+/g, '-')
+    if (!name || !goalRolesDir) return
+    setRoleEditPath(`${goalRolesDir}/${name}.md`)
+    setRoleEditContent(`---\nname: ${name}\ndescription: ${t('settings.goalRoleTemplateDesc')}\n# agent: claude-code\n# model: haiku\n# skills: skill-a, skill-b\n---\n\n${t('settings.goalRoleTemplateBody', { condition: '{{condition}}', transcript: '{{transcript}}' })}\n`)
+    setRoleNewName('')
+  }
+
+  async function handleSaveGoalRole() {
+    setRoleEditSaving(true); setError('')
+    try {
+      await writeWorkspaceFile(roleEditPath, roleEditContent)
+      setRoleEditPath(''); setRoleEditContent('')
+      await refreshGoalRoles()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t('common.failed'))
+    } finally {
+      setRoleEditSaving(false)
+    }
+  }
+
+  async function handleDeleteGoalRole(role: GoalRole) {
+    if (!window.confirm(t('settings.goalRoleDeleteConfirm', { name: role.name }))) return
+    setError('')
+    try {
+      await deleteWorkspaceEntry(role.location)
+      if (roleEditPath === role.location) { setRoleEditPath(''); setRoleEditContent('') }
+      await refreshGoalRoles()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t('common.failed'))
     }
   }
 
@@ -1108,6 +1182,82 @@ export default function SettingsDialog({ initialTab = 'language', onClose }: Pro
                     </button>
                     {goalSettingsSaved && (
                       <span className={styles.savedHint}>{t('settings.taskSettingsSaved')}</span>
+                    )}
+                  </div>
+
+                  {/* 评估角色管理：文件式定义（用户目录 *.md），goal 首轮评估时按完成条件自动选取 */}
+                  <div className={styles.defaultSection}>
+                    <label className={styles.label}>{t('settings.goalRoles')}</label>
+                    <p className={styles.sectionHint}>{t('settings.goalRolesHint', { dir: goalRolesDir || '~/.agents/goal-roles', condition: '{{condition}}', transcript: '{{transcript}}' })}</p>
+
+                    {goalRoles.length === 0 && (
+                      <p className={styles.hint}>{t('settings.goalRolesEmpty')}</p>
+                    )}
+                    {goalRoles.length > 0 && (
+                      <ul className={styles.roleList}>
+                        {goalRoles.map((role) => (
+                          <li key={role.location} className={styles.roleItem}>
+                            <div className={styles.roleMain}>
+                              <div className={styles.roleHead}>
+                                <span className={styles.roleName}>{role.name}</span>
+                                <span className={styles.roleScope}>{role.scope}</span>
+                                {(role.agent || role.model) && (
+                                  <span className={styles.roleMeta}>{[role.agent, role.model].filter(Boolean).join(' · ')}</span>
+                                )}
+                              </div>
+                              <p className={styles.roleDesc}>{role.description}</p>
+                              {role.skills && role.skills.length > 0 && (
+                                <p className={styles.roleMeta}>skills: {role.skills.join(', ')}</p>
+                              )}
+                            </div>
+                            <div className={styles.roleActions}>
+                              <button type="button" className={styles.secondaryBtn}
+                                onClick={() => handleEditGoalRole(role)}
+                              >{t('common.edit')}</button>
+                              <button type="button" className={styles.clearDefaultBtn}
+                                onClick={() => handleDeleteGoalRole(role)}
+                              >{t('common.delete')}</button>
+                            </div>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+
+                    {/* 新建：输入角色名 → 生成模板并打开编辑器，保存时写入用户目录 */}
+                    <div className={styles.defaultRow}>
+                      <input
+                        className={styles.input}
+                        value={roleNewName}
+                        placeholder={t('settings.goalRoleNamePlaceholder')}
+                        onChange={(e) => setRoleNewName(e.target.value)}
+                        onKeyDown={(e) => { if (e.key === 'Enter') handleNewGoalRole() }}
+                      />
+                      <button type="button" className={styles.secondaryBtn}
+                        disabled={!roleNewName.trim() || !goalRolesDir}
+                        onClick={handleNewGoalRole}
+                      >{t('settings.goalRoleNew')}</button>
+                    </div>
+
+                    {roleEditPath && (
+                      <div className={styles.roleEditor}>
+                        <p className={styles.sectionHint}>{roleEditPath}</p>
+                        <textarea
+                          className={styles.textarea}
+                          rows={14}
+                          value={roleEditContent}
+                          spellCheck={false}
+                          onChange={(e) => setRoleEditContent(e.target.value)}
+                        />
+                        <div className={styles.defaultRow}>
+                          <button type="button" className={styles.saveNoteBtn}
+                            disabled={roleEditSaving}
+                            onClick={handleSaveGoalRole}
+                          >{roleEditSaving ? t('common.saving') : t('common.save')}</button>
+                          <button type="button" className={styles.clearDefaultBtn}
+                            onClick={() => { setRoleEditPath(''); setRoleEditContent('') }}
+                          >{t('common.cancel')}</button>
+                        </div>
+                      </div>
                     )}
                   </div>
                 </>

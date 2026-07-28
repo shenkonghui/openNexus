@@ -275,6 +275,10 @@ func (h *ConfigHandler) reloadScanDirs() error {
 	}
 	for _, r := range h.reloaders {
 		r.SetScanDirs(cfg.Agents.Skills, cfg.Agents.Commands, cfg.Agents.Rules, cfg.Agents.SubAgents)
+		// goal 评估角色目录：可选能力，类型断言避免改动 reloader 接口签名（仅 acp.Service 实现）。
+		if gr, ok := r.(interface{ SetGoalRoleDirs(config.GoalRolesConfig) }); ok {
+			gr.SetGoalRoleDirs(cfg.Agents.GoalRoles)
+		}
 	}
 	slog.Info("软重载完成", "reloaders", len(h.reloaders), "skills_user_dirs", len(cfg.Agents.Skills.UserDirs))
 	return nil
