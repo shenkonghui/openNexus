@@ -92,33 +92,43 @@ func TestScanGoalRolesProjectOverridesUser(t *testing.T) {
 	}
 }
 
-func TestMatchGoalRole(t *testing.T) {
-	roles := []GoalRoleDef{{Name: "qa-reviewer"}, {Name: "arch-reviewer"}}
+func TestMatchGoalRoles(t *testing.T) {
+	roles := []GoalRoleDef{{Name: "qa-reviewer"}, {Name: "arch-reviewer"}, {Name: "sec-reviewer"}}
 
 	cases := []struct {
 		out  string
-		want string // "" = nil
+		want []string // 空 = nil
 	}{
-		{"qa-reviewer", "qa-reviewer"},
-		{"QA-Reviewer\n理由巴拉巴拉", "qa-reviewer"}, // 大小写不敏感 + 只取首行
-		{"`arch-reviewer`", "arch-reviewer"},   // 反引号包裹
-		{"选择 qa-reviewer 负责评估", "qa-reviewer"}, // 首行夹带说明文字
-		{"NONE", ""},
-		{"none", ""},
-		{"", ""},
-		{"unknown-role", ""},
+		{"qa-reviewer", []string{"qa-reviewer"}},
+		{"QA-Reviewer\n理由巴拉巴拉", []string{"qa-reviewer"}},                           // 大小写不敏感，说明文字行不命中
+		{"`arch-reviewer`", []string{"arch-reviewer"}},                             // 反引号包裹
+		{"选择 qa-reviewer 负责评估", []string{"qa-reviewer"}},                           // 夹带说明文字
+		{"qa-reviewer\narch-reviewer", []string{"qa-reviewer", "arch-reviewer"}},   // 多选：逐行
+		{"- qa-reviewer\n- sec-reviewer", []string{"qa-reviewer", "sec-reviewer"}}, // 多选：列表符号
+		{"qa-reviewer, arch-reviewer", []string{"qa-reviewer", "arch-reviewer"}},   // 多选：逗号分隔单行
+		{"qa-reviewer\nqa-reviewer", []string{"qa-reviewer"}},                      // 去重
+		{"qa-reviewer\n因为不涉及架构，未选 arch-reviewer", []string{"qa-reviewer"}},         // 后续说明行提及角色名不误选
+		{"NONE", nil},
+		{"none", nil},
+		{"", nil},
+		{"unknown-role", nil},
 	}
 	for _, c := range cases {
-		got := matchGoalRole(c.out, roles)
-		if c.want == "" {
-			if got != nil {
-				t.Fatalf("输出 %q 应返回 nil，实际 %v", c.out, got.Name)
+		got := matchGoalRoles(c.out, roles)
+		if len(got) != len(c.want) {
+			t.Fatalf("输出 %q 期望 %v，实际 %+v", c.out, c.want, got)
+		}
+		for i := range c.want {
+			if got[i].Name != c.want[i] {
+				t.Fatalf("输出 %q 第 %d 个期望 %q，实际 %q", c.out, i, c.want[i], got[i].Name)
 			}
-			continue
 		}
-		if got == nil || got.Name != c.want {
-			t.Fatalf("输出 %q 期望 %q，实际 %v", c.out, c.want, got)
-		}
+	}
+
+	// 角色名互为子串：包含匹配兜底只取最长命中
+	subRoles := []GoalRoleDef{{Name: "reviewer"}, {Name: "qa-reviewer"}}
+	if got := matchGoalRoles("选择 qa-reviewer 负责评估", subRoles); len(got) != 1 || got[0].Name != "qa-reviewer" {
+		t.Fatalf("子串角色名应只取最长命中，实际 %+v", got)
 	}
 }
 

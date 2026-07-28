@@ -157,9 +157,9 @@ func parseGoalRoleMarkdown(filename string, content []byte) (GoalRoleDef, bool) 
 	return def, true
 }
 
-// selectGoalRole 用小模型根据完成条件从候选角色中自动选取评估角色。
-// 返回 nil 表示无匹配/选取失败，调用方回退内置评估逻辑。
-func (s *Service) selectGoalRole(ctx context.Context, evalAgent, evalModel, condition string, roles []GoalRoleDef) *GoalRoleDef {
+// selectGoalRoles 用小模型根据完成条件从候选角色中自动选取评估角色（可多选，多角色会签评估）。
+// 返回空切片表示无匹配/选取失败，调用方回退内置评估逻辑。
+func (s *Service) selectGoalRoles(ctx context.Context, evalAgent, evalModel, condition string, roles []GoalRoleDef) []GoalRoleDef {
 	if len(roles) == 0 {
 		return nil
 	}
@@ -167,8 +167,9 @@ func (s *Service) selectGoalRole(ctx context.Context, evalAgent, evalModel, cond
 	for _, r := range roles {
 		fmt.Fprintf(&list, "- %s: %s\n", r.Name, r.Description)
 	}
-	prompt := fmt.Sprintf(`你是评估角色选择器。根据 goal 完成条件，从候选角色中选出最适合负责评估的一个。
-只输出一行：最合适角色的 name；都不合适时输出 NONE。不要输出其他内容。
+	prompt := fmt.Sprintf(`你是评估角色选择器。根据 goal 完成条件，从候选角色中选出适合负责评估的角色。
+可多选（每行输出一个 name）：完成条件涉及多个方面时选多个角色会签评估，否则只选最匹配的一个；
+都不合适时输出 NONE。不要输出其他内容。
 
 完成条件：
 %s
@@ -180,33 +181,69 @@ func (s *Service) selectGoalRole(ctx context.Context, evalAgent, evalModel, cond
 	if err != nil {
 		return nil
 	}
-	return matchGoalRole(out, roles)
+	return matchGoalRoles(out, roles)
 }
 
-// matchGoalRole 从选择器输出中解析角色 name：取首行、容忍引号/反引号包裹；
-// NONE、空输出或 name 未命中候选均返回 nil（回退内置评估）。
-func matchGoalRole(out string, roles []GoalRoleDef) *GoalRoleDef {
-	line := strings.TrimSpace(out)
-	if idx := strings.IndexAny(line, "\r\n"); idx >= 0 {
-		line = strings.TrimSpace(line[:idx])
-	}
-	line = strings.Trim(line, "`\"'*# ")
-	if line == "" || strings.EqualFold(line, "NONE") {
+// matchGoalRoles 从选择器输出中解析角色 name 列表：逐行解析、容忍引号/反引号/列表符号包裹；
+// 行内按逗号/顿号切 token 做精确匹配（按输出顺序，支持 "a, b" 单行多选）；
+// 包含匹配兜底仅限首个有效行（后续行多为说明文字，提及角色名不代表选中），
+// 且角色名互为子串时只取最长命中。按 name 去重；NONE、空输出或全部未命中返回 nil（回退内置评估）。
+func matchGoalRoles(out string, roles []GoalRoleDef) []GoalRoleDef {
+	if strings.EqualFold(strings.TrimSpace(out), "NONE") {
 		return nil
 	}
-	for i := range roles {
-		if strings.EqualFold(roles[i].Name, line) {
-			return &roles[i]
+	seen := make(map[string]bool)
+	var matched []GoalRoleDef
+	add := func(r GoalRoleDef) {
+		if !seen[r.Name] {
+			seen[r.Name] = true
+			matched = append(matched, r)
 		}
 	}
-	// 容忍首行夹带说明文字（如 "选择 qa-reviewer"）：按包含匹配兜底
-	lower := strings.ToLower(line)
-	for i := range roles {
-		if strings.Contains(lower, strings.ToLower(roles[i].Name)) {
-			return &roles[i]
+	firstLine := true
+	for _, raw := range strings.Split(out, "\n") {
+		line := strings.Trim(strings.TrimSpace(raw), "`\"'*#- ")
+		if line == "" || strings.EqualFold(line, "NONE") {
+			continue
 		}
+		exact := false
+		for _, tok := range strings.FieldsFunc(line, func(r rune) bool { return r == ',' || r == '，' || r == '、' }) {
+			tok = strings.Trim(strings.TrimSpace(tok), "`\"'* ")
+			for i := range roles {
+				if strings.EqualFold(roles[i].Name, tok) {
+					add(roles[i])
+					exact = true
+					break
+				}
+			}
+		}
+		if !exact && firstLine {
+			// 包含匹配兜底：支持 "选择 qa-reviewer 负责评估" 等夹带说明文字的写法
+			lower := strings.ToLower(line)
+			best := -1
+			for i := range roles {
+				if strings.Contains(lower, strings.ToLower(roles[i].Name)) {
+					if best < 0 || len(roles[i].Name) > len(roles[best].Name) {
+						best = i
+					}
+				}
+			}
+			if best >= 0 {
+				add(roles[best])
+			}
+		}
+		firstLine = false
 	}
-	return nil
+	return matched
+}
+
+// goalRoleNames 把角色列表拼成逗号分隔的展示名串。
+func goalRoleNames(roles []GoalRoleDef) string {
+	names := make([]string, 0, len(roles))
+	for _, r := range roles {
+		names = append(names, r.Name)
+	}
+	return strings.Join(names, "、")
 }
 
 // goalEvalOutputRule 是评估输出的固定约束，无论角色模板怎么写都强制追加，保证 parseGoalVerdict 可解析。

@@ -45,8 +45,9 @@ type sessionGoal struct {
 	Turns      int    // 已自动续轮次数
 	LastReason string // 最近一次评估理由
 	Evaluating bool   // 评估进行中（防重入）
-	// Role 自动选取的评估角色（nil=无匹配，走内置评估）；RoleResolved 每个 goal 只选一次。
-	Role         *GoalRoleDef
+	// Roles 自动选取的评估角色（空=无匹配，走内置评估；多个时会签评估，全部 YES 才算达成）；
+	// RoleResolved 每个 goal 只选一次。
+	Roles        []GoalRoleDef
 	RoleResolved bool
 }
 
@@ -92,11 +93,16 @@ func builtinGoalCommand() acp.AvailableCommand {
 	}
 }
 
-func (s *Service) getGoal(sessionID string) (*sessionGoal, bool) {
+// getGoal 返回 goal 的值快照（锁内拷贝），供只读展示使用；
+// 避免调用方在锁外读到评估 goroutine 写了一半的字段（如 Roles 的 slice header）。
+func (s *Service) getGoal(sessionID string) (sessionGoal, bool) {
 	s.goalMu.Lock()
 	defer s.goalMu.Unlock()
 	g, ok := s.goals[sessionID]
-	return g, ok
+	if !ok {
+		return sessionGoal{}, false
+	}
+	return *g, true
 }
 
 func (s *Service) setGoal(sessionID, condition string) {
@@ -165,8 +171,10 @@ func (s *Service) interceptGoal(session *models.Session, sessionID, prompt strin
 			return true, s.syntheticCommandReply(session, prompt, "当前会话没有生效中的 goal。用 /opennexus-goal <完成条件> 设定。", executionID)
 		}
 		text := fmt.Sprintf("🎯 goal 生效中\n\n完成条件：%s\n\n已自动续轮：%d 次\n持续时间：%s", g.Condition, g.Turns, time.Since(g.StartedAt).Round(time.Second))
-		if g.Role != nil {
-			text += "\n评估角色：" + g.Role.Name + "（自动选取）"
+		if len(g.Roles) > 1 {
+			text += "\n评估角色：" + goalRoleNames(g.Roles) + "（自动选取，会签评估）"
+		} else if len(g.Roles) == 1 {
+			text += "\n评估角色：" + g.Roles[0].Name + "（自动选取）"
 		}
 		if g.LastReason != "" {
 			text += "\n最近评估：" + g.LastReason
@@ -287,44 +295,38 @@ func (s *Service) evaluateAndContinueGoal(sessionID string, g *sessionGoal) {
 
 	transcript := s.goalTranscript(session.SessionID)
 
-	// 首次评估时自动选取评估角色（文件式定义，无候选/选取失败则回退内置评估）。
+	// 首次评估时自动选取评估角色（文件式定义，可多选会签；无候选/选取失败则回退内置评估）。
 	if !g.RoleResolved {
-		g.RoleResolved = true
 		roles, _ := s.GoalRolesSnapshot(sessionCwd(session, s.workspaces))
+		var selected []GoalRoleDef
 		if len(roles) > 0 {
 			selCtx, selCancel := context.WithTimeout(context.Background(), promptOnceTimeout+30*time.Second)
-			g.Role = s.selectGoalRole(selCtx, evalAgent, evalModel, g.Condition, roles)
+			selected = s.selectGoalRoles(selCtx, evalAgent, evalModel, g.Condition, roles)
 			selCancel()
-			if g.Role != nil {
-				s.recordGoalEvent(session, fmt.Sprintf("goal 评估角色选定：%s", g.Role.Name), models.ToolCallStatusCompleted)
-				s.goalNotify(session, fmt.Sprintf("🎭 goal 评估角色已自动选定：%s（%s）", g.Role.Name, g.Role.Description))
-			}
+		}
+		// 锁内发布，避免 status 分支并发读到写了一半的 slice header
+		s.goalMu.Lock()
+		g.RoleResolved = true
+		g.Roles = selected
+		s.goalMu.Unlock()
+		if len(selected) > 1 {
+			s.recordGoalEvent(session, fmt.Sprintf("goal 评估角色选定（会签）：%s", goalRoleNames(selected)), models.ToolCallStatusCompleted)
+			s.goalNotify(session, fmt.Sprintf("🎭 goal 评估角色已自动选定 %d 个（会签评估，全部通过才算达成）：%s", len(selected), goalRoleNames(selected)))
+		} else if len(selected) == 1 {
+			s.recordGoalEvent(session, fmt.Sprintf("goal 评估角色选定：%s", selected[0].Name), models.ToolCallStatusCompleted)
+			s.goalNotify(session, fmt.Sprintf("🎭 goal 评估角色已自动选定：%s（%s）", selected[0].Name, selected[0].Description))
 		}
 	}
-	// 评估 agent/model 优先级：角色 > GoalSettings > 会话 agent。
-	if g.Role != nil {
-		if g.Role.Agent != "" {
-			evalAgent = g.Role.Agent
-			evalModel = g.Role.Model
-		} else if g.Role.Model != "" {
-			evalModel = g.Role.Model
-		}
-	}
-	evalPrompt := buildGoalEvalPrompt(g.Role, g.Condition, transcript)
 
-	evalCtx, cancel := context.WithTimeout(context.Background(), promptOnceTimeout+30*time.Second)
-	defer cancel()
-	verdict, err := s.RunPromptOnce(evalCtx, evalAgent, evalModel, evalPrompt)
-	if err != nil {
+	achieved, reason, evalErr := s.runGoalEvaluation(session, g, evalAgent, evalModel, transcript)
+	if evalErr != nil {
 		// 评估失败保守终止，避免无评估依据地无限续轮
 		s.clearGoal(sessionID)
-		s.recordGoalEvent(session, fmt.Sprintf("goal 评估失败：%v", err), models.ToolCallStatusFailed)
-		s.goalNotify(session, fmt.Sprintf("⚠️ goal 评估失败（%v），已停止自动续轮。可重新 /opennexus-goal 设定。", err))
+		s.recordGoalEvent(session, fmt.Sprintf("goal 评估失败：%v", evalErr), models.ToolCallStatusFailed)
+		s.goalNotify(session, fmt.Sprintf("⚠️ goal 评估失败（%v），已停止自动续轮。可重新 /opennexus-goal 设定。", evalErr))
 		return
 	}
 
-	achieved, reason := parseGoalVerdict(verdict)
-	g.LastReason = reason
 	if achieved {
 		s.clearGoal(sessionID)
 		recTitle := "goal 评估：已达成"
@@ -376,6 +378,68 @@ func (s *Service) evaluateAndContinueGoal(sessionID string, g *sessionGoal) {
 	// 前端经 5s 轮询 + subscribeStream 断点续传照常收到消息。
 	for range ch {
 	}
+}
+
+// runGoalEvaluation 执行一次 goal 评估。无角色时走内置单评估；
+// 有角色时会签评估（默认开启）：逐角色独立调用评估，全部 YES 才算达成；
+// 任一角色评估调用失败即返回 err（调用方保守终止）。
+func (s *Service) runGoalEvaluation(session *models.Session, g *sessionGoal, evalAgent, evalModel, transcript string) (bool, string, error) {
+	if len(g.Roles) == 0 {
+		verdict, err := s.runGoalEvalOnce(evalAgent, evalModel, buildGoalEvalPrompt(nil, g.Condition, transcript))
+		if err != nil {
+			return false, "", err
+		}
+		achieved, reason := parseGoalVerdict(verdict)
+		return achieved, reason, nil
+	}
+
+	achieved := true
+	var reasons []string
+	for i := range g.Roles {
+		role := &g.Roles[i]
+		// 评估 agent/model 优先级：角色 > GoalSettings > 会话 agent（逐角色独立生效）。
+		rAgent, rModel := evalAgent, evalModel
+		if role.Agent != "" {
+			rAgent, rModel = role.Agent, role.Model
+		} else if role.Model != "" {
+			rModel = role.Model
+		}
+		verdict, err := s.runGoalEvalOnce(rAgent, rModel, buildGoalEvalPrompt(role, g.Condition, transcript))
+		if err != nil {
+			return false, "", fmt.Errorf("角色 %s 评估失败: %w", role.Name, err)
+		}
+		ok, reason := parseGoalVerdict(verdict)
+		if !ok {
+			achieved = false
+		}
+		if len(g.Roles) > 1 {
+			// 会签：逐角色留痕，「记录」面板可见各角色判定；汇总理由带角色名前缀。
+			head := "YES"
+			if !ok {
+				head = "NO"
+			}
+			title := fmt.Sprintf("goal 会签评估 %s：%s", role.Name, head)
+			if reason != "" {
+				title += "（" + reason + "）"
+			}
+			s.recordGoalEvent(session, title, models.ToolCallStatusCompleted)
+			summary := head
+			if reason != "" {
+				summary = reason
+			}
+			reasons = append(reasons, role.Name+": "+summary)
+		} else if reason != "" {
+			reasons = append(reasons, reason)
+		}
+	}
+	return achieved, strings.Join(reasons, "；"), nil
+}
+
+// runGoalEvalOnce 带超时执行一次评估调用（临时会话）。
+func (s *Service) runGoalEvalOnce(agent, model, prompt string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), promptOnceTimeout+30*time.Second)
+	defer cancel()
+	return s.RunPromptOnce(ctx, agent, model, prompt)
 }
 
 // parseGoalVerdict 解析评估器输出：首行 YES/NO，次行理由。
