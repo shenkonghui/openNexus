@@ -16,8 +16,9 @@ import (
 
 const (
 	// toolNamePrefixSep 是"上游名 + 工具名"的分隔符。
-	// go-sdk 的工具名只允许 [A-Za-z0-9_.-]，双下划线安全且与主流聚合网关惯例一致。
-	toolNamePrefixSep = "__"
+	// go-sdk 的工具名只允许 [A-Za-z0-9_.-]，单下划线更简洁；
+	// 路由按 exposedName 全名映射（findToolLocked），不反向解析，无歧义风险。
+	toolNamePrefixSep = "_"
 
 	// upstreamConnectTimeout 是连接单个上游并列举工具的超时。
 	upstreamConnectTimeout = 8 * time.Second
@@ -34,7 +35,7 @@ const (
 
 // toolRef 是一条"暴露给下游的工具"到上游的映射。
 type toolRef struct {
-	exposedName string    // 暴露名：<上游名>__<原工具名>
+	exposedName string    // 暴露名：<上游名>_<原工具名>
 	originName  string    // 上游的原始工具名
 	upstream    string    // 上游名（mcp.json 中的 key）
 	tool        *mcp.Tool // 暴露给下游的工具定义（已改名）

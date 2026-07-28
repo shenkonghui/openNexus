@@ -1343,12 +1343,13 @@ func (s *Service) PromptWithExecution(ctx context.Context, sessionID, prompt str
 		return nil, err
 	}
 	// 内置 -opennexus 命令拦截（客户端侧处理，不发给 agent，不与原生命令冲突）：
-	// /opennexus-yolo 开关会话 YOLO；/opennexus-goal 由通用 goal 控制器处理
+	// /opennexus-yolo-on|off|status 开关会话 YOLO（on/off 可附带任务内容，
+	// 切换后把发给 agent 的 prompt 改写为剩余任务）；/opennexus-goal 由通用 goal 控制器处理
 	// （status/clear 本地合成回复直接返回；set 把发给 agent 的 prompt 改写为 goal directive）。
-	if handled, yoloCh := s.interceptYolo(session, sessionID, prompt, executionID); handled {
+	promptForAgent := prompt
+	if handled, yoloCh := s.interceptYolo(session, sessionID, prompt, executionID, &promptForAgent); handled {
 		return yoloCh, nil
 	}
-	promptForAgent := prompt
 	if handled, goalCh := s.interceptGoal(session, sessionID, prompt, executionID, &promptForAgent); handled {
 		return goalCh, nil
 	}
@@ -2295,7 +2296,7 @@ func (s *Service) ListCommands(sessionID string) ([]acp.AvailableCommand, error)
 // appendBuiltinCommands 追加内置 -opennexus 命令（goal 循环 / 会话 YOLO），供 "/" 弹窗展示。
 // 命令名带后缀不与原生命令冲突；已存在同名命令时跳过。
 func appendBuiltinCommands(cmds []acp.AvailableCommand) []acp.AvailableCommand {
-	for _, builtin := range []acp.AvailableCommand{builtinGoalCommand(), builtinYoloCommand()} {
+	for _, builtin := range append([]acp.AvailableCommand{builtinGoalCommand()}, builtinYoloCommands()...) {
 		exists := false
 		for _, c := range cmds {
 			if c.Name == builtin.Name {

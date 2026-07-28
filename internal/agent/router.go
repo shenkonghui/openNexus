@@ -76,6 +76,12 @@ func (r *Router) ListAgents() []*AgentDescriptor {
 	return r.registry.List()
 }
 
+// AgentAvailable 判断指定 agent 类型当前是否已注册（未被停用或删除）。
+func (r *Router) AgentAvailable(agentType string) bool {
+	_, err := r.registry.Get(agentType)
+	return err == nil
+}
+
 // DefaultAgentType 返回排序后首个已注册 agent 的类型（无已注册 agent 时返回空串）。
 // 供编排任务未显式指定 agent 时回退使用。
 func (r *Router) DefaultAgentType() string {

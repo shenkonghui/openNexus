@@ -118,11 +118,6 @@ export interface PanelCtx {
   // 会话来源标记（classify 会话隐藏输入框）
   source?: string
 
-  // 会话级 YOLO 自动放行工具调用
-  yoloEnabled?: boolean
-  yoloSaving?: boolean
-  onToggleYolo?: () => void
-
   // ===== 历史消息分页（「加载更多」） =====
   /** 是否还有更早的消息可加载 */
   hasMore?: boolean

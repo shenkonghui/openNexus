@@ -43,7 +43,7 @@ func RunStdioBridge(ctx context.Context, url, token string) error {
 	defer func() { _ = sess.Close() }()
 
 	srv := mcp.NewServer(&mcp.Implementation{Name: GatewayMCPName, Version: "1.0.0"}, &mcp.ServerOptions{
-		Instructions: "openNexus MCP 聚合网关（stdio 桥）：工具以 <server>__<tool> 命名，来自全局 MCP 配置中的各个上游 server。",
+		Instructions: "openNexus MCP 聚合网关（stdio 桥）：工具以 <server>_<tool> 命名，来自全局 MCP 配置中的各个上游 server。",
 	})
 
 	// 首次同步失败直接退出：一个工具都拿不到时保持进程存活没有意义，

@@ -1,5 +1,12 @@
-/* agent+模型 合并下拉：比单独的模型下拉更宽以容纳组合标签 */
-.select {
+/* agent+模型 合并可搜索下拉：触发按钮 + 浮层（搜索框 + 选项列表） */
+.container {
+  position: relative;
+}
+
+.trigger {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   height: var(--config-control-height);
   max-width: calc(var(--config-control-width) * 1.8);
   padding: 0 8px;
@@ -9,17 +16,102 @@
   background: var(--bg-input);
   color: var(--text-primary);
   cursor: pointer;
-  text-overflow: ellipsis;
+  outline: none;
   line-height: 1;
 }
 
-.select:focus {
-  outline: none;
+.trigger:hover:not(:disabled) {
+  border-color: var(--border-strong);
+}
+
+.trigger:focus-visible {
   border-color: var(--accent);
 }
 
-.select:disabled {
+.trigger:disabled {
   background: var(--bg-muted);
   cursor: not-allowed;
+  color: var(--text-muted);
+}
+
+.triggerLabel {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+}
+
+.triggerPlaceholder {
+  color: var(--text-muted);
+}
+
+.arrow {
+  color: var(--text-muted);
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+}
+
+.dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 120;
+  width: 300px;
+  max-height: 320px;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: var(--shadow-md);
+  overflow: hidden;
+}
+
+/* 底部空间不足时向上展开 */
+.dropdownUp {
+  top: auto;
+  bottom: calc(100% + 4px);
+}
+
+.search {
+  width: 100%;
+  padding: 10px 12px;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 13px;
+  outline: none;
+}
+
+.search::placeholder {
+  color: var(--text-muted);
+}
+
+.list {
+  overflow-y: auto;
+  max-height: 260px;
+}
+
+.item {
+  padding: 8px 12px;
+  cursor: pointer;
+}
+
+.item:hover,
+.itemActive {
+  background: var(--bg-hover);
+}
+
+.itemName {
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+.empty {
+  padding: 12px;
+  font-size: 12px;
   color: var(--text-muted);
 }

@@ -1,11 +1,9 @@
-import { useMemo } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { ChevronUp, ChevronDown } from 'lucide-react'
 import type { ConfigOptionValue } from '../types'
 import { fullOptionLabel, truncateSelectLabel } from '../utils/selectLabel'
 import styles from './AgentModelSelector.module.css'
-
-// 合并下拉项的 value 编码分隔符（agentType 与 modelValue 均不会包含 \u0000）
-const SEP = '\u0000'
 
 interface AgentItem {
   type: string
@@ -24,7 +22,7 @@ interface AgentModelSelectorProps {
   disabled?: boolean
   /** 未选择时的占位项文案（提供后允许空选择：选中占位项回调 onSelect('','')） */
   placeholder?: string
-  /** 额外的 select 样式类（如设置页表单风格） */
+  /** 额外的触发按钮样式类（如设置页表单风格） */
   className?: string
   onSelect: (agentType: string, modelValue: string) => void
 }
@@ -36,14 +34,11 @@ interface ComboEntry {
   title: string
 }
 
-function encodeCombo(agentType: string, modelValue: string): string {
-  return `${agentType}${SEP}${modelValue}`
-}
-
 /**
- * AgentModelSelector：agent 与模型合并为一个下拉框。
+ * AgentModelSelector：agent 与模型合并为一个可搜索下拉框。
  * 每个选项是「agent · 模型」组合；agent 的模型未知时退化为 agent 级单项（使用默认模型）。
  * filters 非空时按正则过滤组合（任一命中即显示），当前选中项始终保留避免 UI 失效。
+ * 下拉展开后支持输入关键字实时过滤（匹配 agent 名、模型名、模型值）。
  */
 export default function AgentModelSelector({
   agents,
@@ -57,6 +52,11 @@ export default function AgentModelSelector({
   onSelect,
 }: AgentModelSelectorProps) {
   const { t } = useTranslation()
+  const [open, setOpen] = useState(false)
+  const [query, setQuery] = useState('')
+  const [dropUp, setDropUp] = useState(false)
+  const containerRef = useRef<HTMLDivElement>(null)
+  const searchRef = useRef<HTMLInputElement>(null)
 
   // 编译过滤正则（忽略大小写；非法项忽略，后端启动时已校验，此处仅兜底）
   const regexes = useMemo(() => {
@@ -92,7 +92,7 @@ export default function AgentModelSelector({
       }
     }
 
-    // 当前选中组合被过滤或尚未出现在列表时补充，保持下拉受控值有效
+    // 当前选中组合被过滤或尚未出现在列表时补充，保持触发按钮显示有效
     if (selectedAgent && !list.some((e) => e.agentType === selectedAgent && e.modelValue === selectedModel)) {
       const agent = agents.find((a) => a.type === selectedAgent)
       const model = (modelsByAgent[selectedAgent] || []).find((m) => m.value === selectedModel)
@@ -103,37 +103,120 @@ export default function AgentModelSelector({
     return list
   }, [agents, modelsByAgent, regexes, selectedAgent, selectedModel])
 
+  // 输入关键字实时过滤（匹配组合标签、agent 类型、模型值，忽略大小写）
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase()
+    if (!q) return entries
+    return entries.filter((e) =>
+      e.label.toLowerCase().includes(q)
+      || e.title.toLowerCase().includes(q)
+      || e.agentType.toLowerCase().includes(q)
+      || e.modelValue.toLowerCase().includes(q),
+    )
+  }, [entries, query])
+
+  const selectedEntry = entries.find((e) => e.agentType === selectedAgent && e.modelValue === selectedModel)
+  const triggerLabel = selectedAgent ? (selectedEntry?.label || selectedAgent) : ''
+
+  useEffect(() => {
+    if (!open) return
+    function handleClick(e: MouseEvent) {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClick)
+    return () => document.removeEventListener('mousedown', handleClick)
+  }, [open])
+
+  useEffect(() => {
+    if (open) {
+      setQuery('')
+      requestAnimationFrame(() => searchRef.current?.focus())
+    }
+  }, [open])
+
+  function toggleOpen() {
+    if (disabled) return
+    if (!open && containerRef.current) {
+      // 空间不足时向上展开（如聊天输入栏底部）
+      const rect = containerRef.current.getBoundingClientRect()
+      setDropUp(window.innerHeight - rect.bottom < 340)
+    }
+    setOpen((v) => !v)
+  }
+
+  function handleSelect(agentType: string, modelValue: string) {
+    onSelect(agentType, modelValue)
+    setOpen(false)
+  }
+
   if (agents.length === 0) {
     return (
-      <select className={className || styles.select} disabled value="">
-        <option value="">{t('docMode.noAgent')}</option>
-      </select>
+      <button type="button" className={`${styles.trigger} ${className || ''}`} disabled>
+        <span className={`${styles.triggerLabel} ${styles.triggerPlaceholder}`}>{t('docMode.noAgent')}</span>
+      </button>
     )
   }
 
   return (
-    <select
-      className={className || styles.select}
-      value={selectedAgent ? encodeCombo(selectedAgent, selectedModel) : ''}
-      disabled={disabled}
-      title={entries.find((e) => e.agentType === selectedAgent && e.modelValue === selectedModel)?.title}
-      onChange={(e) => {
-        if (e.target.value === '') {
-          // 选中占位项：清空选择
-          if (placeholder !== undefined) onSelect('', '')
-          return
-        }
-        const idx = e.target.value.indexOf(SEP)
-        if (idx < 0) return
-        onSelect(e.target.value.slice(0, idx), e.target.value.slice(idx + 1))
-      }}
-    >
-      {placeholder !== undefined && <option value="">{placeholder}</option>}
-      {entries.map((entry) => (
-        <option key={encodeCombo(entry.agentType, entry.modelValue)} value={encodeCombo(entry.agentType, entry.modelValue)} title={entry.title}>
-          {entry.label}
-        </option>
-      ))}
-    </select>
+    <div className={styles.container} ref={containerRef}>
+      <button
+        type="button"
+        className={`${styles.trigger} ${className || ''}`}
+        onClick={toggleOpen}
+        disabled={disabled}
+        title={selectedEntry?.title}
+      >
+        <span className={`${styles.triggerLabel} ${!triggerLabel ? styles.triggerPlaceholder : ''}`}>
+          {triggerLabel || placeholder || t('docMode.noAgent')}
+        </span>
+        <span className={styles.arrow}>{open ? <ChevronUp size={12} /> : <ChevronDown size={12} />}</span>
+      </button>
+
+      {open && (
+        <div className={`${styles.dropdown} ${dropUp ? styles.dropdownUp : ''}`}>
+          <input
+            ref={searchRef}
+            className={styles.search}
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder={t('session.searchModels')}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') {
+                setOpen(false)
+                return
+              }
+              if (e.key === 'Enter' && filtered.length === 1) {
+                handleSelect(filtered[0].agentType, filtered[0].modelValue)
+              }
+            }}
+          />
+          <div className={styles.list}>
+            {placeholder !== undefined && !query.trim() && (
+              <div
+                className={`${styles.item} ${!selectedAgent ? styles.itemActive : ''}`}
+                onClick={() => handleSelect('', '')}
+              >
+                <span className={`${styles.itemName} ${styles.triggerPlaceholder}`}>{placeholder}</span>
+              </div>
+            )}
+            {filtered.length === 0 && (
+              <div className={styles.empty}>{t('session.noModelsFound')}</div>
+            )}
+            {filtered.map((entry) => (
+              <div
+                key={`${entry.agentType}\u0000${entry.modelValue}`}
+                className={`${styles.item} ${entry.agentType === selectedAgent && entry.modelValue === selectedModel ? styles.itemActive : ''}`}
+                onClick={() => handleSelect(entry.agentType, entry.modelValue)}
+                title={entry.title}
+              >
+                <span className={styles.itemName}>{entry.label}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
   )
 }

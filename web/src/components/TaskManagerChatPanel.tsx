@@ -4,11 +4,12 @@ import {
   createSession, updateSessionTitle, setConfigOption, setSessionMode,
   listSkills, listModes, listCommands, listConfigOptions,
   respondPermission, getSession, listMessages,
-  getLatestSessionByWorkspace,
+  getLatestSessionByWorkspace, deleteSession,
 } from '../api/sessions'
 import { probeAgentConfigs, listAgentCommands, listAgentModes } from '../api/agents'
 import { streamPrompt, isTimeoutError } from '../api/sse'
 import { parsePermissionRequest } from '../utils/permission'
+import { Eraser } from 'lucide-react'
 import type { Agent, Message, Session, AgentCommand, ConfigOption, SessionMode, AgentSkill, PermissionRequestPayload } from '../types'
 import type { ConvState } from './ConvStatusBar'
 import type { PanelCtx } from '../modes/types'
@@ -41,14 +42,16 @@ function isTMToolMessage(msg: Message): boolean {
 function buildSystemPrelude(): string {
   return [
     '你是任务管理助手。请根据用户需求管理当前工作区的任务管理。',
-    '编排工具由 opennexus-task 这个 MCP 服务器提供，已自动注入会话，直接调用即可：',
-    '- list_tasks：列出任务现状（先了解再操作）',
-    '- create_task：新增任务（title/detail 必填，即发给 agent 的 prompt；自动生成 id 并置 pending；priority 可选 p0/p1/p2，默认 p1）',
-    '- update_task：改任务字段（task_id 必填 + 要改的字段，含 priority）',
-    '- delete_task：删除任务（task_id 必填）',
-    '- start_task：启动任务（task_id 留空=启动全部待执行）',
-    '- stop_task：停止任务（task_id 留空=停止全部运行中）',
-    '- set_max_parallel：调整并发上限（1=串行，1~16）',
+    '编排工具由 opennexus-task 这个 MCP 服务器提供，已自动注入会话，请使用以下工具操作任务：',
+    '- opennexus-task_list_tasks：列出任务现状（先了解再操作）',
+    '- opennexus-task_create_task：新增任务（title/detail 必填，即发给 agent 的 prompt；自动生成 id 并置 pending；priority 可选 p0/p1/p2，默认 p1）',
+    '- opennexus-task_update_task：改任务字段（task_id 必填 + 要改的字段，含 priority）',
+    '- opennexus-task_delete_task：删除任务（task_id 必填）',
+    '- opennexus-task_start_task：启动任务（task_id 留空=启动全部待执行）',
+    '- opennexus-task_stop_task：停止任务（task_id 留空=停止全部运行中）',
+    '- opennexus-task_send_prompt：向指定任务已有会话发送新 prompt，在原上下文继续',
+    '- opennexus-task_set_max_parallel：调整并发上限（1=串行，1~16）',
+    '若工具列表中没有 opennexus-task_ 前缀的名称，改用不带前缀的同名工具（list_tasks/create_task 等）。',
     '所有工具都需要 workspace_id 参数。',
     `当前工作区 workspace_id：__WORKSPACE_ID__`,
     '若工具列表里看不到上述名称，直接告知用户编排工具不可用；不要尝试直接编辑 tasks.json（该文件不在当前目录，而在工作区管理数据目录，直接改写不会生效）。',
@@ -261,8 +264,8 @@ export default function TaskManagerChatPanel({
       try {
         let targetId = restoreSessionId
         if (!targetId) {
-          // 精确查询该 workspace 最近一条会话（替代全局 listSessions 过滤）
-          const latest = await getLatestSessionByWorkspace(workspaceId)
+          // 精确查询该 workspace 最近一条管理会话（source=orchestration，不复用普通对话）
+          const latest = await getLatestSessionByWorkspace(workspaceId, 'orchestration')
           targetId = latest.data?.id
         }
         if (!targetId) return
@@ -308,6 +311,31 @@ export default function TaskManagerChatPanel({
     finally { setLoadingMore(false) }
   }, [session, loadingMore, hasMore, messages])
 
+  // ===== 清空：删除当前管理会话并重置状态，下次发送强制新建会话 =====
+  // forceNew 标记：跳过 handleSend 的 latest 复用查询，保证真正开新会话，
+  // 而不是被"一个工作区只复用一条管理会话"逻辑再次命中旧会话。
+  const forceNewRef = useRef(false)
+  async function handleClear() {
+    if (!session && messages.length === 0) return
+    if (!window.confirm(t('taskmanager.clearConfirm'))) return
+    abortRef.current?.abort()
+    abortRef.current = null
+    clearPermissions()
+    const old = session
+    setSession(null)
+    setMessages([])
+    setHasMore(false)
+    setError('')
+    setConv('idle')
+    setConfigOptions([])
+    setCurrentModeId('')
+    forceNewRef.current = true
+    if (old) {
+      // 删除旧会话，避免 latest 查询/重进页面时又恢复它；失败不阻断（forceNew 仍生效）
+      try { await deleteSession(old.id) } catch { /* ignore */ }
+    }
+  }
+
   // ===== 发送 =====
   async function handleSend(prompt: string) {
     const text = prompt.trim()
@@ -324,8 +352,8 @@ export default function TaskManagerChatPanel({
     if (!activeSession) {
       setConv('connecting')
       try {
-        // 1) 双重检查：查询工作区是否已有会话
-        const latest = await getLatestSessionByWorkspace(workspaceId)
+        // 1) 双重检查：查询工作区是否已有管理会话（清空后强制跳过复用，直接新建）
+        const latest = forceNewRef.current ? { data: null } : await getLatestSessionByWorkspace(workspaceId, 'orchestration')
         if (latest.data) {
           activeSession = latest.data
           setSession(activeSession)
@@ -336,9 +364,10 @@ export default function TaskManagerChatPanel({
             setHasMore(!!hist.data.has_more)
           } catch { /* 回读失败：保留空消息，仍复用会话 */ }
         } else {
-          // 2) 未命中：创建新会话
-          const resp = await createSession(selectedAgent, workspaceId, selectedModel || undefined)
+          // 2) 未命中：创建新会话（source=orchestration：不登记 tasks.json、不在任务列表出现）
+          const resp = await createSession(selectedAgent, workspaceId, selectedModel || undefined, 'orchestration')
           activeSession = resp.data
+          forceNewRef.current = false
           setSession(activeSession)
           updateSessionTitle(activeSession.id, t('taskmanager.aiTitle')).catch(() => {})
           const extras = probeConfigs.filter((o) => o.type === 'select' && o.category !== 'model' && o.current_value)
@@ -468,6 +497,20 @@ export default function TaskManagerChatPanel({
 
   return (
     <div className={styles.panel}>
+      {/* 顶部工具条：清空当前对话并开启新会话（仅有会话/消息时展示） */}
+      {(session || messages.length > 0) && (
+        <div className={styles.toolbar}>
+          <button
+            type="button"
+            className={styles.clearBtn}
+            onClick={handleClear}
+            title={t('taskmanager.clearHint')}
+          >
+            <Eraser size={13} />
+            {t('taskmanager.clear')}
+          </button>
+        </div>
+      )}
       {error && (
         <div className={styles.errorWrap}>
           <div className={styles.errorBanner}>{error}</div>

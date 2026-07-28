@@ -38,8 +38,8 @@ func TestGateway_DisableUpstream(t *testing.T) {
 	}
 	sess2 := connectGateway(t, mustServeURL(t, gw), "tok")
 	names2 := listToolNames(t, sess2)
-	if len(names2) != 1 || names2[0] != "beta__echo" {
-		t.Fatalf("禁用 alpha 后工具 = %v, 期望仅 beta__echo", names2)
+	if len(names2) != 1 || names2[0] != "beta_echo" {
+		t.Fatalf("禁用 alpha 后工具 = %v, 期望仅 beta_echo", names2)
 	}
 
 	// 状态中 alpha 应出现在 skipped（原因：已被用户禁用）
@@ -153,8 +153,8 @@ func TestGateway_CustomServerWithAuth(t *testing.T) {
 
 	sess := connectGateway(t, mustServeURL(t, gw), "tok")
 	names := listToolNames(t, sess)
-	if len(names) != 1 || names[0] != "ext-beta__echo" {
-		t.Fatalf("带鉴权的外部 server 工具列表 = %v, 期望 ext-beta__echo", names)
+	if len(names) != 1 || names[0] != "ext-beta_echo" {
+		t.Fatalf("带鉴权的外部 server 工具列表 = %v, 期望 ext-beta_echo", names)
 	}
 
 	// 验证 headers 持久化：重新加载 state 应保留 headers

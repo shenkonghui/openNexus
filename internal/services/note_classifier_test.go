@@ -33,6 +33,14 @@ type fakeClassifyExecutor struct {
 	}
 	// existingSession 模拟 GetSessionByDBID 命中时返回的会话（nil=返回 not found）
 	existingSession *models.Session
+	// agentUnavailable 模拟 agent 被停用/注销（AgentAvailable 返回 false）
+	agentUnavailable bool
+}
+
+func (f *fakeClassifyExecutor) AgentAvailable(string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return !f.agentUnavailable
 }
 
 func (f *fakeClassifyExecutor) CreateSessionWithSource(_ context.Context, agentType string, _ uint, userID uint, _, modelValue string) (*models.Session, error) {
@@ -204,6 +212,58 @@ func TestClassifyTagsSubAgentError(t *testing.T) {
 	// 出错时应保留手动标签
 	if !reflect.DeepEqual(tags, []string{"已有标签"}) {
 		t.Errorf("出错时 tags = %v, 期望保留手动标签 [已有标签]", tags)
+	}
+}
+
+// TestProcessPendingAgentUnavailable 验证：分类 agent 被停用后，
+// ProcessPending 跳过该用户笔记（保持 pending）、不调用 RunSubAgent、不创建展示会话。
+func TestProcessPendingAgentUnavailable(t *testing.T) {
+	c, executor, settingsRepo, noteRepo := setupClassifierTest(t)
+	executor.agentUnavailable = true
+
+	if err := settingsRepo.Upsert(&models.NoteSettings{
+		UserID:    5,
+		AgentType: "disabled-agent",
+	}); err != nil {
+		t.Fatalf("写入设置失败: %v", err)
+	}
+	note := &models.Note{
+		UserID:          5,
+		Content:         "待分类内容",
+		Tags:            "[]",
+		ClassifyPending: true,
+	}
+	if err := noteRepo.Create(note); err != nil {
+		t.Fatalf("创建笔记失败: %v", err)
+	}
+	// 回退 UpdatedAt 使其超过分类间隔（共享内存库，重连即同库）
+	db, err := database.Connect("file::memory:?cache=shared")
+	if err != nil {
+		t.Fatalf("连接测试库失败: %v", err)
+	}
+	if err := db.Model(note).Update("updated_at", time.Now().Add(-1*time.Hour)).Error; err != nil {
+		t.Fatalf("回退更新时间失败: %v", err)
+	}
+
+	done, err := c.ProcessPending(context.Background(), 10)
+	if err != nil {
+		t.Fatalf("ProcessPending 失败: %v", err)
+	}
+	if done != 0 {
+		t.Errorf("done = %d, 期望 0（agent 停用应跳过）", done)
+	}
+	if executor.runSubAgentCalls != 0 {
+		t.Errorf("RunSubAgent 调用次数 = %d, 期望 0", executor.runSubAgentCalls)
+	}
+	if len(executor.createdSessions) != 0 {
+		t.Errorf("不应创建展示会话，当前数 = %d", len(executor.createdSessions))
+	}
+	got, err := noteRepo.FindByID(note.ID)
+	if err != nil {
+		t.Fatalf("查询笔记失败: %v", err)
+	}
+	if !got.ClassifyPending {
+		t.Error("笔记应保持待分类状态（重新启用 agent 后自动继续）")
 	}
 }
 

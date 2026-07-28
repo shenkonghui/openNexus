@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { useParams, useNavigate, useLocation } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { useRequireAuth } from '../hooks/useRequireAuth'
-import { getSession, listMessages, cancelSession, listCommands, listModes, listSkills, listConfigOptions, setConfigOption, setSessionMode, respondPermission, deleteSession, updateSessionTitle, createSession, resumeSession, listSessionExecutions, getInterruptedTasks, setSessionYolo } from '../api/sessions'
+import { getSession, listMessages, cancelSession, listCommands, listModes, listSkills, listConfigOptions, setConfigOption, setSessionMode, respondPermission, deleteSession, updateSessionTitle, createSession, resumeSession, listSessionExecutions, getInterruptedTasks } from '../api/sessions'
 import { getWorkspace } from '../api/workspaces'
 import { listScheduledTasks, listExecutions } from '../api/scheduledTasks'
 import { listAgents, probeAgentConfigs, preconnectAgent, listAgentCommands, listAgentModes } from '../api/agents'
@@ -225,9 +225,6 @@ export default function ChatPage() {
   // 合并下拉选中「另一 agent 的某模型」时暂存目标模型，待该 agent 探测完成后应用
   const pendingModelRef = useRef('')
   const [creating, setCreating] = useState(false)
-  // 新建任务页：YOLO 草稿，创建会话时写入
-  const [yoloDraft, setYoloDraft] = useState(false)
-  const [yoloSaving, setYoloSaving] = useState(false)
   const [homeCommands, setHomeCommands] = useState<AgentCommand[]>([])
   const [homeModes, setHomeModes] = useState<SessionMode[]>([])
   const [homeSkills, setHomeSkills] = useState<AgentSkill[]>([])
@@ -784,7 +781,7 @@ export default function ChatPage() {
         selectedModel || undefined,
         undefined,
         isAutoWt ? undefined : (taskCwd || undefined),
-        yoloDraft,
+        undefined,
         isAutoWt,
         isAutoWt ? prompt : undefined,
       )
@@ -1080,29 +1077,6 @@ export default function ChatPage() {
     catch (err) { setError(err instanceof Error ? err.message : t('common.failed')) }
   }
 
-  // 按当前会话开关 YOLO；尚无会话时改草稿，创建时写入。
-  async function handleToggleYolo() {
-    const target = hasSession ? activeSession : null
-    if (!target) {
-      setYoloDraft((v) => !v)
-      return
-    }
-    if (yoloSaving) return
-    setYoloSaving(true)
-    setError('')
-    try {
-      const resp = await setSessionYolo(target.id, !target.yolo)
-      setSession(resp.data)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : t('common.failed'))
-    } finally {
-      setYoloSaving(false)
-    }
-  }
-
-  const yoloTarget = hasSession ? activeSession : null
-  const yoloEnabled = yoloTarget ? !!yoloTarget.yolo : yoloDraft
-
   if (authLoading) return <LoadingSpinner text={t('common.loading')} />
   if (!user) return null
 
@@ -1185,9 +1159,6 @@ export default function ChatPage() {
           docTarget,
           docReloadKey,
           onCloseDoc: handleCloseDoc,
-          yoloEnabled,
-          yoloSaving,
-          onToggleYolo: handleToggleYolo,
           hasMore,
           loadingMore,
           onLoadMore: loadMore,
@@ -1325,10 +1296,6 @@ export default function ChatPage() {
       selectedCwd: taskCwd || workspaceCwd,
       onSelectCwd: setTaskCwd,
       docTarget: null,
-      // 新建任务页：YOLO 草稿，创建会话时写入
-      yoloEnabled,
-      yoloSaving,
-      onToggleYolo: handleToggleYolo,
       // 新建任务页的输入框采用受控值，支持从任务管理入口预填（draftPrompt）。
       restoreInput,
       onRestoreInputChange: setRestoreInput,

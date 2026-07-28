@@ -178,7 +178,9 @@ type createSessionRequest struct {
 	AgentType   string `json:"agent_type" binding:"required"`
 	WorkspaceID uint   `json:"workspace_id"`
 	ModelValue  string `json:"model_value"`
-	// Source 会话来源；仅允许 manual，空=manual。保留字段仅为前端兼容，不再有 orchestration 特殊分支。
+	// Source 会话来源；允许 manual / orchestration（任务助手管理会话），空=manual。
+	// orchestration 会话不登记 tasks.json（RegisterSessionTask 仅登记 manual），
+	// 侧边栏也不作为普通任务展示，而是作为「编排对话」记录入口。
 	Source string `json:"source"`
 	// Cwd 可选的自定义工作目录（如用户选择的已存在 worktree 目录）；空=跟随工作区 cwd。
 	Cwd string `json:"cwd"`
@@ -259,6 +261,11 @@ func (h *SessionHandler) Create(c *gin.Context) {
 		return
 	}
 	cwd := strings.TrimSpace(req.Cwd)
+	// 会话来源：仅识别 orchestration（任务助手管理会话），其余一律按 manual 处理
+	source := models.SessionSourceManual
+	if req.Source == models.SessionSourceOrchestration {
+		source = models.SessionSourceOrchestration
+	}
 	var sess *models.Session
 	var err error
 	switch {
@@ -269,7 +276,7 @@ func (h *SessionHandler) Create(c *gin.Context) {
 			Fail(c, http.StatusBadRequest, "CWD_NOT_FOUND", "目录不存在: "+cwd)
 			return
 		}
-		sess, err = h.store.CreateSessionWithCwd(c.Request.Context(), req.AgentType, req.WorkspaceID, uid, models.SessionSourceManual, req.ModelValue, cwd)
+		sess, err = h.store.CreateSessionWithCwd(c.Request.Context(), req.AgentType, req.WorkspaceID, uid, source, req.ModelValue, cwd)
 	case req.AutoWorktree:
 		// AI 自动命名并创建 worktree，以 worktree 路径作为会话 cwd。
 		wtPath, wtErr := h.createAutoWorktree(c.Request.Context(), &req)
@@ -277,9 +284,9 @@ func (h *SessionHandler) Create(c *gin.Context) {
 			Fail(c, http.StatusBadRequest, "AUTO_WORKTREE_FAILED", wtErr.Error())
 			return
 		}
-		sess, err = h.store.CreateSessionWithCwd(c.Request.Context(), req.AgentType, req.WorkspaceID, uid, models.SessionSourceManual, req.ModelValue, wtPath)
+		sess, err = h.store.CreateSessionWithCwd(c.Request.Context(), req.AgentType, req.WorkspaceID, uid, source, req.ModelValue, wtPath)
 	default:
-		sess, err = h.store.CreateSession(c.Request.Context(), req.AgentType, req.WorkspaceID, uid, req.ModelValue)
+		sess, err = h.store.CreateSessionWithSource(c.Request.Context(), req.AgentType, req.WorkspaceID, uid, source, req.ModelValue)
 	}
 	if err != nil {
 		writeSessionError(c, err)
@@ -334,11 +341,12 @@ func (h *SessionHandler) RunningSessions(c *gin.Context) {
 	Success(c, http.StatusOK, gin.H{"db_session_ids": ids})
 }
 
-// LatestByWorkspace GET /api/v1/sessions/latest?workspace_id=123
+// LatestByWorkspace GET /api/v1/sessions/latest?workspace_id=123&source=orchestration
 // 返回指定 workspace 下最近一条会话（按 created_at DESC）。
 // 任务助手（OrchestrationChatPanel）用它实现“一个工作区只复用一条管理会话”：
 // 进入任务页或首次发送前调用本接口，命中则复用，未命中（404）再创建新会话。
-// 仅校验 workspace 归属当前用户，不限制 source——由调用方决定复用策略。
+// 仅校验 workspace 归属当前用户；source 非空时仅匹配该来源的会话
+// （任务助手传 orchestration，避免复用普通对话会话）。
 func (h *SessionHandler) LatestByWorkspace(c *gin.Context) {
 	uid, ok := currentUserID(c)
 	if !ok {
@@ -355,6 +363,7 @@ func (h *SessionHandler) LatestByWorkspace(c *gin.Context) {
 		Fail(c, http.StatusBadRequest, "INVALID_REQUEST", "workspace_id 参数无效")
 		return
 	}
+	source := strings.TrimSpace(c.Query("source"))
 	sessions, err := h.store.FindSessionsByWorkspaceID(uint(wsID))
 	if err != nil {
 		writeSessionError(c, err)
@@ -363,6 +372,9 @@ func (h *SessionHandler) LatestByWorkspace(c *gin.Context) {
 	// 过滤归属当前用户的会话（workspace 已校验归属，但会话 user_id 防御性二次校验）
 	for i := range sessions {
 		if sessions[i].UserID != uid {
+			continue
+		}
+		if source != "" && sessions[i].Source != source {
 			continue
 		}
 		Success(c, http.StatusOK, sessions[i])

@@ -9,8 +9,9 @@ const (
 	SessionStatusPending = "pending"
 
 	// 会话来源：手动创建、定时任务、笔记自动分类
-	// SessionSourceOrchestration 已废弃：编排任务执行创建的会话改用 manual，
-	// 不再区分"编排会话"与"普通会话"。常量保留仅为兼容历史 DB 数据读取。
+	// SessionSourceOrchestration 用于任务助手的管理会话（编排页 AI 对话）：
+	// 不登记 tasks.json、不作为普通任务展示，侧边栏以「编排对话」记录入口呈现。
+	// 编排任务执行创建的会话仍为 manual。
 	SessionSourceManual        = "manual"
 	SessionSourceScheduled     = "scheduled"
 	SessionSourceClassify      = "classify"

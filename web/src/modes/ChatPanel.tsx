@@ -10,7 +10,7 @@ import AgentModelSelector from '../components/AgentModelSelector'
 import SessionModeSelector from '../components/SessionModeSelector'
 import ContextStats from '../components/ContextStats'
 import WorktreePicker, { AUTO_WORKTREE } from '../components/WorktreePicker'
-import { BookOpenText, Code2, FolderGit2, Sparkles, Zap } from 'lucide-react'
+import { BookOpenText, Code2, FolderGit2, Sparkles } from 'lucide-react'
 import type { PanelCtx, ConfigBarKind } from './types'
 import styles from './ChatPanel.module.css'
 
@@ -144,19 +144,6 @@ export default function ChatPanel({
             </button>
           )}
 
-          {/* 会话级 YOLO：放在任务配置栏末尾，开启时高亮 */}
-          {ctx.onToggleYolo && (
-            <button
-              type="button"
-              className={`${styles.yoloBtn} ${ctx.yoloEnabled ? styles.yoloBtnOn : ''}`}
-              onClick={ctx.onToggleYolo}
-              disabled={ctx.yoloSaving}
-              title={t('session.yoloHint')}
-            >
-              <Zap size={13} />
-              {ctx.yoloEnabled ? t('session.yoloOn') : t('session.yoloOff')}
-            </button>
-          )}
         </div>
         {ctx.session && (
           <div className={styles.statsArea}>

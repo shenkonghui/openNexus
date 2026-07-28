@@ -164,8 +164,8 @@ func TestGateway_StaticAuthenticator(t *testing.T) {
 	// 带 token → 能列到工具
 	sess := connectGateway(t, ts.URL, token)
 	names := listToolNames(t, sess)
-	if len(names) != 1 || names[0] != "alpha__echo" {
-		t.Fatalf("工具列表 = %v, 期望 alpha__echo", names)
+	if len(names) != 1 || names[0] != "alpha_echo" {
+		t.Fatalf("工具列表 = %v, 期望 alpha_echo", names)
 	}
 
 	// Status 返回的 token 应是固定 token

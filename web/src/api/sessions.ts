@@ -8,7 +8,7 @@ export function createSession(
   agentType: string,
   workspaceId?: number,
   modelValue?: string,
-  source?: 'manual',
+  source?: 'manual' | 'orchestration',
   cwd?: string,
   yolo?: boolean,
   autoWorktree?: boolean,
@@ -42,11 +42,14 @@ export function listRunningSessions(): Promise<{ data: { db_session_ids: number[
 // 获取指定 workspace 下最近一条会话（按 created_at DESC）。
 // 任务助手（TaskManagerChatPanel）用它实现“一个工作区只复用一条管理会话”：
 // 命中返回该会话，无会话（后端 404）或非 404 错误时返回 null，由调用方决定是否新建。
+// source 非空时仅匹配该来源的会话（任务助手传 orchestration，避免复用普通对话会话）。
 export async function getLatestSessionByWorkspace(
   workspaceId: number,
+  source?: 'manual' | 'orchestration',
 ): Promise<{ data: Session | null }> {
   try {
-    return await apiFetch(`/sessions/latest?workspace_id=${workspaceId}`)
+    const qs = source ? `&source=${source}` : ''
+    return await apiFetch(`/sessions/latest?workspace_id=${workspaceId}${qs}`)
   } catch (e) {
     const code = (e as Error & { code?: string })?.code
     if (code === 'SESSION_NOT_FOUND') return { data: null }
@@ -64,14 +67,6 @@ export function updateSessionTitle(id: number, title: string): Promise<{ data: S
   return apiFetch(`/sessions/${id}/title`, {
     method: 'PUT',
     body: JSON.stringify({ title }),
-  })
-}
-
-// 按任务开关 YOLO（白/黑/询问名单仍全局生效）
-export function setSessionYolo(id: number, yolo: boolean): Promise<{ data: Session }> {
-  return apiFetch(`/sessions/${id}/yolo`, {
-    method: 'PUT',
-    body: JSON.stringify({ yolo }),
   })
 }
 

@@ -159,8 +159,8 @@ func (h *TerminalHandler) servePTYShell(c *gin.Context, cwd string) {
 		}
 		// 处理控制消息（resize）
 		if len(data) > 0 && data[0] == 0x01 {
-			// 简单的 resize 协议：0x01 + 4 字节 cols + 4 字节 rows
-			if len(data) >= 9 {
+			// 简单的 resize 协议：0x01 + 2 字节 cols + 2 字节 rows（大端，与前端 sendResize 一致）
+			if len(data) >= 5 {
 				cols := int(data[1])<<8 | int(data[2])
 				rows := int(data[3])<<8 | int(data[4])
 				_ = pty.Setsize(ptmx, &pty.Winsize{Cols: uint16(cols), Rows: uint16(rows)})
@@ -295,7 +295,7 @@ func (h *TerminalHandler) HandleAgentAuthTerminal(c *gin.Context) {
 			return
 		}
 		if len(data) > 0 && data[0] == 0x01 {
-			if len(data) >= 9 {
+			if len(data) >= 5 {
 				cols := int(data[1])<<8 | int(data[2])
 				rows := int(data[3])<<8 | int(data[4])
 				_ = pty.Setsize(ptmx, &pty.Winsize{Cols: uint16(cols), Rows: uint16(rows)})

@@ -1,4 +1,4 @@
-import { Fragment, forwardRef, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso'
 import type { Message, Execution } from '../types'
@@ -538,6 +538,17 @@ const VirtuosoSegmentList = forwardRef<VirtuosoHandle, {
   const lastMsg = messages[messages.length - 1]
   const lastKey = lastMsg ? (lastMsg.id || lastMsg.sequence) : null
 
+  // followOutput 只在 data 条数变化时触发；流式 chunk 多数被合并进最后一条消息
+  // （条数不变、仅高度增长），需要手动跟随：用户在底部附近时，内容一变就滚到底。
+  const innerRef = useRef<VirtuosoHandle>(null)
+  useImperativeHandle(ref, () => innerRef.current!, [])
+  const atBottomRef = useRef(true)
+  const lastContentLen = lastMsg ? lastMsg.content.length : 0
+  useEffect(() => {
+    if (!loading || !atBottomRef.current) return
+    innerRef.current?.scrollToIndex({ index: 'LAST', align: 'end', behavior: 'auto' })
+  }, [loading, lastKey, lastContentLen, messages.length])
+
   const { turnOfSeg, turnEndSeg } = useMemo(
     () => mapSegmentsToTurns(segments, computeTurnOfMsg(messages)),
     [segments, messages],
@@ -616,7 +627,7 @@ const VirtuosoSegmentList = forwardRef<VirtuosoHandle, {
 
   return (
     <Virtuoso
-      ref={ref}
+      ref={innerRef}
       data={items}
       computeItemKey={(_, item) => {
         const seg = item.seg
@@ -626,6 +637,9 @@ const VirtuosoSegmentList = forwardRef<VirtuosoHandle, {
       }}
       // 流式追加 data 时：用户在底部附近才自动跟随，向上看历史时不打断
       followOutput={(isAtBottom) => (isAtBottom ? 'auto' : false)}
+      // 记录是否位于底部附近，供上方手动跟随 effect 判断（离底不打断用户回看）
+      atBottomStateChange={(atBottom) => { atBottomRef.current = atBottom }}
+      atBottomThreshold={80}
       // 列表初始即滚到底部（首次进入会话）
       initialTopMostItemIndex={items.length - 1}
       // 滚动到顶部时自动加载更早消息（onStartReached 由 PlainList 仅在可加载时传入）

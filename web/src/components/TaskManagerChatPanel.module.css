@@ -13,6 +13,33 @@
   flex-shrink: 0;
 }
 
+/* 顶部工具条：右对齐的清空按钮 */
+.toolbar {
+  display: flex;
+  justify-content: flex-end;
+  padding: 6px 12px 0;
+  flex-shrink: 0;
+}
+
+.clearBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.clearBtn:hover {
+  background: var(--bg-muted);
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
 .errorBanner {
   padding: 8px 12px;
   border-radius: 6px;

@@ -164,16 +164,24 @@ func findShell() string {
 }
 
 // EnsureUTF8Locale 保证环境变量中包含 UTF-8 locale，否则 shell 行编辑与程序输出会按
-// 单字节处理多字节字符（如中文），导致终端乱码。已有 UTF-8 设置时不做修改；
-// 追加的 LC_ALL 优先级最高，可覆盖继承到的非 UTF-8 值（如 LANG=C）。
+// 单字节处理多字节字符（如中文），导致终端乱码。按 locale 优先级（LC_ALL > LANG）
+// 判断实际生效值：已是 UTF-8 时不做修改；否则追加 LANG 与 LC_ALL（LC_ALL 优先级
+// 最高，可覆盖继承到的非 UTF-8 值，如 LC_ALL=C）。
 func EnsureUTF8Locale(env []string) []string {
+	var lcAll, lang string
 	for _, e := range env {
-		if strings.HasPrefix(e, "LC_ALL=") || strings.HasPrefix(e, "LANG=") {
-			v := strings.ToUpper(e)
-			if strings.Contains(v, "UTF-8") || strings.Contains(v, "UTF8") {
-				return env
-			}
+		if v, ok := strings.CutPrefix(e, "LC_ALL="); ok {
+			lcAll = v
+		} else if v, ok := strings.CutPrefix(e, "LANG="); ok {
+			lang = v
 		}
+	}
+	effective := lcAll
+	if effective == "" {
+		effective = lang
+	}
+	if v := strings.ToUpper(effective); strings.Contains(v, "UTF-8") || strings.Contains(v, "UTF8") {
+		return env
 	}
 	// Debian/musl 内置 C.UTF-8；macOS 无 C.UTF-8，用 en_US.UTF-8。
 	loc := "C.UTF-8"

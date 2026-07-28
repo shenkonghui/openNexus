@@ -144,7 +144,7 @@ func TestGateway_AggregateAndForward(t *testing.T) {
 	sess := connectGateway(t, endpoint, token)
 
 	names := listToolNames(t, sess)
-	want := []string{"alpha__echo", "beta__echo"}
+	want := []string{"alpha_echo", "beta_echo"}
 	if len(names) != len(want) {
 		t.Fatalf("工具列表 = %v, 期望 %v", names, want)
 	}
@@ -156,7 +156,7 @@ func TestGateway_AggregateAndForward(t *testing.T) {
 
 	// 转发到指定上游：返回值带 tag 前缀，可验证路由正确
 	res, err := sess.CallTool(t.Context(), &mcp.CallToolParams{
-		Name:      "beta__echo",
+		Name:      "beta_echo",
 		Arguments: map[string]any{"msg": "hello"},
 	})
 	if err != nil {
@@ -179,7 +179,7 @@ func TestGateway_ConfigChangeRebuilds(t *testing.T) {
 	endpoint, token, _ := setupGateway(t, configPath)
 
 	sess := connectGateway(t, endpoint, token)
-	if names := listToolNames(t, sess); len(names) != 1 || names[0] != "alpha__echo" {
+	if names := listToolNames(t, sess); len(names) != 1 || names[0] != "alpha_echo" {
 		t.Fatalf("初始工具列表 = %v", names)
 	}
 
@@ -210,8 +210,8 @@ func TestGateway_UpstreamDownDoesNotBreakOthers(t *testing.T) {
 	sess := connectGateway(t, endpoint, token)
 
 	names := listToolNames(t, sess)
-	if len(names) != 1 || names[0] != "alpha__echo" {
-		t.Fatalf("工具列表 = %v, 期望仅 alpha__echo", names)
+	if len(names) != 1 || names[0] != "alpha_echo" {
+		t.Fatalf("工具列表 = %v, 期望仅 alpha_echo", names)
 	}
 }
 

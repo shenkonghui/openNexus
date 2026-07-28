@@ -3,9 +3,11 @@ package services
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
+	"sync"
 	"time"
 
 	"opennexus/internal/acp"
@@ -69,21 +71,51 @@ type ClassifyExecutor interface {
 	GetSessionByDBID(id uint) (*models.Session, error)
 	UpdateTitle(dbSessionID uint, title string) error
 	RunSubAgent(ctx context.Context, cfg acp.SubAgentRunConfig) (string, error)
+	// AgentAvailable 判断 agent 类型当前是否已注册（设置页停用/删除后为 false）。
+	AgentAvailable(agentType string) bool
 }
+
+// ErrClassifyAgentUnavailable 表示配置的分类 agent 已被停用或删除。
+// 笔记保持待分类状态，待 agent 重新启用后自动继续。
+var ErrClassifyAgentUnavailable = errors.New("配置的分类 agent 已停用或未注册")
 
 // NoteClassifier 根据用户配置调用 agent 为笔记打标签。
 type NoteClassifier struct {
 	settingsRepo *repository.NoteSettingsRepository
 	noteRepo     *repository.NoteRepository
 	executor     ClassifyExecutor
+
+	// unavailableWarnAt 记录各用户上次输出「agent 已停用」告警的时间，
+	// worker 每分钟扫描一轮，用其节流避免同一提示刷屏。
+	warnMu            sync.Mutex
+	unavailableWarnAt map[uint]time.Time
 }
+
+// classifyAgentUnavailableWarnInterval 是「agent 已停用」告警的最小输出间隔。
+const classifyAgentUnavailableWarnInterval = 30 * time.Minute
 
 func NewNoteClassifier(
 	settingsRepo *repository.NoteSettingsRepository,
 	noteRepo *repository.NoteRepository,
 	executor ClassifyExecutor,
 ) *NoteClassifier {
-	return &NoteClassifier{settingsRepo: settingsRepo, noteRepo: noteRepo, executor: executor}
+	return &NoteClassifier{
+		settingsRepo:      settingsRepo,
+		noteRepo:          noteRepo,
+		executor:          executor,
+		unavailableWarnAt: map[uint]time.Time{},
+	}
+}
+
+// shouldWarnAgentUnavailable 判断是否需要为该用户输出「agent 已停用」告警（带节流）。
+func (c *NoteClassifier) shouldWarnAgentUnavailable(userID uint, now time.Time) bool {
+	c.warnMu.Lock()
+	defer c.warnMu.Unlock()
+	if last, ok := c.unavailableWarnAt[userID]; ok && now.Sub(last) < classifyAgentUnavailableWarnInterval {
+		return false
+	}
+	c.unavailableWarnAt[userID] = now
+	return true
 }
 
 // ProcessPending 处理一批待分类笔记，返回成功处理数量。
@@ -100,12 +132,17 @@ func (c *NoteClassifier) ProcessPending(ctx context.Context, limit int) (int, er
 	}
 	settingsCache := map[uint]int{}
 	touchedUsers := map[uint]struct{}{}
+	// agent 已停用的用户本轮整体跳过，只提示一次，避免逐条报错刷日志。
+	unavailableUsers := map[uint]struct{}{}
 	now := time.Now()
 	done := 0
 	for i := range notes {
 		touchedUsers[notes[i].UserID] = struct{}{}
 		if done >= limit {
 			break
+		}
+		if _, skip := unavailableUsers[notes[i].UserID]; skip {
+			continue
 		}
 		interval, err := c.userClassifyInterval(settingsCache, notes[i].UserID)
 		if err != nil {
@@ -116,6 +153,13 @@ func (c *NoteClassifier) ProcessPending(ctx context.Context, limit int) (int, er
 			continue
 		}
 		if err := c.classifyNote(ctx, &notes[i]); err != nil {
+			if errors.Is(err, ErrClassifyAgentUnavailable) {
+				unavailableUsers[notes[i].UserID] = struct{}{}
+				if c.shouldWarnAgentUnavailable(notes[i].UserID, now) {
+					log.Printf("用户 %d 的分类 agent 已停用，暂停自动分类（笔记保持待分类）: %v", notes[i].UserID, err)
+				}
+				continue
+			}
 			log.Printf("笔记 %d 分类失败: %v", notes[i].ID, err)
 			continue
 		}
@@ -195,6 +239,11 @@ func (c *NoteClassifier) classifyTags(ctx context.Context, userID, noteID uint, 
 	agentType := strings.TrimSpace(settings.AgentType)
 	if agentType == "" || c.executor == nil {
 		return manualTags, "", nil
+	}
+	// agent 被停用/删除时跳过本次分类（笔记保持 pending，重新启用后自动继续），
+	// 避免 worker 每轮都触发 "agent 类型未注册" 报错。
+	if !c.executor.AgentAvailable(agentType) {
+		return manualTags, "", fmt.Errorf("%w: %s", ErrClassifyAgentUnavailable, agentType)
 	}
 	promptTpl := EffectiveClassifyPrompt(settings.ClassifyPrompt)
 	existing, err := c.noteRepo.ListTags(userID)

@@ -6,7 +6,7 @@
 // 这样即便需要在 agent 自身的原生配置里手工配置，也只需配置一次——
 // 之后增删任何 MCP server 都不必再改 agent 配置。
 //
-// 工具名以 <上游名>__<原工具名> 暴露，避免多个上游之间的命名冲突。
+// 工具名以 <上游名>_<原工具名> 暴露，避免多个上游之间的命名冲突。
 package gatewaymcp
 
 import (
@@ -111,7 +111,7 @@ func (g *Gateway) Close() { g.agg.Close() }
 // 快照命中缓存时开销极小，只是把已知工具注册成转发 handler。
 func (g *Gateway) newServer(ctx context.Context) *mcp.Server {
 	srv := mcp.NewServer(&mcp.Implementation{Name: GatewayMCPName, Version: "1.0.0"}, &mcp.ServerOptions{
-		Instructions: "openNexus MCP 聚合网关：工具以 <server>__<tool> 命名，来自全局 MCP 配置中的各个上游 server。",
+		Instructions: "openNexus MCP 聚合网关：工具以 <server>_<tool> 命名，来自全局 MCP 配置中的各个上游 server。",
 	})
 	for _, ref := range g.agg.Snapshot(ctx) {
 		srv.AddTool(ref.tool, g.forward(ref.exposedName))

@@ -804,6 +804,13 @@ export default function SettingsDialog({ initialTab = 'language', onClose }: Pro
                       {agents.map((a) => (
                         <option key={a.type} value={a.type}>{a.display_name}（{a.type}）</option>
                       ))}
+                      {/* 存储值对应的 agent 已停用/删除时，显式列出而非回退显示「否」，
+                          避免用户误以为未配置（后台 worker 仍按该值排队分类）。 */}
+                      {noteAgent && !agents.some((a) => a.type === noteAgent) && (
+                        <option value={noteAgent}>
+                          {t('settings.noteClassifyAgentUnavailable', { type: noteAgent })}
+                        </option>
+                      )}
                     </select>
                     {noteAgent && (
                       <>
