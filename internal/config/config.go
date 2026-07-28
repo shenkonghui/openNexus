@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -139,6 +140,11 @@ type AgentsConfig struct {
 	// 由本服务代为执行（PTY），并在网页终端面板实时展示执行情况。
 	// nil=默认 true；显式 false 回退为 agent 内部执行（仅聊天流展示摘要）。
 	TerminalEnabled *bool `yaml:"terminal_enabled"`
+	// Persistent 是否启用 agent 常驻模式（acp-bridge 守护进程 + Unix Domain Socket）：
+	// agent 挂在独立 bridge 进程下，主程序重启仅断开 socket，重启后重新拨号
+	// 即可复用原 agent（进程与内存上下文保留）；主程序失联超时后由 watchdog 兜底清理。
+	// nil=默认 true（Windows 不支持，强制 false）；显式 false 回退为直连子进程模式。
+	Persistent *bool `yaml:"persistent"`
 }
 
 // TerminalBridgeEnabled 返回是否向 agent 声明 ACP terminal 能力；未配置时默认 true。
@@ -155,6 +161,18 @@ func (a AgentsConfig) FailedTaskAutoRetryOnceEnabled() bool {
 		return true
 	}
 	return *a.FailedTaskAutoRetryOnce
+}
+
+// PersistentAgentsEnabled 返回是否启用 agent 常驻模式；未配置时默认 true。
+// Windows 不支持进程组回收与 Setsid 脱钩，强制返回 false（直连模式）。
+func (a AgentsConfig) PersistentAgentsEnabled() bool {
+	if runtime.GOOS == "windows" {
+		return false
+	}
+	if a.Persistent == nil {
+		return true
+	}
+	return *a.Persistent
 }
 
 // SubAgentsConfig 配置 subagent 扫描目录（markdown 文件：frontmatter 含 name/description/model/tools，正文当 system_prompt）。

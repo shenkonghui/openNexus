@@ -11,14 +11,22 @@ import (
 	"opennexus/internal/logging"
 )
 
-// Connection 封装 acp.ClientSideConnection，管理一个 agent 进程与一条 ACP 连接。
+// Connection 封装 acp.ClientSideConnection，管理一个 agent 传输通道与一条 ACP 连接。
 //
 // 一条 Connection 可承载多个 ACP session（多路复用同一 agent 进程），
 // 各 session 的 update 通过 Client 按 SessionId 路由分发。
+//
+// 底层 transport 两种形态：
+//   - 直连（*Process）：agent 是主 server 子进程，随主 server 退出；
+//   - 常驻（*bridgeTransport）：agent 挂在独立 acp-bridge 守护进程下，UDS 通信，
+//     主 server 重启后重新拨号即可复用原 agent。
 type Connection struct {
-	conn    *acp.ClientSideConnection
-	process *Process
-	client  *Client
+	conn      *acp.ClientSideConnection
+	transport agentTransport
+	client    *Client
+
+	// reused 标记底层 transport 是否复用了已存活的 bridge+agent（主 server 重启场景）。
+	reused bool
 
 	// terminalEnabled 握手时是否向 agent 声明 terminal 能力（agent shell 由本服务代执行）。
 	terminalEnabled bool
@@ -32,7 +40,7 @@ type Connection struct {
 	initResp acp.InitializeResponse
 }
 
-// NewConnection 启动 agent 进程并建立 ACP 连接。
+// NewConnection 启动 agent 进程（直连模式）并建立 ACP 连接。
 // dbg 非空且 Enabled 时，用 tee 包装 stdin/stdout 捕获 JSON-RPC 报文。
 // terminalEnabled 为 true 时握手声明 terminal 能力（agent 的 shell 改由本服务代执行）。
 func NewConnection(backend Backend, workDir string, dbg *ACPDebugger, terminalEnabled bool) (*Connection, error) {
@@ -40,24 +48,45 @@ func NewConnection(backend Backend, workDir string, dbg *ACPDebugger, terminalEn
 	if err != nil {
 		return nil, err
 	}
+	return newConnectionWithTransport(proc, backend, dbg, terminalEnabled, false), nil
+}
 
+// NewBridgeConnection 通过常驻 acp-bridge 建立 ACP 连接（agent 进程与主 server 解耦）。
+// 优先拨号复用已存活的 bridge（主 server 重启后 agent 上下文保留）；
+// 拨不通或 forceNew 时拉起全新 bridge+agent。
+func NewBridgeConnection(backend Backend, workDir string, dbg *ACPDebugger, terminalEnabled bool, socketPath string, forceNew bool) (*Connection, error) {
+	bt, err := NewBridgeTransport(backend, workDir, socketPath, forceNew)
+	if err != nil {
+		return nil, err
+	}
+	return newConnectionWithTransport(bt, backend, dbg, terminalEnabled, bt.Reused()), nil
+}
+
+// newConnectionWithTransport 在任意 transport 上组装 ACP 客户端连接。
+func newConnectionWithTransport(t agentTransport, backend Backend, dbg *ACPDebugger, terminalEnabled bool, reused bool) *Connection {
 	client := NewClient()
-	stdin := io.WriteCloser(proc.Stdin())
-	stdout := io.Reader(proc.Stdout())
+	stdin := io.WriteCloser(t.Stdin())
+	stdout := io.Reader(t.Stdout())
 	if dbg != nil && dbg.Enabled() {
 		agentType := backend.Name()
-		stdin = &teeWriter{w: proc.Stdin(), dbg: dbg, direction: "send", agentType: agentType}
-		stdout = &teeReader{r: proc.Stdout(), dbg: dbg, direction: "recv", agentType: agentType}
+		stdin = &teeWriter{w: t.Stdin(), dbg: dbg, direction: "send", agentType: agentType}
+		stdout = &teeReader{r: t.Stdout(), dbg: dbg, direction: "recv", agentType: agentType}
 	}
 	conn := acp.NewClientSideConnection(client, stdin, stdout)
 	conn.SetLogger(slog.Default())
 
 	return &Connection{
 		conn:            conn,
-		process:         proc,
+		transport:       t,
 		client:          client,
+		reused:          reused,
 		terminalEnabled: terminalEnabled,
-	}, nil
+	}
+}
+
+// Reused 返回是否复用了已存活的常驻 agent（主 server 重启后重连场景）。
+func (c *Connection) Reused() bool {
+	return c.reused
 }
 
 // clientCapabilities 构造握手时声明的 client 能力。
@@ -252,16 +281,22 @@ func (c *Connection) Done() <-chan struct{} {
 	return c.conn.Done()
 }
 
-// Close 关闭连接并停止 agent 进程。
+// Close 关闭连接并停止 agent 进程（bridge 模式连 bridge 一并终止）。
 // 用于彻底销毁该 Connection（不再承载任何 session）。
 func (c *Connection) Close() error {
-	return c.process.Stop()
+	return c.transport.Stop()
 }
 
-// InspectFailure 在 agent 启动/握手失败后诊断子进程状态，返回人类可读的线索。
+// Detach 仅断开通信通道：bridge 模式下 agent 保持运行，主 server 重启后可复用；
+// 直连模式无此语义，等价 Close。
+func (c *Connection) Detach() error {
+	return c.transport.Detach()
+}
+
+// InspectFailure 在 agent 启动/握手失败后诊断底层状态，返回人类可读的线索。
 // 必须在 Close() 之前调用。
 func (c *Connection) InspectFailure() string {
-	return c.process.InspectFailure()
+	return c.transport.InspectFailure()
 }
 
 // Client 返回内部 Client（用于测试）。
@@ -269,7 +304,8 @@ func (c *Connection) Client() *Client {
 	return c.client
 }
 
-// Pid 返回 agent 子进程的直系 PID（同时是进程组 PGID）。进程未启动返回 0。
+// Pid 返回可供 KillProcessGroup 使用的进程组 PGID
+//（直连模式为 agent 直系子进程 PID，bridge 模式为 bridge 守护进程 PID）。未启动返回 0。
 func (c *Connection) Pid() int {
-	return c.process.Pid()
+	return c.transport.Pid()
 }

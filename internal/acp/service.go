@@ -162,6 +162,13 @@ type Service struct {
 	// 由 SetTerminalEnabled 注入（config.yaml agents.terminal_enabled）。
 	terminalEnabled bool
 
+	// bridgeEnabled 是否启用 agent 常驻模式（acp-bridge 守护进程 + UDS）：
+	// agent 生命周期与主 server 解耦，主 server 重启后重新拨号复用原 agent。
+	// 由 SetBridgeMode 注入（config.yaml agents.persistent）。
+	bridgeEnabled bool
+	// bridgeSocketDir bridge socket 目录（SetBridgeMode 注入，已经 ResolveBridgeSocketDir 归一）。
+	bridgeSocketDir string
+
 	// goals 按稳定 session_id 记录生效中的通用 goal（/opennexus-goal 命令，内存态不跨重启）。
 	// goalSettings 可选：评估 agent/模型与限制条件（SetGoalSettingsRepo 注入）。nil 用默认限制。
 	goals        map[string]*sessionGoal
@@ -401,6 +408,25 @@ func (s *Service) Debugger() *ACPDebugger {
 // 主 server 启动时注入（与 watchdog 共享同一 SQLite）；测试环境可不注入，相关写表静默跳过。
 func (s *Service) SetACPConnectionRepo(repo *repository.ACPConnectionRepository) {
 	s.acpConnRepo = repo
+}
+
+// SetBridgeMode 启用/关闭 agent 常驻模式（acp-bridge 守护进程 + UDS）。
+// 启用后新建连接优先拨号复用存活 bridge，主 server 关闭时仅 Detach 不杀 agent。
+// 必须在任何连接建立前调用（主 server 启动早期）。
+func (s *Service) SetBridgeMode(enabled bool, socketDir string) {
+	s.bridgeEnabled = enabled
+	s.bridgeSocketDir = socketDir
+}
+
+// BridgeModeEnabled 返回是否处于 agent 常驻模式。
+func (s *Service) BridgeModeEnabled() bool {
+	return s.bridgeEnabled
+}
+
+// bridgeSocketPath 由连接池键推导确定性 socket 路径，
+// 使主 server 重启后能按同一 agentType+cwd 找回原 bridge。
+func (s *Service) bridgeSocketPath(agentType, cwd string) string {
+	return filepath.Join(s.bridgeSocketDir, bridgeSocketName(connectionKey(agentType, cwd)))
 }
 
 // SetPromptMaxDuration 注入单轮 prompt 最大存活时间。d<=0 时恢复默认 30min。
@@ -835,7 +861,36 @@ func (s *Service) buildConnection(ctx context.Context, agentType, cwd string) (*
 			return nil, fmt.Errorf("创建工作目录 %s: %w", cwd, err)
 		}
 	}
-	newConn, err := NewConnection(backend, cwd, s.dbg, s.terminalEnabled)
+	newConn, initResp, reused, err := s.startAndHandshake(ctx, backend, agentType, cwd, false)
+	if err != nil && reused {
+		// 复用的常驻 agent 握手/认证失败（如 agent 不支持重复 initialize 或已卡死）：
+		// 旧 bridge 已在 startAndHandshake 内销毁，这里强制拉起全新 bridge+agent 再试一次。
+		slog.Warn("复用常驻 agent 握手失败，销毁后重建全新 agent 进程",
+			"agent", agentType, "cwd", cwd, "err", err)
+		newConn, initResp, _, err = s.startAndHandshake(ctx, backend, agentType, cwd, true)
+	}
+	if err != nil {
+		return nil, err
+	}
+	slog.Debug("建立 agent 连接成功",
+		"agent", agentType, "cwd", cwd, "protocol", initResp.ProtocolVersion, "reused", newConn.Reused())
+	// 缓存握手响应（按 agentType，同类型多连接以最近一次为准），供设置页展示 ACP 能力
+	s.mu.Lock()
+	s.agentInitInfo[agentType] = initResp
+	s.mu.Unlock()
+	return newConn, nil
+}
+
+// startAndHandshake 建立底层连接（bridge 模式优先拨号复用，forceNew 强制重建）并完成
+// ACP 握手与认证。失败时已销毁连接，返回 reused 供调用方决策是否重建全新进程重试。
+func (s *Service) startAndHandshake(ctx context.Context, backend Backend, agentType, cwd string, forceNew bool) (*Connection, acp.InitializeResponse, bool, error) {
+	var newConn *Connection
+	var err error
+	if s.bridgeEnabled {
+		newConn, err = NewBridgeConnection(backend, cwd, s.dbg, s.terminalEnabled, s.bridgeSocketPath(agentType, cwd), forceNew)
+	} else {
+		newConn, err = NewConnection(backend, cwd, s.dbg, s.terminalEnabled)
+	}
 	if err != nil {
 		slog.Error("建立 agent 连接失败：启动 agent 进程失败",
 			"agent", agentType,
@@ -843,8 +898,9 @@ func (s *Service) buildConnection(ctx context.Context, agentType, cwd string) (*
 			"command", backend.Command(),
 			"args", backend.Args(),
 			"err", err)
-		return nil, fmt.Errorf("建立共享连接: %w", err)
+		return nil, acp.InitializeResponse{}, false, fmt.Errorf("建立共享连接: %w", err)
 	}
+	reused := newConn.Reused()
 	// 注入 terminal 桥接器：握手声明能力后 agent 的 terminal/* 请求由 bridge 代执行
 	newConn.Client().SetTerminalBridge(s.terminalBridge)
 	initResp, err := newConn.Initialize(ctx)
@@ -856,24 +912,19 @@ func (s *Service) buildConnection(ctx context.Context, agentType, cwd string) (*
 			"agent", agentType,
 			"command", backend.Command(),
 			"args", backend.Args(),
+			"reused", reused,
 			"diagnosis", diag,
 			"err", err)
-		return nil, fmt.Errorf("ACP 握手失败: %w（诊断: %s）", err, diag)
+		return nil, acp.InitializeResponse{}, reused, fmt.Errorf("ACP 握手失败: %w（诊断: %s）", err, diag)
 	}
 	if err := newConn.AuthenticateIfRequired(ctx, initResp); err != nil {
 		diag := newConn.InspectFailure()
 		_ = newConn.Close()
 		slog.Error("建立 agent 连接失败：ACP 认证失败",
 			"agent", agentType, "diagnosis", diag, "err", err)
-		return nil, fmt.Errorf("ACP 认证失败: %w（诊断: %s）", err, diag)
+		return nil, acp.InitializeResponse{}, reused, fmt.Errorf("ACP 认证失败: %w（诊断: %s）", err, diag)
 	}
-	slog.Debug("建立 agent 连接成功",
-		"agent", agentType, "cwd", cwd, "protocol", initResp.ProtocolVersion)
-	// 缓存握手响应（按 agentType，同类型多连接以最近一次为准），供设置页展示 ACP 能力
-	s.mu.Lock()
-	s.agentInitInfo[agentType] = initResp
-	s.mu.Unlock()
-	return newConn, nil
+	return newConn, initResp, reused, nil
 }
 
 // watchConnection 监控共享连接，进程退出时标记 disconnected。
@@ -881,6 +932,12 @@ func (s *Service) buildConnection(ctx context.Context, agentType, cwd string) (*
 // 仅当重连持续失败超过阈值时，才将会话标记为 error。
 func (s *Service) watchConnection(poolKey string, conn *Connection) {
 	<-conn.Done()
+	// 关闭中：bridge 模式下 Done 由 Detach 触发，agent 仍存活，
+	// 心跳表行必须保留供 watchdog 兜底与下次启动拨号复用；直连模式下
+	// 脏行由下次启动的清理逻辑处理，这里统一跳过。
+	if s.shuttingDown.Load() {
+		return
+	}
 	agentType, _ := splitConnectionKey(poolKey)
 	s.logWarn("agent 进程退出，标记为 disconnected", agentType)
 
@@ -986,6 +1043,44 @@ func (s *Service) releaseConnection(agentType, cwd string) {
 	_ = conn.Close()
 }
 
+// ReattachPersistentConnections 主 server 启动时复用上次留下的常驻 agent：
+// 遍历心跳表，清理已死 bridge 的脏行；存活的按 agentType+cwd 重新建连
+//（ensureConnection 内部拨号同一 socket 复用原 agent），使会话恢复时可立即续用。
+// 仅 bridge 模式有效；backend 未注册（agent 已被禁用）时终止游离 bridge 防泄漏。
+func (s *Service) ReattachPersistentConnections() {
+	if !s.bridgeEnabled || s.acpConnRepo == nil {
+		return
+	}
+	rows, err := s.acpConnRepo.FindAll()
+	if err != nil {
+		slog.Warn("读取 acp_connections 心跳表失败，跳过常驻 agent 复用", "err", err)
+		return
+	}
+	for _, row := range rows {
+		if !ProcessAlive(row.Pid) {
+			slog.Info("清理已死 bridge 的心跳脏行", "agent", row.AgentType, "cwd", row.Cwd, "pid", row.Pid)
+			_ = s.acpConnRepo.Delete(row.PoolKey)
+			continue
+		}
+		if _, err := s.GetBackend(row.AgentType); err != nil {
+			// agent 已被禁用/未注册：终止游离 bridge，防进程泄漏
+			slog.Info("终止无归属的常驻 bridge（agent 未注册）", "agent", row.AgentType, "pid", row.Pid)
+			_ = KillProcessGroup(row.Pid)
+			_ = s.acpConnRepo.Delete(row.PoolKey)
+			continue
+		}
+		go func(agentType, cwd string) {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			defer cancel()
+			if _, err := s.ensureConnection(ctx, agentType, cwd); err != nil {
+				slog.Warn("复用常驻 agent 失败（将由健康检查重试）", "agent", agentType, "cwd", cwd, "err", err)
+				return
+			}
+			slog.Info("已复用常驻 agent", "agent", agentType, "cwd", cwd)
+		}(row.AgentType, row.Cwd)
+	}
+}
+
 // heartbeatInterval 是主 server 向 acp_connections 心跳表全表续约的周期。
 // watchdog 据此判断主程序是否存活：若 heartbeat 持续超过 watchdogHBStale 未更新，视为主程序已死。
 const heartbeatInterval = 30 * time.Second
@@ -1047,7 +1142,8 @@ func (s *Service) StopHealthCheck() {
 			bc.close()
 		}
 
-		// 立即终止 agent 子进程，不等待健康检查循环结束
+		// 终止或脱钩 agent 子进程：常驻模式仅断开 UDS（agent 保持运行，
+		// 重启后拨号复用）；直连模式维持原行为立即终止进程组。
 		s.mu.Lock()
 		conns := make([]*Connection, 0, len(s.pool))
 		for _, conn := range s.pool {
@@ -1056,7 +1152,11 @@ func (s *Service) StopHealthCheck() {
 		s.pool = make(map[string]*Connection)
 		s.mu.Unlock()
 		for _, conn := range conns {
-			_ = conn.Close()
+			if s.bridgeEnabled {
+				_ = conn.Detach()
+			} else {
+				_ = conn.Close()
+			}
 		}
 
 		done := make(chan struct{})

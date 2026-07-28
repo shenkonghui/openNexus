@@ -100,8 +100,12 @@ var orphanACPKeywords = []string{
 	"_npx",
 }
 
-// isOrphanACPCommandLine 判断命令行是否匹配 acp 孤儿特征（且带 --acp）。
+// isOrphanACPCommandLine 判断命令行是否匹配 acp 孤儿特征（带 --acp 的 agent，
+// 或 acp-bridge 守护进程——杀其进程组可一并回收挂在其下的 agent）。
 func isOrphanACPCommandLine(cmdline string) bool {
+	if strings.Contains(cmdline, "acp-bridge") && strings.Contains(cmdline, "--socket") {
+		return true
+	}
 	if !strings.Contains(cmdline, "--acp") {
 		return false
 	}
