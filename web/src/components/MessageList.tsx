@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso'
 import type { Message, Execution } from '../types'
 import { aggregateChanges, type FileChangeItem } from '../utils/diff'
-import MessageBubble, { toolLabel, toolCommandFromRaw, isBareToolName } from './MessageBubble'
+import MessageBubble, { toolLabel, isBareToolName } from './MessageBubble'
 import ChangesSummary from './ChangesSummary'
 import { ChevronDown, ChevronRight } from 'lucide-react'
 import styles from './MessageList.module.css'
@@ -68,12 +68,56 @@ function toolCallIdOf(msg: Message): string | null {
   return null
 }
 
-/** 合并 raw_json：保留带有更长 command 的那份，避免后期空 update 冲掉命令 */
+/** 合并同一 toolCallId 的 raw_json：按字段增量合并为单个 JSON 对象。
+ *  后到的非空字段覆盖（status 等）；rawInput/rawOutput 保留信息更全的一份，
+ *  避免后期空 update 冲掉命令；content 累积并按 diff 路径去重，
+ *  避免 Write/Edit 等工具的 diff/输出被起始裸 tool_call 丢弃。 */
 function mergeToolRaw(a: string, b: string): string {
-  const ca = toolCommandFromRaw(a)
-  const cb = toolCommandFromRaw(b)
-  if (cb.length > ca.length) return b || a
-  return a || b
+  const merged: Record<string, unknown> = {}
+  let contentItems: any[] = []
+  const pickLarger = (k: string, v: unknown) => {
+    const prev = merged[k]
+    try {
+      if (prev == null || JSON.stringify(v).length >= JSON.stringify(prev).length) merged[k] = v
+    } catch {
+      /* 保留旧值 */
+    }
+  }
+  for (const part of `${a}\n${b}`.split('\n')) {
+    const line = part.trim()
+    if (!line) continue
+    let obj: Record<string, unknown>
+    try {
+      obj = JSON.parse(line)
+    } catch {
+      continue
+    }
+    if (!obj || typeof obj !== 'object') continue
+    for (const [k, v] of Object.entries(obj)) {
+      if (v == null || v === '') continue
+      if (k === 'content' && Array.isArray(v)) {
+        contentItems = contentItems.concat(v)
+        continue
+      }
+      if (k === 'rawInput' || k === 'rawOutput') {
+        pickLarger(k, v)
+        continue
+      }
+      merged[k] = v
+    }
+  }
+  if (contentItems.length > 0) {
+    // diff 项按路径去重，保留最后一次（流式 update 会重发全量 diff）
+    const lastDiffIdx = new Map<string, number>()
+    contentItems.forEach((item, i) => {
+      if (item?.type === 'diff' && typeof item.path === 'string') lastDiffIdx.set(item.path, i)
+    })
+    merged.content = contentItems.filter(
+      (item, i) => item?.type !== 'diff' || typeof item.path !== 'string' || lastDiffIdx.get(item.path) === i,
+    )
+  }
+  if (Object.keys(merged).length === 0) return a || b
+  return JSON.stringify(merged)
 }
 
 /** 同 toolCallId 的 tool_call + update 合并为一条，content 取更具体的命令/标题 */
@@ -84,7 +128,12 @@ function collapseToolCalls(messages: Message[]): Message[] {
     const at = a.trim()
     const bt = b.trim()
     if (!bt) return at
-    if (!at || isBareToolName(at)) return bt || at
+    if (!at) return bt
+    if (isBareToolName(at)) {
+      if (isBareToolName(bt)) return at
+      // 裸工具名 + 命令：直接用命令；+ 路径等补充信息：拼接为 "Write .../file"
+      return bt.startsWith('`') ? bt : `${at} ${bt}`
+    }
     if (isBareToolName(bt)) return at
     if (bt.length >= at.length) return bt
     return at

@@ -153,6 +153,22 @@
   font-style: italic;
 }
 
+/* 工具调用展开后的输出文本（rawOutput / content 文本块） */
+.toolOutput {
+  margin: 4px 0 2px;
+  padding: 8px;
+  background: var(--code-bg);
+  border-radius: 4px;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 240px;
+  overflow-y: auto;
+  font-family: 'IBM Plex Mono', 'Monaco', 'Menlo', monospace;
+  color: var(--code-text);
+}
+
 .rawBtn {
   margin-left: auto;
   background: none;

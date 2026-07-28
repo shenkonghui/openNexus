@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useRef, memo } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { Message } from '../types'
-import { parseDiffsFromMessage } from '../utils/diff'
+import { parseDiffsFromMessage, shortPath } from '../utils/diff'
 import { restoreToCheckpoint } from '../api/filesystem'
 import DiffView from './DiffView'
 import MarkdownContent from './MarkdownContent'
@@ -60,17 +60,80 @@ export function toolCommandFromRaw(rawJSON: string): string {
 }
 
 export function isBareToolName(title: string): boolean {
-  return /^(bash|shell|read|write|edit|grep|glob|search|execute|other)$/i.test(title.trim())
+  return /^(bash|shell|read|write|edit|grep|glob|search|execute|other|(read|write|edit|create)\s+file)$/i.test(title.trim())
 }
 
-/** 工具调用展示文案：有具体命令时优先显示命令，避免只显示 "Bash" */
+// Write/Read 等无 command 的工具：从 rawInput 常见字段、locations 或 diff content
+// 中提取目标文件路径，用于标题与摘要展示。raw_json 兼容多行 NDJSON。
+const PATH_INPUT_KEYS = ['path', 'file_path', 'filePath', 'abs_path', 'absPath', 'target_file']
+export function toolPathFromRaw(rawJSON: string): string {
+  if (!rawJSON) return ''
+  for (const part of rawJSON.split('\n')) {
+    const line = part.trim()
+    if (!line) continue
+    try {
+      const raw = JSON.parse(line) as Record<string, any>
+      const ri = raw.rawInput
+      if (ri && typeof ri === 'object') {
+        for (const k of PATH_INPUT_KEYS) {
+          if (typeof ri[k] === 'string' && ri[k]) return ri[k]
+        }
+      }
+      const loc = raw.locations
+      if (Array.isArray(loc) && typeof loc[0]?.path === 'string' && loc[0].path) return loc[0].path
+      if (Array.isArray(raw.content)) {
+        for (const item of raw.content) {
+          if (item?.type === 'diff' && typeof item.path === 'string' && item.path) return item.path
+        }
+      }
+    } catch {
+      /* 跳过无法解析的行 */
+    }
+  }
+  return ''
+}
+
+// 从 raw_json 提取工具输出文本（rawOutput.content / content[].content.text），
+// 用于工具调用展开时展示执行结果。
+export function toolOutputFromRaw(rawJSON: string): string {
+  if (!rawJSON) return ''
+  const parts: string[] = []
+  for (const part of rawJSON.split('\n')) {
+    const line = part.trim()
+    if (!line) continue
+    try {
+      const raw = JSON.parse(line) as Record<string, any>
+      const ro = raw.rawOutput
+      if (typeof ro === 'string' && ro.trim()) {
+        parts.push(ro)
+      } else if (ro && typeof ro === 'object' && typeof ro.content === 'string' && ro.content.trim()) {
+        parts.push(ro.content)
+      }
+      if (Array.isArray(raw.content)) {
+        for (const item of raw.content) {
+          const text = item?.type === 'content' ? item?.content?.text : undefined
+          if (typeof text === 'string' && text.trim()) parts.push(text)
+        }
+      }
+    } catch {
+      /* 跳过无法解析的行 */
+    }
+  }
+  return parts.join('\n').trim()
+}
+
+/** 工具调用展示文案：有具体命令时优先显示命令，避免只显示 "Bash"；
+ *  Write/Read 等文件工具补充目标路径，避免只显示裸工具名 */
 export function toolLabel(msg: Message): string {
   const cmd = toolCommandFromRaw(msg.raw_json)
   const content = (msg.content || '').trim().split('\n')[0] || ''
   if (cmd && (!content || isBareToolName(content))) return `\`${cmd}\``
   if (content && !isBareToolName(content)) return content
+  const path = toolPathFromRaw(msg.raw_json)
+  if (content && path) return `${content} ${shortPath(path)}`
   if (cmd) return `\`${cmd}\``
   if (content) return content
+  if (path) return shortPath(path)
   return 'chat.toolCall'
 }
 
@@ -100,6 +163,12 @@ function MessageBubble({ message, defaultOpen = false, forceCollapsed = false, s
   const hasDiff = useMemo(
     () => (message.kind === 'tool_call' || message.kind === 'tool_call_update')
       && parseDiffsFromMessage(message).length > 0,
+    [message],
+  )
+
+  // 工具输出文本（rawOutput / content 文本块），展开时显示
+  const toolOutput = useMemo(
+    () => (message.role === 'tool' ? toolOutputFromRaw(message.raw_json) : ''),
     [message],
   )
 
@@ -212,7 +281,15 @@ function MessageBubble({ message, defaultOpen = false, forceCollapsed = false, s
                 )}
                 {restoreMenu}
               </div>
-            ) : isTool ? null : (
+            ) : isTool ? (
+              toolOutput ? (
+                <pre className={styles.toolOutput}>
+                  {toolOutput.length > 4000 ? `${toolOutput.slice(0, 4000)}\n…` : toolOutput}
+                </pre>
+              ) : !hasDiff ? (
+                <div className={styles.contentMuted}>{t('common.noData')}</div>
+              ) : null
+            ) : (
               <>
                 {message.content && (
                   message.kind === 'agent_message_chunk' && !streaming ? (

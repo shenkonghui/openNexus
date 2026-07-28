@@ -39,26 +39,30 @@ export interface FileChangeItem {
 const MAX_LINES_FOR_LCS = 2000
 
 // parseDiffsFromMessage 从消息的 raw_json 中提取所有 FileDiff。
-// 仅处理 tool_call / tool_call_update 两种 kind。
+// 仅处理 tool_call / tool_call_update 两种 kind。raw_json 兼容多行 NDJSON（合并消息）。
 export function parseDiffsFromMessage(msg: Message): FileDiff[] {
   if (msg.kind !== 'tool_call' && msg.kind !== 'tool_call_update') return []
   if (!msg.raw_json) return []
-  let parsed: any
-  try {
-    parsed = JSON.parse(msg.raw_json)
-  } catch {
-    return []
-  }
-  const content = parsed?.content
-  if (!Array.isArray(content)) return []
   const diffs: FileDiff[] = []
-  for (const item of content) {
-    if (item && item.type === 'diff' && typeof item.path === 'string') {
-      diffs.push({
-        path: item.path,
-        oldText: typeof item.oldText === 'string' ? item.oldText : null,
-        newText: typeof item.newText === 'string' ? item.newText : '',
-      })
+  for (const part of msg.raw_json.split('\n')) {
+    const line = part.trim()
+    if (!line) continue
+    let parsed: any
+    try {
+      parsed = JSON.parse(line)
+    } catch {
+      continue
+    }
+    const content = parsed?.content
+    if (!Array.isArray(content)) continue
+    for (const item of content) {
+      if (item && item.type === 'diff' && typeof item.path === 'string') {
+        diffs.push({
+          path: item.path,
+          oldText: typeof item.oldText === 'string' ? item.oldText : null,
+          newText: typeof item.newText === 'string' ? item.newText : '',
+        })
+      }
     }
   }
   return diffs
