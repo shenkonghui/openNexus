@@ -159,7 +159,7 @@ type Service struct {
 	// 由 SetTerminalEnabled 注入（config.yaml agents.terminal_enabled）。
 	terminalEnabled bool
 
-	// goals 按稳定 session_id 记录生效中的通用 goal（/goal-opennexus 命令，内存态不跨重启）。
+	// goals 按稳定 session_id 记录生效中的通用 goal（/opennexus-goal 命令，内存态不跨重启）。
 	// goalSettings 可选：评估 agent/模型与限制条件（SetGoalSettingsRepo 注入）。nil 用默认限制。
 	goals        map[string]*sessionGoal
 	goalMu       sync.Mutex
@@ -1343,7 +1343,7 @@ func (s *Service) PromptWithExecution(ctx context.Context, sessionID, prompt str
 		return nil, err
 	}
 	// 内置 -opennexus 命令拦截（客户端侧处理，不发给 agent，不与原生命令冲突）：
-	// /yolo-opennexus 开关会话 YOLO；/goal-opennexus 由通用 goal 控制器处理
+	// /opennexus-yolo 开关会话 YOLO；/opennexus-goal 由通用 goal 控制器处理
 	// （status/clear 本地合成回复直接返回；set 把发给 agent 的 prompt 改写为 goal directive）。
 	if handled, yoloCh := s.interceptYolo(session, sessionID, prompt, executionID); handled {
 		return yoloCh, nil

@@ -232,7 +232,7 @@
     "tabAgent": "Agent CP Settings",
     "tabClassify": "Note Settings",
     "tabGoal": "Goal Settings",
-    "goalHint": "Configure /goal-opennexus auto-continue: after each turn an evaluation model checks whether the goal is met, and the session continues automatically if not. Works with every agent, independent of an agent's native /goal (e.g. Claude Code).",
+    "goalHint": "Configure /opennexus-goal auto-continue: after each turn an evaluation model checks whether the goal is met, and the session continues automatically if not. Works with every agent, independent of an agent's native /goal (e.g. Claude Code).",
     "goalAgent": "Evaluation Agent · Model",
     "goalAgentHint": "Agent and model used to evaluate whether the goal is met, selected together. Defaults to the session's own agent with its default model.",
     "goalAgentDefault": "Session's own agent (default)",
