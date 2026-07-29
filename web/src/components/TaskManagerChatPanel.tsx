@@ -6,7 +6,7 @@ import {
   respondPermission, getSession, listMessages,
   getLatestSessionByWorkspace, deleteSession,
 } from '../api/sessions'
-import { probeAgentConfigs, listAgentCommands, listAgentModes } from '../api/agents'
+import { probeAgentConfigs, listAgentCommands, listAgentModes, listAgents } from '../api/agents'
 import { streamPrompt, isTimeoutError } from '../api/sse'
 import { parsePermissionRequest } from '../utils/permission'
 import { Eraser } from 'lucide-react'
@@ -99,6 +99,13 @@ export default function TaskManagerChatPanel({
   const [commands, setCommands] = useState<AgentCommand[]>([])
   const [modes, setModes] = useState<SessionMode[]>([])
   const [skills, setSkills] = useState<AgentSkill[]>([])
+  // Agent·模型合并下拉的显示过滤正则（config.yaml agents.selector.filters），
+  // 与新建任务页/会话详情页同一套规则，避免任务助手下拉显示内容不一致。
+  const [selectorFilters, setSelectorFilters] = useState<string[]>([])
+
+  useEffect(() => {
+    listAgents().then((r) => setSelectorFilters(r.data.selector_filters || [])).catch(() => {})
+  }, [])
 
   // 权限
   const [pendingPermission, setPendingPermission] = useState<PermissionRequestPayload | null>(null)
@@ -570,6 +577,7 @@ export default function TaskManagerChatPanel({
       if (opt?.category === 'model') setSelectedModel(value)
     },
     agents: agents.map((a) => ({ type: a.type, display_name: a.display_name })),
+    agentModelFilters: selectorFilters,
     selectedAgent,
     onSelectAgent: (val: string) => { setSelectedAgent(val) },
     selectedModel,
