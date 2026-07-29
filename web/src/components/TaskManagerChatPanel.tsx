@@ -10,7 +10,7 @@ import { probeAgentConfigs, listAgentCommands, listAgentModes, listAgents } from
 import { streamPrompt, isTimeoutError } from '../api/sse'
 import { parsePermissionRequest } from '../utils/permission'
 import { Eraser } from 'lucide-react'
-import type { Agent, Message, Session, AgentCommand, ConfigOption, SessionMode, AgentSkill, PermissionRequestPayload } from '../types'
+import type { Agent, Message, Session, AgentCommand, ConfigOption, ConfigOptionValue, SessionMode, AgentSkill, PermissionRequestPayload } from '../types'
 import type { TaskManagerTask } from '../api/taskmanager'
 import type { ConvState } from './ConvStatusBar'
 import type { PanelCtx } from '../modes/types'
@@ -102,10 +102,33 @@ export default function TaskManagerChatPanel({
   // Agent·模型合并下拉的显示过滤正则（config.yaml agents.selector.filters），
   // 与新建任务页/会话详情页同一套规则，避免任务助手下拉显示内容不一致。
   const [selectorFilters, setSelectorFilters] = useState<string[]>([])
+  // 各 agent 探测到的模型列表：供合并下拉展示全部 agent·模型组合（参考 ChatPage 新建任务页）
+  const [agentModelsMap, setAgentModelsMap] = useState<Record<string, ConfigOptionValue[]>>({})
+  // 合并下拉选中「另一 agent 的某模型」时暂存目标模型，待该 agent 探测完成后应用
+  const pendingModelRef = useRef('')
 
   useEffect(() => {
     listAgents().then((r) => setSelectorFilters(r.data.selector_filters || [])).catch(() => {})
   }, [])
+
+  // 无会话时并行探测全部 agent 的模型列表（probeAgentConfigs 有前端缓存，不会重复请求）
+  useEffect(() => {
+    if (session || agents.length === 0) return
+    let alive = true
+    for (const a of agents) {
+      probeAgentConfigs(a.type)
+        .then((r) => {
+          if (!alive) return
+          const modelOpt = (r.data.config_options || []).find((o) => o.category === 'model')
+          setAgentModelsMap((prev) => ({ ...prev, [a.type]: modelOpt?.options || [] }))
+        })
+        .catch(() => {
+          // 探测失败：记为空列表，下拉中退化为 agent 级单项（使用默认模型）
+          if (alive) setAgentModelsMap((prev) => (a.type in prev ? prev : { ...prev, [a.type]: [] }))
+        })
+    }
+    return () => { alive = false }
+  }, [agents, session])
 
   // 权限
   const [pendingPermission, setPendingPermission] = useState<PermissionRequestPayload | null>(null)
@@ -210,9 +233,17 @@ export default function TaskManagerChatPanel({
       .then((r) => {
         if (!alive) return
         const opts = r.data.config_options || []
-        setProbeConfigs(opts)
         const modelOpt = opts.find((o) => o.category === 'model')
-        setSelectedModel(modelOpt?.current_value || '')
+        // 合并下拉跨 agent 选中的目标模型优先于探测默认值（仅在该模型确实存在时）
+        const pending = pendingModelRef.current
+        pendingModelRef.current = ''
+        if (pending && modelOpt?.options.some((v) => v.value === pending)) {
+          setProbeConfigs(opts.map((o) => (o.category === 'model' ? { ...o, current_value: pending } : o)))
+          setSelectedModel(pending)
+        } else {
+          setProbeConfigs(opts)
+          setSelectedModel(modelOpt?.current_value || '')
+        }
       })
       .catch(() => { if (alive) { setProbeConfigs([]); setSelectedModel('') } })
       .finally(() => { if (alive) setProbing(false) })
@@ -577,11 +608,25 @@ export default function TaskManagerChatPanel({
       if (opt?.category === 'model') setSelectedModel(value)
     },
     agents: agents.map((a) => ({ type: a.type, display_name: a.display_name })),
+    agentModelsMap,
     agentModelFilters: selectorFilters,
     selectedAgent,
     onSelectAgent: (val: string) => { setSelectedAgent(val) },
     selectedModel,
     probeConfigs,
+    // 合并下拉选择回调：同 agent 切模型直接应用；跨 agent 切换暂存目标模型，
+    // 待该 agent 探测完成后应用（见上方 probe effect，与 ChatPage 新建任务页一致）。
+    onSelectAgentModel: (agentType: string, modelValue: string) => {
+      if (!agentType) return
+      if (agentType !== selectedAgent) {
+        pendingModelRef.current = modelValue
+        setSelectedAgent(agentType)
+        return
+      }
+      if (!modelValue || modelValue === selectedModel) return
+      setSelectedModel(modelValue)
+      setProbeConfigs((prev) => prev.map((o) => (o.category === 'model' ? { ...o, current_value: modelValue } : o)))
+    },
     onSelectModel: (val: string) => {
       setSelectedModel(val)
       setProbeConfigs((prev) => prev.map((o) => (o.category === 'model' ? { ...o, current_value: val } : o)))
