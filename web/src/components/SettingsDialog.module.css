@@ -340,7 +340,7 @@
   border: 1px solid var(--border);
   border-radius: 4px;
   font-size: 12px;
-  font-family: 'IBM Plex Mono', 'Monaco', 'Menlo', monospace;
+  font-family: var(--font-mono);
   resize: vertical;
   background: var(--bg-input);
   color: var(--text-primary);
@@ -688,7 +688,7 @@
   margin: 3px 0 0;
   font-size: 11px;
   color: var(--text-tertiary);
-  font-family: 'IBM Plex Mono', 'Monaco', 'Menlo', monospace;
+  font-family: var(--font-mono);
 }
 
 .roleActions {

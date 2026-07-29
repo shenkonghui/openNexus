@@ -224,6 +224,26 @@
   text-transform: uppercase;
 }
 
+/* 执行模式徽标：worktree（已隔离）/ local（未创建 worktree） */
+.taskMode {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-weight: 500;
+  flex-shrink: 0;
+  font-family: var(--font-mono, monospace);
+}
+
+.modeWorktree {
+  background: var(--info-bg);
+  color: var(--info);
+}
+
+.modeLocal {
+  background: var(--bg-hover);
+  color: var(--text-muted);
+}
+
 /* worktree 分支徽标：图标 + 分支名，限宽省略，hover 提示 worktree 路径 */
 .taskBranch {
   display: inline-flex;

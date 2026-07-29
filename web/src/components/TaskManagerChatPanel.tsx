@@ -412,11 +412,13 @@ export default function TaskManagerChatPanel({
   // ===== /task 直发：把消息发送到指定任务的已有会话（不经过助手会话） =====
   // 注入到输入框斜杠菜单的合成命令：/create-task 直建任务、/task:<id> 直发消息、
   // /del-task:<id> 直删任务。输入 /task 或标题关键字即可筛选。
+  // kind=agent：与 /goal、/yolo-* 等内置命令一致展示为 AGENT 标签（客户端拦截处理，非 agent 原生 command）。
   const taskCommands = useMemo<AgentCommand[]>(() => {
     const cmds: AgentCommand[] = [{
       name: 'create-task',
       description: t('taskmanager.createTaskCmd'),
       has_input: true,
+      kind: 'agent',
     }]
     for (const tk of tasks || []) {
       const note = taskTitleNote(tk.title)
@@ -427,12 +429,14 @@ export default function TaskManagerChatPanel({
           name: `task:${tk.id}${suffix}`,
           description: t('taskmanager.sendToTask', { title: tk.title }),
           has_input: true,
+          kind: 'agent',
         })
       }
       cmds.push({
         name: `del-task:${tk.id}${suffix}`,
         description: t('taskmanager.delTaskCmd', { title: tk.title }),
         has_input: false,
+        kind: 'agent',
       })
     }
     return cmds
@@ -493,7 +497,7 @@ export default function TaskManagerChatPanel({
     )
   }
 
-  // /create-task 直建任务：detail 前缀 /opennexus-goal 使任务启动即进入 goal 循环，
+  // /create-task 直建任务：detail 前缀 /goal 使任务启动即进入 goal 循环，
   // 创建后立即启动——启动时后端自动创建 worktree（AI 命名分支）隔离执行。
   async function handleCreateTask(content: string) {
     setError('')
@@ -505,7 +509,7 @@ export default function TaskManagerChatPanel({
     try {
       await upsertTask(workspaceId, {
         id, title,
-        detail: `/opennexus-goal ${content}`,
+        detail: `/goal ${content}`,
         agent_type: agentType,
         model_value: selectedModel || undefined,
       })

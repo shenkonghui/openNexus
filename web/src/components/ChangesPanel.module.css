@@ -98,7 +98,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-family: 'IBM Plex Mono', 'Monaco', 'Menlo', monospace;
+  font-family: var(--font-mono);
   color: var(--text-primary);
 }
 
@@ -112,7 +112,7 @@
 }
 
 .fileStats {
-  font-family: 'IBM Plex Mono', 'Monaco', 'Menlo', monospace;
+  font-family: var(--font-mono);
   font-size: 10px;
   flex-shrink: 0;
   display: flex;
@@ -156,7 +156,7 @@
 }
 
 .detailPath {
-  font-family: 'IBM Plex Mono', 'Monaco', 'Menlo', monospace;
+  font-family: var(--font-mono);
   font-size: 12px;
   font-weight: 600;
   color: var(--text-primary);

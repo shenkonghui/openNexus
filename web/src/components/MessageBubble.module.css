@@ -165,7 +165,7 @@
   word-break: break-word;
   max-height: 240px;
   overflow-y: auto;
-  font-family: 'IBM Plex Mono', 'Monaco', 'Menlo', monospace;
+  font-family: var(--font-mono);
   color: var(--code-text);
 }
 
@@ -259,6 +259,6 @@
   word-break: break-all;
   max-height: 200px;
   overflow-y: auto;
-  font-family: 'IBM Plex Mono', 'Monaco', 'Menlo', monospace;
+  font-family: var(--font-mono);
   color: var(--code-text);
 }

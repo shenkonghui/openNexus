@@ -517,6 +517,13 @@ export default function TaskManagerView({ workspaceId, cwd, agents, restoreSessi
                         >{task.title}</span>
                       </span>
                       <span className={styles.taskHeaderRight}>
+                        {/* 执行模式标记：已创建 worktree 显示 worktree，否则为 local（启动后自动切换） */}
+                        <span
+                          className={`${styles.taskMode} ${task.worktree_path || task.branch ? styles.modeWorktree : styles.modeLocal}`}
+                          title={task.worktree_path || t(task.worktree_path || task.branch ? 'taskmanager.modeWorktreeHint' : 'taskmanager.modeLocalHint')}
+                        >
+                          {t(task.worktree_path || task.branch ? 'taskmanager.modeWorktree' : 'taskmanager.modeLocal')}
+                        </span>
                         {task.branch && (
                           <span className={styles.taskBranch} title={task.worktree_path || task.branch}>
                             <GitBranch size={11} />

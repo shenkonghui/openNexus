@@ -20,7 +20,7 @@
 .fileName {
   font-size: 13px;
   color: var(--text-primary);
-  font-family: 'IBM Plex Mono', 'Monaco', 'Menlo', monospace;
+  font-family: var(--font-mono);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -128,7 +128,7 @@
 }
 
 .editorArea :global(.cm-scroller) {
-  font-family: 'IBM Plex Mono', 'Monaco', 'Menlo', 'Courier New', monospace;
+  font-family: var(--font-mono);
 }
 
 .editorArea :global(.cm-gutters) {

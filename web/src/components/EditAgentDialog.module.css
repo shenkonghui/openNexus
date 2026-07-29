@@ -131,7 +131,7 @@
   border: 1px solid var(--border);
   border-radius: 6px;
   font-size: 14px;
-  font-family: 'IBM Plex Mono', 'Monaco', 'Menlo', monospace;
+  font-family: var(--font-mono);
   resize: vertical;
   background: var(--bg-input);
   color: var(--text-primary);

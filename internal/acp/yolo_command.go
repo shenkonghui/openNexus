@@ -10,19 +10,27 @@ import (
 	"opennexus/internal/models"
 )
 
-// 会话级 YOLO 的内置 slash 命令：/opennexus-yolo-on、/opennexus-yolo-off、/opennexus-yolo-status。
-// 与 /opennexus-goal 相同的客户端侧拦截机制：命令在 client 层处理并合成回复，
-// 不发给 agent；命令名带 opennexus- 前缀避免与 agent 原生命令冲突。
+// 会话级 YOLO 的内置 slash 命令：/yolo-on、/yolo-off、/yolo-status。
+// 与 /goal 相同的客户端侧拦截机制：命令在 client 层处理并合成回复，
+// 不发给 agent；拦截优先于 agent 原生同名命令，旧前缀名 /opennexus-yolo-*
+// 仍作为兼容别名被解析（不在 "/" 弹窗展示）。
 // on/off 可携带任务内容一起发送：切换 YOLO 后剩余文本作为 prompt 继续发给 agent。
 
 // 会话级 YOLO 开关的 slash 命令名。
 const (
-	yoloOnCommandName     = "opennexus-yolo-on"
-	yoloOffCommandName    = "opennexus-yolo-off"
-	yoloStatusCommandName = "opennexus-yolo-status"
+	yoloOnCommandName     = "yolo-on"
+	yoloOffCommandName    = "yolo-off"
+	yoloStatusCommandName = "yolo-status"
 )
 
-// parseYoloCommand 解析 "/opennexus-yolo-*" 输入。ok=false 表示不是 yolo 命令。
+// 历史带前缀命令名，仅兼容解析（存量任务 detail / 用户习惯）。
+const (
+	legacyYoloOnCommandName     = "opennexus-yolo-on"
+	legacyYoloOffCommandName    = "opennexus-yolo-off"
+	legacyYoloStatusCommandName = "opennexus-yolo-status"
+)
+
+// parseYoloCommand 解析 "/yolo-*"（含兼容别名 /opennexus-yolo-*）输入。ok=false 表示不是 yolo 命令。
 // action 取值：on / off / status；rest 是命令后携带的任务内容（可为空）。
 func parseYoloCommand(prompt string) (action, rest string, ok bool) {
 	trimmed := strings.TrimSpace(prompt)
@@ -30,6 +38,9 @@ func parseYoloCommand(prompt string) (action, rest string, ok bool) {
 		{yoloOnCommandName, "on"},
 		{yoloOffCommandName, "off"},
 		{yoloStatusCommandName, "status"},
+		{legacyYoloOnCommandName, "on"},
+		{legacyYoloOffCommandName, "off"},
+		{legacyYoloStatusCommandName, "status"},
 	} {
 		cmd := "/" + c.name
 		if trimmed == cmd {
@@ -65,7 +76,7 @@ func builtinYoloCommands() []acp.AvailableCommand {
 	}
 }
 
-// interceptYolo 在 PromptWithExecution 入口处拦截 /opennexus-yolo-* 命令。
+// interceptYolo 在 PromptWithExecution 入口处拦截 /yolo-* 命令。
 // 返回 handled=true 时调用方直接返回 ch（合成回复，不打扰 agent）；
 // on/off 携带任务内容时切换 YOLO 后返回 handled=false，并把 *promptForAgent
 // 改写为剩余任务内容，继续正常发送流程（与 goal set 一致）。
@@ -87,7 +98,7 @@ func (s *Service) interceptYolo(session *models.Session, sessionID, prompt strin
 			return false, nil
 		}
 		if updated.Yolo {
-			return true, s.syntheticCommandReply(session, prompt, "⚡ 本会话 YOLO 已开启：权限请求将按全局名单自动批准。用 /opennexus-yolo-off 关闭。", executionID)
+			return true, s.syntheticCommandReply(session, prompt, "⚡ 本会话 YOLO 已开启：权限请求将按全局名单自动批准。用 /yolo-off 关闭。", executionID)
 		}
 		return true, s.syntheticCommandReply(session, prompt, "✅ 本会话 YOLO 已关闭：权限请求恢复人工确认。", executionID)
 	default: // status
@@ -95,6 +106,6 @@ func (s *Service) interceptYolo(session *models.Session, sessionID, prompt strin
 		if session.Yolo {
 			state = "开启"
 		}
-		return true, s.syntheticCommandReply(session, prompt, fmt.Sprintf("本会话 YOLO 当前为：%s。用 /opennexus-yolo-on 或 /opennexus-yolo-off 切换。", state), executionID)
+		return true, s.syntheticCommandReply(session, prompt, fmt.Sprintf("本会话 YOLO 当前为：%s。用 /yolo-on 或 /yolo-off 切换。", state), executionID)
 	}
 }

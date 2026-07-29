@@ -780,7 +780,7 @@ func (s *TaskManagerService) taskForSession(dbSessionID uint) (cwd, taskID strin
 }
 
 // firstLine 取 prompt 首行并按 rune 截断到 maxLen 个字符，用于任务标题兜底。
-// 与 acp.extractTitle 行为对齐：剥离行首的 slash 命令前缀（如 /opennexus-goal），
+// 与 acp.extractTitle 行为对齐：剥离行首的 slash 命令前缀（如 /goal），
 // 避免命令名出现在标题里；按 rune 截断避免切断多字节字符产生乱码。
 func firstLine(prompt string, maxLen int) string {
 	s := strings.TrimSpace(prompt)

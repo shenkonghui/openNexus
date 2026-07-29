@@ -99,7 +99,7 @@
 .cwd {
   font-size: 12px;
   color: var(--text-muted);
-  font-family: 'IBM Plex Mono', 'Monaco', 'Menlo', monospace;
+  font-family: var(--font-mono);
 }
 
 /* 新建任务页配置栏：渲染于对话框下方，与会话详情页 configBar 风格一致 */

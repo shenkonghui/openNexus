@@ -130,8 +130,8 @@ const PDF_STYLE = `
   .pdf-export-root {
     background: #ffffff;
     color: #1a1d23;
-    font-family: 'Outfit', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
-      'Helvetica Neue', Arial, 'PingFang SC', 'Hiragino Sans GB',
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI',
+      'PingFang SC', 'Hiragino Sans GB', 'Noto Sans SC',
       'Microsoft YaHei', sans-serif;
     /* 内容宽度对齐整页 A4，页边距靠这里的 padding 留白（html2pdf margin 设为 0） */
     padding: 32px 28px;
@@ -165,7 +165,7 @@ const PDF_STYLE = `
   .markdown-body code {
     background: #f3f4f6; padding: 2px 6px; border-radius: 4px;
     font-size: 13px; color: #1f2937;
-    font-family: 'IBM Plex Mono', 'Monaco', 'Menlo', monospace;
+    font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
   }
   .markdown-body pre {
     background: #f6f8fa; border: 1px solid #e0e0e6; border-radius: 6px;

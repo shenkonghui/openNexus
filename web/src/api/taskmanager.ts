@@ -29,7 +29,7 @@ export interface TaskManagerTask {
   finished_at?: string
   error?: string
   depends_on?: string[]
-  /** goal 状态（会话设定 /opennexus-goal 后同步） */
+  /** goal 状态（会话设定 /goal 后同步） */
   goal?: TaskGoalState
 }
 

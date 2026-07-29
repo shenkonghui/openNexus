@@ -134,7 +134,7 @@ export default function RawConfigCard() {
                   border: '1px solid var(--border)',
                   borderRadius: '6px',
                   fontSize: '13px',
-                  fontFamily: "'IBM Plex Mono', 'Monaco', 'Menlo', monospace",
+                  fontFamily: 'var(--font-mono)',
                   background: 'var(--bg-input)',
                   color: 'var(--text-primary)',
                   resize: 'vertical',

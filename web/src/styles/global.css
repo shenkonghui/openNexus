@@ -1,6 +1,11 @@
-/* OpenHands 风格主题：Outfit + IBM Plex Mono */
-@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap');
-@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,300;0,400;0,500;0,600;1,400&display=swap');
+/* 字体：Inter（UI）+ JetBrains Mono（代码）+ Noto Sans SC（非 macOS 中文回退） */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:ital,wght@0,300;0,400;0,500;0,600;1,400&family=Noto+Sans+SC:wght@300;400;500;700&display=swap');
+
+/* ===== 字体栈（主题无关） ===== */
+:root {
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans SC', 'Microsoft YaHei', sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Monaco, Consolas, monospace;
+}
 
 /* ===== 深色主题（默认，参考 OpenHands） ===== */
 :root,
@@ -136,7 +141,7 @@
 }
 
 body {
-  font-family: 'Outfit', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  font-family: var(--font-sans);
   font-size: var(--font-size-base, 14px);
   line-height: 1.5;
   color: var(--text-primary);
@@ -168,7 +173,7 @@ textarea {
 code,
 pre,
 .font-mono {
-  font-family: 'IBM Plex Mono', 'Monaco', 'Menlo', monospace;
+  font-family: var(--font-mono);
 }
 
 /* 滚动条 */
@@ -200,7 +205,7 @@ pre,
   border-radius: 4px;
   color: var(--code-text);
   border: 1px solid var(--code-border);
-  font-family: 'IBM Plex Mono', 'Monaco', 'Menlo', monospace;
+  font-family: var(--font-mono);
   letter-spacing: -0.2px;
 }
 

@@ -196,7 +196,7 @@
 .repoPath {
   font-size: 11px;
   color: var(--text-muted);
-  font-family: 'IBM Plex Mono', 'Monaco', 'Menlo', monospace;
+  font-family: var(--font-mono);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;

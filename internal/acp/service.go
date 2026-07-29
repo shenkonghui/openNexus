@@ -78,6 +78,8 @@ type Service struct {
 	modes          map[string][]acp.SessionMode
 	// probeCache 缓存探测结果，按 agentType 存储，避免重复创建临时会话探测。
 	probeCache map[string][]acp.SessionConfigOption
+	// probeCachePath 是探测结果持久化文件路径，启动时从此文件预加载 probeCache。
+	probeCachePath string
 	// agentInitInfo 按 agentType 缓存最近一次 ACP 握手响应（能力/认证方式/协议版本），
 	// 断开后保留最后一次握手结果，供设置页展示 ACP 能力。
 	agentInitInfo map[string]acp.InitializeResponse
@@ -172,7 +174,7 @@ type Service struct {
 	// bridgeSocketDir bridge socket 目录（SetBridgeMode 注入，已经 ResolveBridgeSocketDir 归一）。
 	bridgeSocketDir string
 
-	// goals 按稳定 session_id 记录生效中的通用 goal（/opennexus-goal 命令，内存态不跨重启）。
+	// goals 按稳定 session_id 记录生效中的通用 goal（/goal 命令，内存态不跨重启）。
 	// goalSettings 可选：评估 agent/模型与限制条件（SetGoalSettingsRepo 注入）。nil 用默认限制。
 	goals        map[string]*sessionGoal
 	goalMu       sync.Mutex
@@ -253,6 +255,13 @@ func NewService(db *gorm.DB, messagesDir string, wsConfig config.WorkspaceConfig
 		}
 		return sess.ID
 	})
+	// 探测缓存持久化：路径取 SessionDir 的同级目录（与 opennexus.db 同层），
+	// 启动时从文件预加载 probeCache，避免每次重启都重新探测 agent 模型列表。
+	svc.probeCachePath = filepath.Join(filepath.Dir(wsConfig.SessionDir), "model_cache.json")
+	if cached := loadProbeCacheFromFile(svc.probeCachePath); cached != nil {
+		svc.probeCache = cached
+		slog.Info("已从磁盘加载模型缓存", "path", svc.probeCachePath, "agents", len(cached))
+	}
 	return svc
 }
 
@@ -1459,9 +1468,9 @@ func (s *Service) PromptWithExecution(ctx context.Context, sessionID, prompt str
 	if err != nil {
 		return nil, err
 	}
-	// 内置 -opennexus 命令拦截（客户端侧处理，不发给 agent，不与原生命令冲突）：
-	// /opennexus-yolo-on|off|status 开关会话 YOLO（on/off 可附带任务内容，
-	// 切换后把发给 agent 的 prompt 改写为剩余任务）；/opennexus-goal 由通用 goal 控制器处理
+	// 内置命令拦截（客户端侧处理，不发给 agent，优先于原生同名命令）：
+	// /yolo-on|off|status 开关会话 YOLO（on/off 可附带任务内容，
+	// 切换后把发给 agent 的 prompt 改写为剩余任务）；/goal 由通用 goal 控制器处理
 	// （status/clear 本地合成回复直接返回；set 把发给 agent 的 prompt 改写为 goal directive）。
 	promptForAgent := prompt
 	if handled, yoloCh := s.interceptYolo(session, sessionID, prompt, executionID, &promptForAgent); handled {
@@ -2410,18 +2419,20 @@ func (s *Service) ListCommands(sessionID string) ([]acp.AvailableCommand, error)
 	return appendBuiltinCommands(merged), nil
 }
 
-// appendBuiltinCommands 追加内置 -opennexus 命令（goal 循环 / 会话 YOLO），供 "/" 弹窗展示。
-// 命令名带后缀不与原生命令冲突；已存在同名命令时跳过。
+// appendBuiltinCommands 追加内置命令（/goal 循环、/yolo-* 会话 YOLO），供 "/" 弹窗展示。
+// 内置命令在客户端侧拦截、优先于 agent 原生同名命令，因此同名时用内置描述覆盖
+// 原生条目，保证弹窗描述与实际行为一致。
 func appendBuiltinCommands(cmds []acp.AvailableCommand) []acp.AvailableCommand {
 	for _, builtin := range append([]acp.AvailableCommand{builtinGoalCommand()}, builtinYoloCommands()...) {
-		exists := false
-		for _, c := range cmds {
+		replaced := false
+		for i, c := range cmds {
 			if c.Name == builtin.Name {
-				exists = true
+				cmds[i] = builtin
+				replaced = true
 				break
 			}
 		}
-		if !exists {
+		if !replaced {
 			cmds = append(cmds, builtin)
 		}
 	}
@@ -2694,6 +2705,11 @@ func (s *Service) probeConfigViaSession(ctx context.Context, agentType string) (
 		s.agentCommands[agentType] = cmds
 	}
 	s.mu.Unlock()
+	// 异步持久化到磁盘：下次启动可直接从文件加载，无需重新探测
+	cachePath := s.probeCachePath
+	persistCopy := make([]acp.SessionConfigOption, len(out))
+	copy(persistCopy, out)
+	go persistProbeCacheToFile(cachePath, agentType, persistCopy)
 	slog.Info("探测配置已缓存", "agent", agentType, "config_count", len(out), "modes", len(modes), "commands", len(cmds))
 	return out, nil
 }

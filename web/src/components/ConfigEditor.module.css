@@ -144,7 +144,7 @@
   border: 1px solid var(--border);
   border-radius: 4px;
   font-size: 12px;
-  font-family: 'IBM Plex Mono', 'Monaco', 'Menlo', monospace;
+  font-family: var(--font-mono);
   color: var(--text-secondary);
 }
 
@@ -221,7 +221,7 @@
 .scanItemPath {
   font-size: 11px;
   color: var(--text-muted);
-  font-family: 'IBM Plex Mono', 'Monaco', 'Menlo', monospace;
+  font-family: var(--font-mono);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -241,7 +241,7 @@
   border: 1px solid var(--border);
   border-radius: 10px;
   color: var(--text-muted);
-  font-family: 'IBM Plex Mono', 'Monaco', 'Menlo', monospace;
+  font-family: var(--font-mono);
 }
 
 /* MCP server 状态项 */
@@ -337,7 +337,7 @@
   font-size: 12px;
   font-weight: 600;
   color: var(--text-primary);
-  font-family: 'IBM Plex Mono', 'Monaco', 'Menlo', monospace;
+  font-family: var(--font-mono);
 }
 
 .toolDesc {
@@ -472,7 +472,7 @@
   border: 1px solid var(--border);
   border-radius: 6px;
   font-size: 13px;
-  font-family: 'IBM Plex Mono', 'Monaco', 'Menlo', monospace;
+  font-family: var(--font-mono);
   background: var(--bg-input);
   color: var(--text-primary);
 }
@@ -582,7 +582,7 @@
   margin-top: 2px;
   font-size: 11px;
   color: var(--text-muted);
-  font-family: 'IBM Plex Mono', 'Monaco', 'Menlo', monospace;
+  font-family: var(--font-mono);
   word-break: break-all;
 }
 
@@ -593,7 +593,7 @@
   border: 1px solid var(--border);
   border-radius: 4px;
   font-size: 12px;
-  font-family: 'IBM Plex Mono', 'Monaco', 'Menlo', monospace;
+  font-family: var(--font-mono);
   color: var(--text-secondary);
   overflow-x: auto;
   white-space: pre;
