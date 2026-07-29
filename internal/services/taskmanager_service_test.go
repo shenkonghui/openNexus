@@ -238,6 +238,29 @@ func TestRegisterSessionTask_NewManualSession(t *testing.T) {
 	}
 }
 
+// TestFirstLine 验证任务标题兜底逻辑：剥离 slash 命令前缀、按 rune 截断避免中文乱码。
+func TestFirstLine(t *testing.T) {
+	cases := []struct {
+		name   string
+		prompt string
+		maxLen int
+		want   string
+	}{
+		{"普通首行", "帮我重构 router.go\n第二行", 40, "帮我重构 router.go"},
+		{"剥离命令前缀", "/opennexus-goal docker context 设置为 ssh root@k3s 上的docker", 40, "docker context 设置为 ssh root@k3s 上的docker"},
+		{"纯命令无参数保留原样", "/help", 40, "/help"},
+		{"中文按rune截断不产生乱码", "/opennexus-goal " + strings.Repeat("设置", 30), 10, "设置设置设置设置设置"},
+		{"maxLen为0不截断", "abc", 0, "abc"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := firstLine(tc.prompt, tc.maxLen); got != tc.want {
+				t.Errorf("firstLine(%q, %d) = %q, want %q", tc.prompt, tc.maxLen, got, tc.want)
+			}
+		})
+	}
+}
+
 // TestRegisterSessionTask_DedupByDBSessionID 验证按 db_session_id 去重：重复登记不新增条目。
 func TestRegisterSessionTask_DedupByDBSessionID(t *testing.T) {
 	cwd := t.TempDir()
