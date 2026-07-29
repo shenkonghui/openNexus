@@ -13,8 +13,9 @@ import (
 
 // mockTMExecutor 捕获传入 RunSessionTask 的 cfg，用于断言父会话透传。
 type mockTMExecutor struct {
-	lastCfg acp.SessionTaskConfig
-	result  acp.SessionTaskResult
+	lastCfg         acp.SessionTaskConfig
+	result          acp.SessionTaskResult
+	deletedSessions []string // 记录 DeleteSession 被调用的会话 ID
 }
 
 func (m *mockTMExecutor) RunSessionTask(_ context.Context, cfg acp.SessionTaskConfig) (acp.SessionTaskResult, error) {
@@ -42,6 +43,11 @@ func (m *mockTMExecutor) Prompt(_ context.Context, _, _ string) (<-chan models.M
 	ch := make(chan models.Message)
 	close(ch)
 	return ch, nil
+}
+
+func (m *mockTMExecutor) DeleteSession(_ context.Context, sessionID string) error {
+	m.deletedSessions = append(m.deletedSessions, sessionID)
+	return nil
 }
 
 // TestExecuteTaskUsesManualSource 验证 executeTask 创建的会话 source 为 manual，
@@ -290,10 +296,12 @@ func TestRegisterSessionTask_EmptyInputs(t *testing.T) {
 }
 
 // TestUnregisterSessionTask_RemovesRegisteredTask 验证删除会话时同步移除
-// tasks.json 中按 db_session_id 登记的任务，与 RegisterSessionTask 对称。
+// tasks.json 中按 db_session_id 登记的任务，与 RegisterSessionTask 对称；
+// 会话本身正在被删除，不应再回头调用 DeleteSession。
 func TestUnregisterSessionTask_RemovesRegisteredTask(t *testing.T) {
 	cwd := t.TempDir()
-	svc := NewTaskManagerService(&mockTMExecutor{})
+	mock := &mockTMExecutor{}
+	svc := NewTaskManagerService(mock)
 	sess := &models.Session{ID: 77, SessionID: "s-77", AgentType: "a", Source: models.SessionSourceManual}
 	if err := svc.RegisterSessionTask(cwd, sess, "prompt"); err != nil {
 		t.Fatalf("登记: %v", err)
@@ -307,6 +315,53 @@ func TestUnregisterSessionTask_RemovesRegisteredTask(t *testing.T) {
 	}
 	if len(def.Tasks) != 0 {
 		t.Fatalf("注销后 tasks 数量 = %d, want 0", len(def.Tasks))
+	}
+	if len(mock.deletedSessions) != 0 {
+		t.Fatalf("会话发起的注销不应再删会话，实际删了 %v", mock.deletedSessions)
+	}
+}
+
+// TestDeleteTask_DeletesLinkedSession 验证删除任务时连带删除其关联会话，
+// 使左侧任务列表（读 DB 会话）与右侧任务列表（读 tasks.json）保持同步。
+func TestDeleteTask_DeletesLinkedSession(t *testing.T) {
+	cwd := t.TempDir()
+	mock := &mockTMExecutor{}
+	svc := NewTaskManagerService(mock)
+	dbID := uint(88)
+	if err := svc.UpsertTask(cwd, models.TaskManagerTask{ID: "t1", Title: "T", Detail: "d"}); err != nil {
+		t.Fatalf("UpsertTask: %v", err)
+	}
+	if err := svc.storeFor(cwd).UpdateTaskStatus("t1", func(tk *models.TaskManagerTask) {
+		tk.SessionID = "acp-uuid-88"
+		tk.DBSessionID = &dbID
+	}); err != nil {
+		t.Fatalf("写入会话关联: %v", err)
+	}
+	if err := svc.DeleteTask(cwd, "t1"); err != nil {
+		t.Fatalf("DeleteTask: %v", err)
+	}
+	def, _ := svc.Load(cwd)
+	if len(def.Tasks) != 0 {
+		t.Fatalf("删除后 tasks 数量 = %d, want 0", len(def.Tasks))
+	}
+	if len(mock.deletedSessions) != 1 || mock.deletedSessions[0] != "acp-uuid-88" {
+		t.Fatalf("应连带删除关联会话 acp-uuid-88，实际 %v", mock.deletedSessions)
+	}
+}
+
+// TestDeleteTask_NoSessionIsNoop 验证无关联会话的任务删除时不调用 DeleteSession。
+func TestDeleteTask_NoSessionIsNoop(t *testing.T) {
+	cwd := t.TempDir()
+	mock := &mockTMExecutor{}
+	svc := NewTaskManagerService(mock)
+	if err := svc.UpsertTask(cwd, models.TaskManagerTask{ID: "t1", Title: "T", Detail: "d"}); err != nil {
+		t.Fatalf("UpsertTask: %v", err)
+	}
+	if err := svc.DeleteTask(cwd, "t1"); err != nil {
+		t.Fatalf("DeleteTask: %v", err)
+	}
+	if len(mock.deletedSessions) != 0 {
+		t.Fatalf("无关联会话不应调用 DeleteSession，实际 %v", mock.deletedSessions)
 	}
 }
 

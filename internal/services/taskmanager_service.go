@@ -28,6 +28,8 @@ type TaskManagerExecutor interface {
 	Prompt(ctx context.Context, sessionID, prompt string) (<-chan models.Message, error)
 	// RunPromptOnce 在临时 ACP 会话发送一次 prompt 并收集文本响应（不落库），用于 AI 生成分支名。
 	RunPromptOnce(ctx context.Context, agentType, modelValue, prompt string) (string, error)
+	// DeleteSession 删除会话（含消息），删除任务时用于同步移除其关联会话。
+	DeleteSession(ctx context.Context, sessionID string) error
 }
 
 // TaskManagerService 管理任务管理：读写工作区管理数据目录中的 tasks.json、按并发上限调度任务、
@@ -122,11 +124,13 @@ func (s *TaskManagerService) UpsertTask(cwd string, task models.TaskManagerTask)
 	return s.storeFor(cwd).UpsertTask(task)
 }
 
-// DeleteTask 删除指定任务。若任务正在运行则先取消，并尝试清理其 worktree。
+// DeleteTask 删除指定任务。若任务正在运行则先取消，并尝试清理其 worktree；
+// 任务关联的会话（db_session_id/session_id）一并删除，使左侧任务列表同步移除，
+// 与「删除会话 → 注销任务」（UnregisterSessionTask）保持对称。
 func (s *TaskManagerService) DeleteTask(cwd, taskID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	removed, err := s.deleteTaskLocked(cwd, func(t *models.TaskManagerTask) bool { return t.ID == taskID })
+	removed, err := s.deleteTaskLocked(cwd, func(t *models.TaskManagerTask) bool { return t.ID == taskID }, true)
 	if err != nil {
 		return err
 	}
@@ -145,27 +149,32 @@ func (s *TaskManagerService) UnregisterSessionTask(cwd string, dbSessionID uint)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// 会话本身正在被删除，此处只需移除登记条目，不再回头删会话。
 	_, err := s.deleteTaskLocked(cwd, func(t *models.TaskManagerTask) bool {
 		return t.DBSessionID != nil && *t.DBSessionID == dbSessionID
-	})
+	}, false)
 	return err
 }
 
 // deleteTaskLocked 删除首个匹配的任务（需持有 s.mu）：取消运行、清理 worktree 并写回。
-// 返回是否删除了条目。
-func (s *TaskManagerService) deleteTaskLocked(cwd string, match func(*models.TaskManagerTask) bool) (bool, error) {
+// deleteSession 为 true 时连带删除任务关联的会话（best-effort，失败仅记日志），
+// 会话发起的注销（UnregisterSessionTask）传 false 避免重复删除。返回是否删除了条目。
+func (s *TaskManagerService) deleteTaskLocked(cwd string, match func(*models.TaskManagerTask) bool, deleteSession bool) (bool, error) {
 	def, err := s.storeFor(cwd).Load()
 	if err != nil {
 		return false, err
 	}
 	idx := -1
-	var taskID, wtPath, branch string
+	var taskID, wtPath, branch, sessID string
+	var dbSessID *uint
 	for i := range def.Tasks {
 		if match(&def.Tasks[i]) {
 			idx = i
 			taskID = def.Tasks[i].ID
 			wtPath = def.Tasks[i].WorktreePath
 			branch = def.Tasks[i].Branch
+			sessID = def.Tasks[i].SessionID
+			dbSessID = def.Tasks[i].DBSessionID
 			break
 		}
 	}
@@ -183,6 +192,21 @@ func (s *TaskManagerService) deleteTaskLocked(cwd string, match func(*models.Tas
 	def.Tasks = append(def.Tasks[:idx], def.Tasks[idx+1:]...)
 	if err := s.storeFor(cwd).Save(def); err != nil {
 		return false, err
+	}
+	// 连带删除关联会话：否则左侧任务列表（读 DB 会话）仍展示已删任务的对话条目，
+	// 与右侧任务列表（读 tasks.json）不一致。
+	if deleteSession && s.exec != nil {
+		sid := sessID
+		if sid == "" && dbSessID != nil {
+			if sess, gerr := s.exec.GetSessionByDBID(*dbSessID); gerr == nil && sess != nil {
+				sid = sess.SessionID
+			}
+		}
+		if sid != "" {
+			if derr := s.exec.DeleteSession(context.Background(), sid); derr != nil {
+				slog.Warn("删除任务时清理关联会话失败", "task", taskID, "session", sid, "err", derr)
+			}
+		}
 	}
 	return true, nil
 }
