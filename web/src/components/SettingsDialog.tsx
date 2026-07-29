@@ -1,4 +1,4 @@
-import { useState, useEffect, type ReactNode } from 'react'
+import { useState, useEffect, useMemo, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { X, SlidersHorizontal, Bot, Wrench, StickyNote, ListTodo, Shield, Monitor, Target } from 'lucide-react'
@@ -498,6 +498,82 @@ export default function SettingsDialog({ initialTab = 'language', onClose }: Pro
     return out
   }
 
+  // 转义正则元字符：勾选组合时生成精确匹配规则用
+  function escapeRegex(s: string): string {
+    return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  }
+
+  // Agent/模型显示过滤的勾选列表：按 agent 分组列出全部已知组合（与 AgentModelSelector 的展示项一致），
+  // 模型未探测到的 agent 退化为 agent 级单项。
+  const selectorGroups = useMemo(() => agents.map((a) => ({
+    agent: a,
+    models: defaultModelsMap[a.type] || [],
+  })), [agents, defaultModelsMap])
+
+  const selectorComboKeys = useMemo(() => selectorGroups.flatMap((g) =>
+    g.models.length > 0
+      ? g.models.map((m) => `${g.agent.type}\u0000${m.value}`)
+      : [`${g.agent.type}\u0000`],
+  ), [selectorGroups])
+
+  // 由当前过滤规则推导各组合的勾选状态（匹配逻辑与下拉框一致：空规则=全部显示，任一正则命中即显示）
+  const selectorChecked = useMemo(() => {
+    const regexes: RegExp[] = []
+    for (const f of linesToList(selectorFiltersText)) {
+      try { regexes.push(new RegExp(f, 'i')) } catch { /* 非法正则忽略，保存时后端会校验 */ }
+    }
+    const matches = (...cands: string[]) =>
+      regexes.length === 0 || regexes.some((re) => cands.some((c) => re.test(c)))
+    const map: Record<string, boolean> = {}
+    for (const g of selectorGroups) {
+      if (g.models.length > 0) {
+        for (const m of g.models) {
+          map[`${g.agent.type}\u0000${m.value}`] = matches(`${g.agent.type}/${m.value}`, `${g.agent.type}/${m.name}`)
+        }
+      } else {
+        map[`${g.agent.type}\u0000`] = matches(g.agent.type)
+      }
+    }
+    return map
+  }, [selectorGroups, selectorFiltersText])
+
+  // 勾选变化后把规则重写为精确匹配正则：全选=清空规则（全部显示，含后续新模型），全不选=^$（全部隐藏）
+  function applySelectorChecked(next: Record<string, boolean>) {
+    const picked = selectorComboKeys.filter((k) => next[k])
+    let lines: string[]
+    if (picked.length === selectorComboKeys.length) {
+      lines = []
+    } else if (picked.length === 0) {
+      lines = ['^$']
+    } else {
+      lines = picked.map((k) => {
+        const [agentType, modelValue] = k.split('\u0000')
+        // agent 级条目允许后续探测到的模型也显示（匹配 "type" 与 "type/xxx"）
+        return modelValue ? `^${escapeRegex(`${agentType}/${modelValue}`)}$` : `^${escapeRegex(agentType)}(/|$)`
+      })
+    }
+    setSelectorFiltersText(lines.join('\n'))
+    setSelectorSaved(false)
+  }
+
+  function toggleSelectorCombo(key: string) {
+    applySelectorChecked({ ...selectorChecked, [key]: !selectorChecked[key] })
+  }
+
+  // 整组勾选/取消（agent 分组头部的复选框）
+  function toggleSelectorGroup(keys: string[]) {
+    const allOn = keys.every((k) => selectorChecked[k])
+    const next = { ...selectorChecked }
+    for (const k of keys) next[k] = !allOn
+    applySelectorChecked(next)
+  }
+
+  function setAllSelectorCombos(on: boolean) {
+    const next: Record<string, boolean> = {}
+    for (const k of selectorComboKeys) next[k] = on
+    applySelectorChecked(next)
+  }
+
   // 保存 agent+模型 显示过滤：后端校验正则合法性后写回 config.yaml，保存即生效
   async function handleSaveSelectorFilters() {
     setSelectorSaving(true); setError(''); setSelectorSaved(false)
@@ -756,15 +832,72 @@ export default function SettingsDialog({ initialTab = 'language', onClose }: Pro
                   {/* agent+模型 合并下拉的显示过滤（写回 config.yaml agents.selector.filters，保存即生效） */}
                   <div className={styles.defaultSection}>
                     <label className={styles.label}>{t('settings.selectorFilters')}</label>
-                    <p className={styles.hint}>{t('settings.selectorFiltersHint')}</p>
-                    <textarea
-                      className={styles.textarea}
-                      rows={4}
-                      value={selectorFiltersText}
-                      onChange={(e) => { setSelectorFiltersText(e.target.value); setSelectorSaved(false) }}
-                      placeholder={'^claude-code/\nsonnet\n^cursor/.*gpt-5.*'}
-                      spellCheck={false}
-                    />
+                    <p className={styles.hint}>{t('settings.selectorFiltersListHint')}</p>
+                    <div className={styles.inlineRow}>
+                      <button type="button" className={styles.secondaryBtn}
+                        onClick={() => setAllSelectorCombos(true)}
+                      >{t('settings.selectorSelectAll')}</button>
+                      <button type="button" className={styles.secondaryBtn}
+                        onClick={() => setAllSelectorCombos(false)}
+                      >{t('settings.selectorSelectNone')}</button>
+                      <button type="button" className={styles.secondaryBtn}
+                        onClick={handleProbeDefaultModels}
+                        disabled={defaultModelsProbing}
+                        title={t('scheduledTask.probeTitle')}
+                      >{defaultModelsProbing ? t('common.loading') : t('scheduledTask.probeConfig')}</button>
+                    </div>
+                    <div className={styles.selectorFilterList}>
+                      {selectorGroups.map((g) => {
+                        const keys = g.models.length > 0
+                          ? g.models.map((m) => `${g.agent.type}\u0000${m.value}`)
+                          : [`${g.agent.type}\u0000`]
+                        const onCount = keys.filter((k) => selectorChecked[k]).length
+                        return (
+                          <div key={g.agent.type} className={styles.selectorFilterGroup}>
+                            <label className={styles.selectorFilterGroupHead}>
+                              <input
+                                type="checkbox"
+                                checked={onCount === keys.length}
+                                ref={(el) => { if (el) el.indeterminate = onCount > 0 && onCount < keys.length }}
+                                onChange={() => toggleSelectorGroup(keys)}
+                              />
+                              <span>{g.agent.display_name}（{g.agent.type}）</span>
+                              <span className={styles.selectorFilterCount}>{onCount}/{keys.length}</span>
+                            </label>
+                            {g.models.length > 0 && (
+                              <div className={styles.selectorFilterModels}>
+                                {g.models.map((m) => {
+                                  const key = `${g.agent.type}\u0000${m.value}`
+                                  return (
+                                    <label key={key} className={styles.selectorFilterItem} title={m.value}>
+                                      <input
+                                        type="checkbox"
+                                        checked={!!selectorChecked[key]}
+                                        onChange={() => toggleSelectorCombo(key)}
+                                      />
+                                      <span>{m.name !== m.value ? `${m.name} (${m.value})` : m.value}</span>
+                                    </label>
+                                  )
+                                })}
+                              </div>
+                            )}
+                          </div>
+                        )
+                      })}
+                    </div>
+                    {/* 高级：直接编辑正则规则（勾选操作会覆写此处内容） */}
+                    <details className={styles.advancedSection}>
+                      <summary className={styles.advancedSummary}>{t('settings.selectorFiltersAdvanced')}</summary>
+                      <p className={styles.hint}>{t('settings.selectorFiltersHint')}</p>
+                      <textarea
+                        className={styles.textarea}
+                        rows={4}
+                        value={selectorFiltersText}
+                        onChange={(e) => { setSelectorFiltersText(e.target.value); setSelectorSaved(false) }}
+                        placeholder={'^claude-code/\nsonnet\n^cursor/.*gpt-5.*'}
+                        spellCheck={false}
+                      />
+                    </details>
                     <div className={styles.inlineRow}>
                       <button type="button" className={styles.saveNoteBtn}
                         onClick={handleSaveSelectorFilters}
