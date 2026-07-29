@@ -13,9 +13,10 @@ import (
 
 // mockTMExecutor 捕获传入 RunSessionTask 的 cfg，用于断言父会话透传。
 type mockTMExecutor struct {
-	lastCfg         acp.SessionTaskConfig
-	result          acp.SessionTaskResult
-	deletedSessions []string // 记录 DeleteSession 被调用的会话 ID
+	lastCfg          acp.SessionTaskConfig
+	result           acp.SessionTaskResult
+	deletedSessions  []string // 记录 DeleteSession 被调用的会话 ID
+	canceledSessions []string // 记录 CancelSession 被调用的会话 ID
 }
 
 func (m *mockTMExecutor) RunSessionTask(_ context.Context, cfg acp.SessionTaskConfig) (acp.SessionTaskResult, error) {
@@ -43,6 +44,11 @@ func (m *mockTMExecutor) Prompt(_ context.Context, _, _ string) (<-chan models.M
 	ch := make(chan models.Message)
 	close(ch)
 	return ch, nil
+}
+
+func (m *mockTMExecutor) CancelSession(_ context.Context, sessionID string) error {
+	m.canceledSessions = append(m.canceledSessions, sessionID)
+	return nil
 }
 
 func (m *mockTMExecutor) DeleteSession(_ context.Context, sessionID string) error {

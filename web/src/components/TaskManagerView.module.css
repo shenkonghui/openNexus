@@ -66,6 +66,42 @@
   cursor: default;
 }
 
+/* 默认并发数量选择器（写 tasks.json 的 max_parallel） */
+.parallelCtl {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.parallelLabel {
+  white-space: nowrap;
+}
+
+.parallelSelect {
+  background: var(--bg-base);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  border-radius: 6px;
+  padding: 3px 4px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.parallelSelect:hover:not(:disabled),
+.parallelSelect:focus {
+  border-color: var(--accent);
+  color: var(--accent);
+  outline: none;
+}
+
+.parallelSelect:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 .chatCol {
   display: flex;
   flex-direction: column;
@@ -648,7 +684,7 @@
   word-break: break-word;
 }
 
-/* ===== 「展开全部」网格模式：任务窗口按浏览器宽度自适应平铺 ===== */
+/* ===== 「多任务模式」网格视图：任务窗口按浏览器宽度自适应平铺 ===== */
 .gridCol {
   display: flex;
   flex-direction: column;

@@ -10,6 +10,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"opennexus/internal/models"
+	"opennexus/internal/repository"
 	"opennexus/internal/services"
 )
 
@@ -22,11 +23,30 @@ type TaskManagerWorkspaceStore interface {
 type TaskManagerHandler struct {
 	svc     *services.TaskManagerService
 	wsStore TaskManagerWorkspaceStore
+	// settingsRepo 提供归档保留天数配置（可为 nil，此时用默认天数）。
+	settingsRepo *repository.TaskSettingsRepository
 }
 
 // NewTaskManagerHandler 创建 TaskManagerHandler。
 func NewTaskManagerHandler(svc *services.TaskManagerService, wsStore TaskManagerWorkspaceStore) *TaskManagerHandler {
 	return &TaskManagerHandler{svc: svc, wsStore: wsStore}
+}
+
+// SetSettingsRepo 注入任务设置仓库，用于读取用户配置的归档保留天数。
+func (h *TaskManagerHandler) SetSettingsRepo(repo *repository.TaskSettingsRepository) {
+	h.settingsRepo = repo
+}
+
+// archiveRetentionDays 返回当前用户配置的归档保留天数（未配置/异常时取默认 3 天）。
+func (h *TaskManagerHandler) archiveRetentionDays(c *gin.Context) int {
+	if h.settingsRepo != nil {
+		if uid, ok := currentUserID(c); ok {
+			if s, err := h.settingsRepo.FindByUserID(uid); err == nil && s.ArchiveRetentionDays > 0 {
+				return s.ArchiveRetentionDays
+			}
+		}
+	}
+	return models.DefaultArchiveRetentionDays
 }
 
 // resolveCwd 通过 workspace_id 解析 cwd，并校验归属当前用户。
@@ -302,4 +322,93 @@ func (h *TaskManagerHandler) GitInit(c *gin.Context) {
 		return
 	}
 	Success(c, http.StatusOK, gin.H{"cwd": cwd, "is_git_repo": true})
+}
+
+type archiveRequest struct {
+	TaskID string `json:"task_id"`
+}
+
+// Archive POST /api/v1/taskmanager/archive?workspace_id=123 — 归档任务到回收站。
+// task_id 为空或 "*" 时归档全部任务；顺带清理已过保留期的归档条目。
+func (h *TaskManagerHandler) Archive(c *gin.Context) {
+	cwd, _, ok := h.resolveCwd(c)
+	if !ok {
+		return
+	}
+	var req archiveRequest
+	_ = c.ShouldBindJSON(&req) // 可空 body（= 归档全部）
+	taskID := strings.TrimSpace(req.TaskID)
+	archivedCount := 0
+	if taskID == "" || taskID == "*" {
+		n, err := h.svc.ArchiveAllTasks(cwd)
+		if err != nil {
+			Fail(c, http.StatusInternalServerError, "INTERNAL", err.Error())
+			return
+		}
+		archivedCount = n
+	} else {
+		if err := h.svc.ArchiveTask(cwd, taskID); err != nil {
+			Fail(c, http.StatusInternalServerError, "INTERNAL", err.Error())
+			return
+		}
+		archivedCount = 1
+	}
+	h.svc.PurgeExpiredArchived(cwd, h.archiveRetentionDays(c))
+	Success(c, http.StatusOK, gin.H{"archived": archivedCount})
+}
+
+// ListArchived GET /api/v1/taskmanager/archived?workspace_id=123 — 回收站列表。
+// 先清理已过保留期的条目（含 worktree/会话），再返回剩余内容。
+func (h *TaskManagerHandler) ListArchived(c *gin.Context) {
+	cwd, _, ok := h.resolveCwd(c)
+	if !ok {
+		return
+	}
+	retention := h.archiveRetentionDays(c)
+	h.svc.PurgeExpiredArchived(cwd, retention)
+	list, err := h.svc.ListArchivedTasks(cwd)
+	if err != nil {
+		Fail(c, http.StatusInternalServerError, "INTERNAL", err.Error())
+		return
+	}
+	if list == nil {
+		list = []models.ArchivedTask{}
+	}
+	Success(c, http.StatusOK, gin.H{"tasks": list, "retention_days": retention})
+}
+
+// RestoreArchived POST /api/v1/taskmanager/archived/:task_id/restore?workspace_id=123
+func (h *TaskManagerHandler) RestoreArchived(c *gin.Context) {
+	cwd, _, ok := h.resolveCwd(c)
+	if !ok {
+		return
+	}
+	taskID := c.Param("task_id")
+	if taskID == "" {
+		Fail(c, http.StatusBadRequest, "INVALID_REQUEST", "缺少 task_id")
+		return
+	}
+	if err := h.svc.RestoreArchivedTask(cwd, taskID); err != nil {
+		Fail(c, http.StatusInternalServerError, "INTERNAL", err.Error())
+		return
+	}
+	Success(c, http.StatusOK, gin.H{"restored": taskID})
+}
+
+// DeleteArchived DELETE /api/v1/taskmanager/archived/:task_id?workspace_id=123 — 彻底删除。
+func (h *TaskManagerHandler) DeleteArchived(c *gin.Context) {
+	cwd, _, ok := h.resolveCwd(c)
+	if !ok {
+		return
+	}
+	taskID := c.Param("task_id")
+	if taskID == "" {
+		Fail(c, http.StatusBadRequest, "INVALID_REQUEST", "缺少 task_id")
+		return
+	}
+	if err := h.svc.DeleteArchivedTask(cwd, taskID); err != nil {
+		Fail(c, http.StatusInternalServerError, "INTERNAL", err.Error())
+		return
+	}
+	Success(c, http.StatusOK, gin.H{"deleted": taskID})
 }

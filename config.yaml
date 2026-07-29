@@ -71,14 +71,13 @@ agents:
     #         - "^cursor/.*gpt-5.*"      # 仅显示 cursor 下的 gpt-5 系列
     selector:
         filters:
-            - ^claude-code/opus$
+            - ^codebuddy-code/deepseek-v4-flash$
+            - ^codebuddy-code/custom-local:GLM-5\.2$
             - ^devin/glm-5-2$
             - ^devin/glm-5-2-1m$
             - ^devin/swe-1-7$
             - ^devin/swe-1-7-medium$
-            - ^devin/swe-1-7-lightning$
-            - ^devin/swe-1-6$
-            - ^devin/swe-1-6-fast$
+            - ^qoder(/|$)
     # 单轮 prompt 的最大存活时间。prompt 的生命周期独立于发起它的 HTTP/SSE 请求
     # （SSE 断开不再误杀 agent），此超时兜底防 agent 卡死导致 goroutine 永久泄漏——
     # 超时后强制结束本轮并标记 interrupted，前端提示用户重发。默认 30m。

@@ -4,7 +4,7 @@ import { useTranslation } from 'react-i18next'
 import {
   getTaskManager, getTaskStatus, getTaskGitStatus, initTaskGitRepo,
   upsertTask, deleteTask, startTaskManager, stopTaskManager, saveTaskManager,
-  subscribeTaskEvents, genTaskId,
+  setTaskMaxParallel, subscribeTaskEvents, genTaskId,
   type TaskManagerDef, type TaskManagerTask, type TaskPriority,
 } from '../api/taskmanager'
 import { sessionUrl, newTaskUrl } from '../utils/routes'
@@ -14,7 +14,7 @@ import TaskManagerChatPanel from './TaskManagerChatPanel'
 import TaskLiveWindow from './TaskLiveWindow'
 import SplitPane from './SplitPane'
 import styles from './TaskManagerView.module.css'
-import { ChevronRight, ChevronDown, MessagesSquare, GitBranch, Plus, FileJson, List, Play, PlayCircle, Square, Trash2, Target, LayoutGrid } from 'lucide-react'
+import { ChevronRight, ChevronDown, MessagesSquare, GitBranch, Plus, FileJson, List, Play, PlayCircle, Square, Trash2, Target, LayoutGrid, Gauge } from 'lucide-react'
 
 const ACTIVE_STATUSES = new Set(['queued', 'running'])
 
@@ -49,7 +49,7 @@ export default function TaskManagerView({ workspaceId, cwd, agents, restoreSessi
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
   // 展开/折叠的任务卡片 id 集合
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set())
-  // 「展开全部」网格模式：所有任务窗口平铺，实时展示各自会话输出
+  // 「多任务模式」网格视图：所有任务窗口平铺，实时展示各自会话输出
   const [gridMode, setGridMode] = useState(() => localStorage.getItem('opennexus.taskmanager.grid') === '1')
   // git 仓库状态：null=未知/加载中；true=是仓库；false=需初始化
   const [gitRepo, setGitRepo] = useState<boolean | null>(null)
@@ -218,6 +218,19 @@ export default function TaskManagerView({ workspaceId, cwd, agents, restoreSessi
     }
   }
 
+  // 设置默认并发数量（max_parallel）：乐观更新本地 def，失败时回读还原。
+  // 与任务助手对话中的 set_max_parallel 工具写同一个 tasks.json 字段，SSE 事件会同步两侧。
+  async function handleSetMaxParallel(n: number) {
+    if (!workspaceId || busy) return
+    setDef((prev) => ({ ...prev, max_parallel: n }))
+    try {
+      await setTaskMaxParallel(workspaceId, n)
+    } catch (e) {
+      onError(String((e as Error)?.message || e))
+      await reloadDef()
+    }
+  }
+
   // 删除单个任务（需确认）。
   async function handleDeleteTask(task: TaskManagerTask) {
     if (!workspaceId || busy) return
@@ -295,7 +308,7 @@ export default function TaskManagerView({ workspaceId, cwd, agents, restoreSessi
     }
   }
 
-  // 切换「展开全部」网格模式并持久化（刷新后保持所选视图）
+  // 切换「多任务模式」网格视图并持久化（刷新后保持所选视图）
   function toggleGridMode() {
     setGridMode((v) => {
       const next = !v
@@ -306,7 +319,26 @@ export default function TaskManagerView({ workspaceId, cwd, agents, restoreSessi
 
   if (loading) return <LoadingSpinner />
 
-  // 「展开全部」网格模式：上方任务窗口按浏览器宽度自适应平铺（每格实时订阅其会话输出），
+  // 默认并发数量选择器：写入 tasks.json 的 max_parallel（与任务助手 set_max_parallel 工具同源），
+  // 列表视图与多任务网格视图的工具栏共用。
+  const maxParallelCtl = (
+    <label className={styles.parallelCtl} title={t('taskmanager.maxParallelHint')}>
+      <Gauge size={13} />
+      <span className={styles.parallelLabel}>{t('taskmanager.maxParallel')}</span>
+      <select
+        className={styles.parallelSelect}
+        value={def.max_parallel > 0 ? def.max_parallel : 3}
+        onChange={(e) => handleSetMaxParallel(Number(e.target.value))}
+        disabled={busy}
+      >
+        {Array.from({ length: 16 }, (_, i) => i + 1).map((n) => (
+          <option key={n} value={n}>{n}</option>
+        ))}
+      </select>
+    </label>
+  )
+
+  // 「多任务模式」网格视图：上方任务窗口按浏览器宽度自适应平铺（每格实时订阅其会话输出），
   // 下方保留任务助手对话（可输入 /task:<id> 把消息直发到某个任务会话）。
   if (gridMode && gitRepo !== false) {
     return (
@@ -315,6 +347,7 @@ export default function TaskManagerView({ workspaceId, cwd, agents, restoreSessi
           <div className={styles.toolbar}>
             <span className={styles.toolbarTitle}>{t('taskmanager.groupTitle')}</span>
             <div className={styles.toolbarActions}>
+              {maxParallelCtl}
               {def.tasks.some((tk) => !ACTIVE_STATUSES.has(tk.status)) && (
                 <button
                   type="button"
@@ -376,6 +409,7 @@ export default function TaskManagerView({ workspaceId, cwd, agents, restoreSessi
           <div className={styles.toolbar}>
             <span className={styles.toolbarTitle}>{t('taskmanager.groupTitle')}</span>
             <div className={styles.toolbarActions}>
+              {!jsonMode && maxParallelCtl}
               {!jsonMode && def.tasks.some((tk) => !ACTIVE_STATUSES.has(tk.status)) && (
                 <button
                   type="button"
@@ -398,7 +432,7 @@ export default function TaskManagerView({ workspaceId, cwd, agents, restoreSessi
                   <Plus size={14} /> {t('taskmanager.newTask')}
                 </button>
               )}
-              {!jsonMode && def.tasks.length > 0 && (
+              {!jsonMode && (
                 <button
                   type="button"
                   className={styles.toolbarBtn}

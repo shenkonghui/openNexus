@@ -11,7 +11,7 @@ import { streamPrompt, isTimeoutError } from '../api/sse'
 import { parsePermissionRequest } from '../utils/permission'
 import { Eraser } from 'lucide-react'
 import type { Agent, Message, Session, AgentCommand, ConfigOption, ConfigOptionValue, SessionMode, AgentSkill, PermissionRequestPayload } from '../types'
-import { upsertTask, deleteTask, startTaskManager, genTaskId, type TaskManagerTask } from '../api/taskmanager'
+import { upsertTask, deleteTask, archiveTask, startTaskManager, genTaskId, type TaskManagerTask } from '../api/taskmanager'
 import type { ConvState } from './ConvStatusBar'
 import type { PanelCtx } from '../modes/types'
 import ChatPanel from '../modes/ChatPanel'
@@ -35,6 +35,13 @@ interface Props {
 // /task:<id> 直发命令：跳过任务助手会话，把内容直接发送到对应任务的已有会话。
 // id 后可跟「(标题)」注释（菜单插入时自动带上，便于辨认目标任务），解析时忽略。
 const TASK_CMD_RE = /^\/task:([^\s(]+)(?:\([^)]*\))?\s*([\s\S]*)$/
+
+// @task:<id> 任务引用（输入框 @ 菜单选任务插入）：可出现在消息任意位置，
+// 发送时剔除引用标记、将剩余内容直发到该任务会话；多个引用则逐个直发。
+const TASK_MENTION_RE = /@task:([^\s(]+)(?:\([^)]*\))?/g
+
+// @archive-task:<id> 归档引用（@ 菜单「归档任务」分类插入）：id 为 * 表示归档全部任务
+const ARCHIVE_MENTION_RE = /@archive-task:([^\s(]+)(?:\([^)]*\))?/g
 
 // /create-task 直建命令：内容即任务 prompt，默认开启 goal 循环 + worktree 隔离
 const CREATE_TASK_CMD_RE = /^\/create-task(?:\s+([\s\S]*))?$/
@@ -123,9 +130,12 @@ export default function TaskManagerChatPanel({
     listAgents().then((r) => setSelectorFilters(r.data.selector_filters || [])).catch(() => {})
   }, [])
 
-  // 无会话时并行探测全部 agent 的模型列表（probeAgentConfigs 有前端缓存，不会重复请求）
+  // 并行探测全部 agent 的模型列表，供合并下拉展示全部组合。
+  // 无论有无会话都执行：有会话时 ChatPanel 会用 agentModelsMap 补全会话级模型列表，
+  // 避免会话创建时 agent 未完全初始化导致模型不全。
+  // probeAgentConfigs 有前端缓存，不会重复请求。
   useEffect(() => {
-    if (session || agents.length === 0) return
+    if (agents.length === 0) return
     let alive = true
     for (const a of agents) {
       probeAgentConfigs(a.type)
@@ -140,7 +150,7 @@ export default function TaskManagerChatPanel({
         })
     }
     return () => { alive = false }
-  }, [agents, session])
+  }, [agents])
 
   // 权限
   const [pendingPermission, setPendingPermission] = useState<PermissionRequestPayload | null>(null)
@@ -388,9 +398,8 @@ export default function TaskManagerChatPanel({
   // forceNew 标记：跳过 handleSend 的 latest 复用查询，保证真正开新会话，
   // 而不是被"一个工作区只复用一条管理会话"逻辑再次命中旧会话。
   const forceNewRef = useRef(false)
-  async function handleClear() {
-    if (!session && messages.length === 0) return
-    if (!window.confirm(t('taskmanager.clearConfirm'))) return
+  // 弃置当前管理会话并重置状态（清空 / 会话中切换 agent 共用）
+  async function discardSession() {
     abortRef.current?.abort()
     abortRef.current = null
     clearPermissions()
@@ -407,6 +416,11 @@ export default function TaskManagerChatPanel({
       // 删除旧会话，避免 latest 查询/重进页面时又恢复它；失败不阻断（forceNew 仍生效）
       try { await deleteSession(old.id) } catch { /* ignore */ }
     }
+  }
+  async function handleClear() {
+    if (!session && messages.length === 0) return
+    if (!window.confirm(t('taskmanager.clearConfirm'))) return
+    await discardSession()
   }
 
   // ===== /task 直发：把消息发送到指定任务的已有会话（不经过助手会话） =====
@@ -442,6 +456,17 @@ export default function TaskManagerChatPanel({
     return cmds
   }, [tasks, t])
 
+  // @task 引用候选：列出全部任务（含未启动），desc 附状态便于辨认；
+  // 直发到未启动（无会话）的任务时由 handleSendToTask 报错提示。
+  const taskMentions = useMemo(
+    () => (tasks || []).map((tk) => ({
+      id: tk.id,
+      title: tk.title,
+      desc: `${tk.id} · ${t(`taskmanager.status_${tk.status}`)}`,
+    })),
+    [tasks, t],
+  )
+
   // 追加一条仅本地展示的消息（负 id、sequence=0，不入库，刷新后消失）
   function appendLocalMessage(role: 'user' | 'assistant', kind: string, content: string) {
     const msg: Message = {
@@ -453,7 +478,7 @@ export default function TaskManagerChatPanel({
   }
 
   // 后台直发到任务会话：不占用助手对话的 conv 状态（输入框保持可用），
-  // 实时输出由「展开全部」网格窗口 / 任务会话页通过 /stream 订阅呈现。
+  // 实时输出由「多任务模式」网格窗口 / 任务会话页通过 /stream 订阅呈现。
   async function handleSendToTask(taskId: string, body: string) {
     setError('')
     const task = (tasks || []).find((tk) => tk.id === taskId)
@@ -537,6 +562,28 @@ export default function TaskManagerChatPanel({
     onTaskChanged()
   }
 
+  // @archive-task 归档任务到回收站（taskId 为 '*' 表示全部），可在回收站恢复
+  async function handleArchiveTask(taskId: string) {
+    setError('')
+    if (taskId !== '*') {
+      const task = (tasks || []).find((tk) => tk.id === taskId)
+      if (!task) { setError(t('taskmanager.taskCmdNotFound', { id: taskId })); return }
+    }
+    try {
+      const resp = await archiveTask(workspaceId, taskId === '*' ? undefined : taskId)
+      const n = resp.data?.archived ?? 0
+      if (taskId === '*') {
+        appendLocalMessage('assistant', 'agent_message_chunk', t('taskmanager.taskArchivedAll', { count: n }))
+      } else {
+        const task = (tasks || []).find((tk) => tk.id === taskId)
+        appendLocalMessage('assistant', 'agent_message_chunk', t('taskmanager.taskArchived', { title: task?.title || taskId }))
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    }
+    onTaskChanged()
+  }
+
   // ===== 发送 =====
   async function handleSend(prompt: string) {
     const text = prompt.trim()
@@ -545,6 +592,21 @@ export default function TaskManagerChatPanel({
     const taskMatch = text.match(TASK_CMD_RE)
     if (taskMatch) {
       void handleSendToTask(taskMatch[1], taskMatch[2].trim())
+      return
+    }
+    // @archive-task 归档引用：逐个归档选中任务（* = 全部），不进入助手会话
+    const archiveIds = [...text.matchAll(ARCHIVE_MENTION_RE)].map((m) => m[1])
+    if (archiveIds.length > 0) {
+      appendLocalMessage('user', 'user_message_chunk', text)
+      const ids = archiveIds.includes('*') ? ['*'] : [...new Set(archiveIds)]
+      for (const id of ids) void handleArchiveTask(id)
+      return
+    }
+    // @task 引用：剔除引用标记后把剩余内容直发到引用的任务会话（多个引用则逐个直发）
+    const mentionIds = [...text.matchAll(TASK_MENTION_RE)].map((m) => m[1])
+    if (mentionIds.length > 0) {
+      const body = text.replace(TASK_MENTION_RE, '').trim()
+      for (const id of new Set(mentionIds)) void handleSendToTask(id, body)
       return
     }
     const createMatch = text.match(CREATE_TASK_CMD_RE)
@@ -665,6 +727,8 @@ export default function TaskManagerChatPanel({
     onCancel: handleCancel,
     // 合并 /task 直发命令与 agent 自身的 slash commands（菜单内按名称排序展示）
     commands: [...taskCommands, ...commands],
+    // @ 菜单「任务」分类：选中任务插入 @task 引用，发送时直发到该任务会话
+    taskMentions,
     modes,
     skills,
     currentModeId: session
@@ -694,14 +758,35 @@ export default function TaskManagerChatPanel({
     agents: agents.map((a) => ({ type: a.type, display_name: a.display_name })),
     agentModelsMap,
     agentModelFilters: selectorFilters,
+    // 有会话时仍展示全部 agent·模型组合（管理会话可弃，跨 agent 确认后开新会话）
+    agentSwitchable: true,
     selectedAgent,
     onSelectAgent: (val: string) => { setSelectedAgent(val) },
     selectedModel,
     probeConfigs,
-    // 合并下拉选择回调：同 agent 切模型直接应用；跨 agent 切换暂存目标模型，
-    // 待该 agent 探测完成后应用（见上方 probe effect，与 ChatPage 新建任务页一致）。
+    // 合并下拉选择回调：
+    // - 无会话：同 agent 切模型直接应用；跨 agent 暂存目标模型，待探测完成后应用（同 ChatPage 新建页）。
+    // - 有会话：同 agent 切模型写入会话级 model config option；
+    //   跨 agent 需确认弃置当前管理会话（会话与 agent 绑定，无法原地切换）。
     onSelectAgentModel: (agentType: string, modelValue: string) => {
       if (!agentType) return
+      if (session) {
+        if (agentType === session.agent_type) {
+          if (!modelValue || modelValue === selectedModel) return
+          const modelOpt = configOptions.find((o) => o.category === 'model')
+          setSelectedModel(modelValue)
+          if (modelOpt) {
+            setConfigOptions((prev) => prev.map((o) => (o.id === modelOpt.id ? { ...o, current_value: modelValue } : o)))
+            setConfigOption(session.id, modelOpt.id, modelValue).catch(() => {})
+          }
+          return
+        }
+        if (!window.confirm(t('taskmanager.switchAgentConfirm'))) return
+        pendingModelRef.current = modelValue
+        setSelectedAgent(agentType)
+        void discardSession()
+        return
+      }
       if (agentType !== selectedAgent) {
         pendingModelRef.current = modelValue
         setSelectedAgent(agentType)

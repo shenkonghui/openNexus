@@ -2932,9 +2932,16 @@ func (s *Service) ResumeSession(ctx context.Context, sessionID string) (*models.
 	history, _ := s.messages.FindBySessionIDLastN(session.SessionID, 100)
 	contextText := formatHistory(history)
 	if contextText != "" {
-		// 异步注入历史上下文，不等结果
+		// 异步注入历史上下文，不等结果。
+		// 必须 drain 返回的 update channel：Prompt 内部注册了订阅者，
+		// 不消费会导致 buffer 满后持续丢弃消息（刷 WARN 日志）。
 		go func() {
-			_, _ = conn.Prompt(ctx, newAgentSID, contextText)
+			updates, promptErr := conn.Prompt(ctx, newAgentSID, contextText)
+			if promptErr != nil {
+				return
+			}
+			for range updates {
+			}
 		}()
 	}
 

@@ -6,8 +6,8 @@ import { sessionUrl, newTaskUrl, taskManagerUrl } from '../utils/routes'
 import type { Session, ScheduledTask } from '../types'
 import { listScheduledTasks } from '../api/scheduledTasks'
 import { listSessions, listRunningSessions } from '../api/sessions'
-import { getTaskManager, getTaskStatus, startTaskManager, subscribeTaskEvents, type TaskManagerTask } from '../api/taskmanager'
-import { PanelLeftClose, Star, Pencil, X, Check, SquarePlus, FileText, Calendar, Settings, Zap, Loader2, CheckCircle2, XCircle, Clock3, CircleDashed, Network, Layers, History } from 'lucide-react'
+import { getTaskManager, getTaskStatus, startTaskManager, subscribeTaskEvents, listArchivedTasks, type TaskManagerTask } from '../api/taskmanager'
+import { PanelLeftClose, Star, Pencil, X, Check, SquarePlus, FileText, Calendar, Settings, Zap, Loader2, CheckCircle2, XCircle, Clock3, CircleDashed, Network, Layers, History, Trash2 } from 'lucide-react'
 import styles from './SessionSidebar.module.css'
 import NexusLogoIcon from './NexusLogoIcon'
 import UserMenu from './UserMenu'
@@ -101,6 +101,9 @@ export default function SessionSidebar({ sessions, workspaceId, currentId, onDel
   const [tasks, setTasks] = useState<ScheduledTask[]>([])
   const [runningIds, setRunningIds] = useState<Set<number>>(() => new Set())
   const [tmTasks, setOrchTasks] = useState<TaskManagerTask[]>([])
+  // 已归档任务关联的会话 DB id：归档保留会话供恢复，但侧边栏不应再展示，
+  // 否则归档后「任务」分组仍残留条目，与任务列表（tasks.json）不一致。
+  const [archivedDbIds, setArchivedDbIds] = useState<Set<number>>(() => new Set())
   // 正在通过编排引擎启动的任务 id（点击未运行任务时置位），用于展示运行中状态并避免重复点击。
   const [startingTaskId, setStartingTaskId] = useState<string | null>(null)
   // 回调存 ref：SSE 订阅 effect 仅依赖 workspaceId，避免回调引用变化导致频繁重连。
@@ -127,6 +130,13 @@ export default function SessionSidebar({ sessions, workspaceId, currentId, onDel
     getTaskManager(workspaceId)
       .then((r) => { if (alive) setOrchTasks(r.data.tasks || []) })
       .catch(() => { if (alive) setOrchTasks([]) })
+    listArchivedTasks(workspaceId)
+      .then((r) => {
+        if (!alive) return
+        const ids = (r.data.tasks || []).map((t) => t.db_session_id).filter((id): id is number => !!id)
+        setArchivedDbIds(new Set(ids))
+      })
+      .catch(() => { if (alive) setArchivedDbIds(new Set()) })
     return () => { alive = false }
   }, [workspaceId, location.pathname, sessions])
 
@@ -143,6 +153,12 @@ export default function SessionSidebar({ sessions, workspaceId, currentId, onDel
         timer = null
         getTaskManager(workspaceId)
           .then((r) => setOrchTasks(r.data.tasks || []))
+          .catch(() => {})
+        listArchivedTasks(workspaceId)
+          .then((r) => {
+            const ids = (r.data.tasks || []).map((t) => t.db_session_id).filter((id): id is number => !!id)
+            setArchivedDbIds(new Set(ids))
+          })
           .catch(() => {})
         onWorkspaceRefreshRef.current?.()
       }, 300)
@@ -181,7 +197,10 @@ export default function SessionSidebar({ sessions, workspaceId, currentId, onDel
 
   // 手动会话：任务管理会话(source=orchestration)不在此列，任务管理任务改由 tmTasks 以「任务管理-」前缀
   // 合并进「任务」分组展示（见下方 groupList），避免与已运行任务的会话重复。
-  const manualSessions = sessions.filter((s) => !s.source || s.source === 'manual')
+  // 归档任务的会话保留在 DB 供恢复，但不再展示，避免归档后侧边栏残留条目。
+  const manualSessions = sessions.filter(
+    (s) => (!s.source || s.source === 'manual') && !archivedDbIds.has(s.id),
+  )
   // 任务管理会话（AI 编排面板对话）：source=orchestration 且无父会话（顶级）。
   // 作为「编排对话」记录展示在「任务」分组，点击回到编排页恢复其历史；
   // 任务管理子任务会话带 parent_session_id，不在此列（已由 tmTasks 以「任务管理-」前缀展示）。
@@ -559,6 +578,16 @@ export default function SessionSidebar({ sessions, workspaceId, currentId, onDel
                     <span className={styles.itemTitle}>
                       <History size={13} style={{ marginRight: 4, verticalAlign: '-2px' }} />
                       {t('nav.toolCalls')}
+                    </span>
+                  </div>
+                </Link>
+              </div>
+              <div className={`${styles.item} ${location.pathname === '/trash' ? styles.itemActive : ''}`}>
+                <Link to="/trash" className={styles.itemLink}>
+                  <div className={styles.itemRow}>
+                    <span className={styles.itemTitle}>
+                      <Trash2 size={13} style={{ marginRight: 4, verticalAlign: '-2px' }} />
+                      {t('nav.trash')}
                     </span>
                   </div>
                 </Link>

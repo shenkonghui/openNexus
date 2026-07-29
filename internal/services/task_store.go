@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"opennexus/internal/models"
 	"opennexus/internal/workspacemeta"
@@ -18,6 +19,7 @@ import (
 
 const (
 	tasksFileName               = "tasks.json"
+	archivedTasksFileName       = "archived-tasks.json"
 	scheduledExecutionsFileName = "scheduled-executions.jsonl"
 	scheduledExecutionsDir      = ".openNexus"
 	maxInlinedExecutions        = 10
@@ -41,6 +43,10 @@ func NewTaskStore(cwd string) *TaskStore {
 
 func (s *TaskStore) tasksPath() string {
 	return filepath.Join(s.dir, tasksFileName)
+}
+
+func (s *TaskStore) archivedPath() string {
+	return filepath.Join(s.dir, archivedTasksFileName)
 }
 
 func (s *TaskStore) executionsPath() string {
@@ -238,6 +244,201 @@ func (s *TaskStore) DeleteTask(taskID string) error {
 	err = s.Save(def)
 	s.mu.Unlock()
 	return err
+}
+
+// ==================== 归档（回收站） ====================
+
+// loadArchived 读取 archived-tasks.json；不存在时返回空列表。
+func (s *TaskStore) loadArchived() ([]models.ArchivedTask, error) {
+	s.ensureMigrated()
+	data, err := os.ReadFile(s.archivedPath())
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return []models.ArchivedTask{}, nil
+		}
+		return nil, fmt.Errorf("读取 archived-tasks.json: %w", err)
+	}
+	var list []models.ArchivedTask
+	if err := json.Unmarshal(data, &list); err != nil {
+		return nil, fmt.Errorf("解析 archived-tasks.json: %w", err)
+	}
+	// 归一化历史脏数据：旧版归档会原样快照 running/queued 状态，导致回收站
+	// 永远显示“执行中”；归档后任务必然已停止，读取时修正为 canceled。
+	for i := range list {
+		if models.IsTaskRunning(list[i].Status) {
+			list[i].Status = models.TaskStatusCanceled
+			if list[i].FinishedAt == nil {
+				at := list[i].ArchivedAt
+				list[i].FinishedAt = &at
+			}
+			if list[i].Error == "" {
+				list[i].Error = "归档时停止"
+			}
+		}
+	}
+	return list, nil
+}
+
+// saveArchived 原子写回 archived-tasks.json，并广播变更事件（驱动回收站/任务页自动刷新）。
+func (s *TaskStore) saveArchived(list []models.ArchivedTask) error {
+	s.ensureMigrated()
+	if list == nil {
+		list = []models.ArchivedTask{}
+	}
+	data, err := json.MarshalIndent(list, "", "  ")
+	if err != nil {
+		return fmt.Errorf("序列化 archived-tasks.json: %w", err)
+	}
+	tmp := s.archivedPath() + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+		return fmt.Errorf("写入 archived-tasks.json: %w", err)
+	}
+	if err := os.Rename(tmp, s.archivedPath()); err != nil {
+		return err
+	}
+	notifyTaskChanged(s.cwd)
+	return nil
+}
+
+// ArchiveTask 把指定任务从 tasks.json 移入归档文件（记录归档时间），返回归档条目。
+func (s *TaskStore) ArchiveTask(taskID string) (*models.ArchivedTask, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	def, err := s.Load()
+	if err != nil {
+		return nil, err
+	}
+	idx := -1
+	for i := range def.Tasks {
+		if def.Tasks[i].ID == taskID {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return nil, fmt.Errorf("任务 %s 不存在", taskID)
+	}
+	archived, err := s.loadArchived()
+	if err != nil {
+		return nil, err
+	}
+	entry := models.ArchivedTask{TaskManagerTask: def.Tasks[idx], ArchivedAt: time.Now()}
+	// 同 id 旧归档条目直接覆盖（重复归档以最新为准）
+	kept := archived[:0]
+	for _, a := range archived {
+		if a.ID != taskID {
+			kept = append(kept, a)
+		}
+	}
+	kept = append(kept, entry)
+	if err := s.saveArchived(kept); err != nil {
+		return nil, err
+	}
+	def.Tasks = append(def.Tasks[:idx], def.Tasks[idx+1:]...)
+	if err := s.Save(def); err != nil {
+		return nil, err
+	}
+	return &entry, nil
+}
+
+// ListArchived 返回全部归档条目（按归档时间倒序）。
+func (s *TaskStore) ListArchived() ([]models.ArchivedTask, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	list, err := s.loadArchived()
+	if err != nil {
+		return nil, err
+	}
+	sort.SliceStable(list, func(i, j int) bool {
+		return list[i].ArchivedAt.After(list[j].ArchivedAt)
+	})
+	return list, nil
+}
+
+// RestoreArchived 把归档条目移回 tasks.json（同 id 任务已存在时报错）。
+func (s *TaskStore) RestoreArchived(taskID string) (*models.TaskManagerTask, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	list, err := s.loadArchived()
+	if err != nil {
+		return nil, err
+	}
+	idx := -1
+	for i := range list {
+		if list[i].ID == taskID {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return nil, fmt.Errorf("归档任务 %s 不存在", taskID)
+	}
+	def, err := s.Load()
+	if err != nil {
+		return nil, err
+	}
+	for i := range def.Tasks {
+		if def.Tasks[i].ID == taskID {
+			return nil, fmt.Errorf("任务 %s 已存在，无法恢复", taskID)
+		}
+	}
+	task := list[idx].TaskManagerTask
+	def.Tasks = append(def.Tasks, task)
+	if err := s.Save(def); err != nil {
+		return nil, err
+	}
+	list = append(list[:idx], list[idx+1:]...)
+	if err := s.saveArchived(list); err != nil {
+		return nil, err
+	}
+	return &task, nil
+}
+
+// RemoveArchived 从归档文件中彻底移除指定条目，返回被移除的条目（供调用方清理 worktree/会话）。
+func (s *TaskStore) RemoveArchived(taskID string) (*models.ArchivedTask, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	list, err := s.loadArchived()
+	if err != nil {
+		return nil, err
+	}
+	for i := range list {
+		if list[i].ID == taskID {
+			entry := list[i]
+			list = append(list[:i], list[i+1:]...)
+			if err := s.saveArchived(list); err != nil {
+				return nil, err
+			}
+			return &entry, nil
+		}
+	}
+	return nil, fmt.Errorf("归档任务 %s 不存在", taskID)
+}
+
+// PurgeArchivedBefore 移除并返回归档时间早于 cutoff 的条目（供调用方清理 worktree/会话）。
+func (s *TaskStore) PurgeArchivedBefore(cutoff time.Time) ([]models.ArchivedTask, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	list, err := s.loadArchived()
+	if err != nil {
+		return nil, err
+	}
+	var expired []models.ArchivedTask
+	kept := list[:0]
+	for _, a := range list {
+		if a.ArchivedAt.Before(cutoff) {
+			expired = append(expired, a)
+		} else {
+			kept = append(kept, a)
+		}
+	}
+	if len(expired) == 0 {
+		return nil, nil
+	}
+	if err := s.saveArchived(kept); err != nil {
+		return nil, err
+	}
+	return expired, nil
 }
 
 // FindTask 按 id 查询任务。

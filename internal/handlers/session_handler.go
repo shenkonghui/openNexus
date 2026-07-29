@@ -377,6 +377,13 @@ func (h *SessionHandler) LatestByWorkspace(c *gin.Context) {
 		if source != "" && sessions[i].Source != source {
 			continue
 		}
+		// 子会话不参与复用：本接口用于工作区级会话复用（如任务助手管理会话），
+		// 而历史版本的编排任务执行会话是 source=orchestration 的子会话且 cwd 指向
+		// 任务 worktree（可能已删除），误复用会导致"工作目录不存在"。
+		// 与侧边栏一致：管理会话 = source=orchestration 且无父会话（顶级）。
+		if sessions[i].ParentSessionID != nil {
+			continue
+		}
 		Success(c, http.StatusOK, sessions[i])
 		return
 	}

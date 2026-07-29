@@ -216,3 +216,30 @@ type TaskManagerDef struct {
 
 // DefaultMaxParallel 是新建任务管理时的默认并发上限。
 const DefaultMaxParallel = 3
+
+// ArchivedTask 是归档到回收站的任务条目：保留任务全部字段（含 worktree/会话引用，
+// 供恢复时原样放回 tasks.json），并记录归档时间用于过期清理。
+type ArchivedTask struct {
+	TaskManagerTask
+	ArchivedAt time.Time `json:"archived_at"`
+}
+
+// UnmarshalJSON 显式覆盖内嵌 TaskManagerTask 提升上来的同名方法：
+// 否则反序列化时只走 TaskManagerTask.UnmarshalJSON，archived_at 被丢弃成零值，
+// 归档条目会被过期清理误判为已过期而立即删除。
+func (a *ArchivedTask) UnmarshalJSON(data []byte) error {
+	if err := json.Unmarshal(data, &a.TaskManagerTask); err != nil {
+		return err
+	}
+	aux := struct {
+		ArchivedAt time.Time `json:"archived_at"`
+	}{}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	a.ArchivedAt = aux.ArchivedAt
+	return nil
+}
+
+// DefaultArchiveRetentionDays 是归档任务在回收站的默认保留天数，过期后彻底删除。
+const DefaultArchiveRetentionDays = 3

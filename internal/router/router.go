@@ -219,6 +219,10 @@ func Setup(authSvc *services.AuthService, jwtSvc *services.JWTService, agentRout
 					tm.PUT("/max-parallel", tmH.SetMaxParallel)
 					tm.POST("/tasks", tmH.UpsertTask)
 					tm.DELETE("/tasks/:task_id", tmH.DeleteTask)
+					tm.POST("/archive", tmH.Archive)
+					tm.GET("/archived", tmH.ListArchived)
+					tm.POST("/archived/:task_id/restore", tmH.RestoreArchived)
+					tm.DELETE("/archived/:task_id", tmH.DeleteArchived)
 				}
 			}
 

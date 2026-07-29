@@ -1,4 +1,4 @@
-/* TaskLiveWindow：编排「展开全部」网格中的单任务实时输出窗口 */
+/* TaskLiveWindow：编排「多任务模式」网格中的单任务实时输出窗口 */
 
 .window {
   display: flex;

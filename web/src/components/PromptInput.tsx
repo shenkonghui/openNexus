@@ -23,10 +23,20 @@ interface PromptInputProps {
   // 远程(浏览器)场景拖拽上传所需;本地(Electron)场景不依赖此值(直接取绝对路径)。
   // 不传时,远程拖拽会提示"该页面不支持上传"。
   workspaceId?: number
+  // 任务列表（任务助手面板传入，传入即使为空数组也展示分类）：@ 菜单增加「任务」分类，
+  // 选中后插入 @task:<id>(标题) 引用，整条消息直发到该任务会话。
+  tasks?: TaskMentionItem[]
+}
+
+/** @task 引用候选任务（id/标题必传，desc 可附状态等说明） */
+export interface TaskMentionItem {
+  id: string
+  title: string
+  desc?: string
 }
 
 type TriggerType = 'slash' | 'mention' | null
-type MentionCategory = 'command' | 'skill' | 'file' | 'note'
+type MentionCategory = 'command' | 'skill' | 'file' | 'note' | 'task' | 'archive'
 type MentionType = MentionCategory | 'mode' | 'tag'
 type NavigateAction = 'back' | 'file-up' | 'tag-up'
 
@@ -77,6 +87,12 @@ function matchesQuery(fields: string[], query: string): boolean {
 
 function backRow(desc: string, kindLabel: string, navigate: NavigateAction): ItemRow {
   return { kind: 'item', type: 'command', label: '..', path: '..', desc, insertText: '', kindLabel, navigate }
+}
+
+// 生成 @task 引用里的标题注释：去掉空白与括号（避免破坏引用解析），过长截断。
+// 与 TaskManagerChatPanel 的 /task 命令标题注释规则一致。
+function taskTitleNote(title: string): string {
+  return title.replace(/[\s()（）]/g, '').slice(0, 20)
 }
 
 function buildSlashItems(
@@ -132,7 +148,7 @@ function buildSlashItems(
   }
 
   items.sort((a, b) => {
-    const kindOrder = { command: 0, skill: 1, mode: 2, file: 3, note: 4, tag: 5 }
+    const kindOrder = { command: 0, skill: 1, mode: 2, file: 3, note: 4, tag: 5, task: 6, archive: 7 }
     const ka = kindOrder[a.type] - kindOrder[b.type]
     if (ka !== 0) return ka
     return a.path.localeCompare(b.path)
@@ -155,6 +171,7 @@ export default function PromptInput({
   skills = [],
   cwd = '',
   workspaceId,
+  tasks,
 }: PromptInputProps) {
   const { t } = useTranslation()
   const [internalText, setInternalText] = useState('')
@@ -198,6 +215,27 @@ export default function PromptInput({
     const query = trigger.query
     const cats: CategoryRow[] = []
 
+    // 任务引用（任务助手面板专属）：传入 tasks 即展示（含空列表），
+    // 选中任务后整条消息直发到该任务会话
+    if (tasks !== undefined && matchesQuery([t('prompt.slashKindTask'), 'task'], query)) {
+      cats.push({
+        kind: 'category',
+        category: 'task',
+        label: t('prompt.slashKindTask'),
+        desc: t('prompt.categoryTaskDesc', { count: tasks.length }),
+        kindLabel: t('prompt.categoryLabel'),
+      })
+    }
+    // 归档任务（任务助手面板专属）：选中后把任务移入回收站，支持全部
+    if (tasks !== undefined && matchesQuery([t('prompt.slashKindArchive'), 'archive-task', 'archive'], query)) {
+      cats.push({
+        kind: 'category',
+        category: 'archive',
+        label: t('prompt.slashKindArchive'),
+        desc: t('prompt.categoryArchiveDesc', { count: tasks.length }),
+        kindLabel: t('prompt.categoryLabel'),
+      })
+    }
     if (commands.length > 0 && matchesQuery([t('prompt.slashKindCommand'), 'command'], query)) {
       cats.push({
         kind: 'category',
@@ -235,11 +273,60 @@ export default function PromptInput({
       })
     }
     return cats
-  }, [trigger, commands.length, skills.length, cwd, t])
+  }, [trigger, commands.length, skills.length, cwd, tasks, t])
 
   const mentionItems = useMemo<MenuRow[]>(() => {
     if (trigger.type !== 'mention' || !mentionCategory) return []
     const query = trigger.query
+
+    if (mentionCategory === 'task') {
+      const items: MenuRow[] = [backRow(t('prompt.categoryBack'), t('prompt.slashKindTask'), 'back')]
+      for (const tk of tasks ?? []) {
+        if (!matchesQuery([tk.id, tk.title], query)) continue
+        const note = taskTitleNote(tk.title)
+        items.push({
+          kind: 'item',
+          type: 'task',
+          label: tk.title,
+          path: tk.id,
+          desc: tk.desc || tk.id,
+          // 引用带标题注释，插入后可直接辨认目标任务，如 @task:a1b2(修复登录)
+          insertText: `@task:${tk.id}${note ? `(${note})` : ''} `,
+          kindLabel: t('prompt.slashKindTask'),
+        })
+      }
+      return items
+    }
+
+    if (mentionCategory === 'archive') {
+      const items: MenuRow[] = [backRow(t('prompt.categoryBack'), t('prompt.slashKindArchive'), 'back')]
+      // 首条「全部任务」：插入 @archive-task:* 一次性归档所有任务
+      if (matchesQuery([t('prompt.archiveAllLabel'), 'all', '*'], query)) {
+        items.push({
+          kind: 'item',
+          type: 'task',
+          label: t('prompt.archiveAllLabel'),
+          path: '*',
+          desc: t('prompt.archiveAllDesc', { count: (tasks ?? []).length }),
+          insertText: `@archive-task:*(${t('prompt.archiveAllLabel')}) `,
+          kindLabel: t('prompt.slashKindArchive'),
+        })
+      }
+      for (const tk of tasks ?? []) {
+        if (!matchesQuery([tk.id, tk.title], query)) continue
+        const note = taskTitleNote(tk.title)
+        items.push({
+          kind: 'item',
+          type: 'task',
+          label: tk.title,
+          path: tk.id,
+          desc: tk.desc || tk.id,
+          insertText: `@archive-task:${tk.id}${note ? `(${note})` : ''} `,
+          kindLabel: t('prompt.slashKindArchive'),
+        })
+      }
+      return items
+    }
 
     if (mentionCategory === 'command') {
       const items: MenuRow[] = [backRow(t('prompt.categoryBack'), t('prompt.slashKindCommand'), 'back')]
@@ -348,7 +435,7 @@ export default function PromptInput({
     return []
   }, [
     trigger, mentionCategory, commands, skills, fileEntries, fileNavigating,
-    fileParentPath, noteTags, notes, noteBrowseTag, t,
+    fileParentPath, noteTags, notes, noteBrowseTag, tasks, t,
   ])
 
   const activeRows: MenuRow[] = trigger.type === 'slash'
@@ -638,11 +725,15 @@ export default function PromptInput({
         ? t('prompt.commandMenuTitle')
         : mentionCategory === 'skill'
           ? t('prompt.skillMenuTitle')
-          : mentionCategory === 'file'
-            ? t('prompt.fileMenuTitle', { path: fileBrowsePath || cwd })
-            : noteBrowseTag
-              ? t('prompt.noteMenuTitle', { tag: noteBrowseTag })
-              : t('prompt.noteTagMenuTitle')
+          : mentionCategory === 'task'
+            ? t('prompt.taskMenuTitle')
+            : mentionCategory === 'archive'
+              ? t('prompt.archiveMenuTitle')
+              : mentionCategory === 'file'
+              ? t('prompt.fileMenuTitle', { path: fileBrowsePath || cwd })
+              : noteBrowseTag
+                ? t('prompt.noteMenuTitle', { tag: noteBrowseTag })
+                : t('prompt.noteTagMenuTitle')
 
   const menuLoading = trigger.type === 'mention' && (
     (mentionCategory === 'file' && fileLoading) ||

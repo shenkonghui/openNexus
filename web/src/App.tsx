@@ -17,6 +17,8 @@ import LoadingSpinner from './components/LoadingSpinner'
 const McpGatewayPage = lazy(() => import('./pages/McpGatewayPage'))
 // 工具调用记录页同样按需加载。
 const ToolCallsPage = lazy(() => import('./pages/ToolCallsPage'))
+// 任务回收站页（归档任务查看/恢复）按需加载。
+const TrashPage = lazy(() => import('./pages/TrashPage'))
 
 function WorkspaceHomeRedirect() {
   const { wid } = useParams<{ wid: string }>()
@@ -85,6 +87,14 @@ export default function App() {
             element={
               <Suspense fallback={<LoadingSpinner />}>
                 <ToolCallsPage />
+              </Suspense>
+            }
+          />
+          <Route
+            path="/trash"
+            element={
+              <Suspense fallback={<LoadingSpinner />}>
+                <TrashPage />
               </Suspense>
             }
           />

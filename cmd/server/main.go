@@ -321,6 +321,8 @@ func main() {
 
 	// 任务元数据：自动打标签 + AI 标题生成（异步，fire-and-forget）
 	taskSettingsRepo := repository.NewTaskSettingsRepository(db)
+	// 任务归档保留天数配置注入任务管理 handler（tmH 先于此处创建，故用 setter）
+	tmH.SetSettingsRepo(taskSettingsRepo)
 	sessionRepo := repository.NewSessionRepository(db)
 	taskMetaSvc := services.NewTaskMetaService(taskSettingsRepo, sessionRepo, agentRouter)
 	acpSvc.SetTaskMetaTrigger(taskMetaSvc)

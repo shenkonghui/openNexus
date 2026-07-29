@@ -298,6 +298,8 @@ export interface TaskSettings {
   tags: string[];
   tag_prompt: string;
   title_prompt: string;
+  // 归档任务在回收站的保留天数（默认 3 天）
+  archive_retention_days?: number;
 }
 
 // goal 设置：通用 /goal 循环的评估 agent/模型 + 限制条件

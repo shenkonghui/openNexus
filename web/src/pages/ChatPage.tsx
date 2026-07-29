@@ -485,10 +485,12 @@ export default function ChatPage() {
     preconnectAgent(selectedAgent, workspaceCwd)
   }, [selectedAgent, workspaceCwd, hasSession, isCreateMode])
 
-  // 新建页：并行探测全部 agent 的模型列表，供 agent+模型 合并下拉展示全部组合。
+  // 并行探测全部 agent 的模型列表，供 agent+模型 合并下拉展示全部组合。
+  // 无论新建页还是会话详情页都执行：会话详情页的 ChatPanel 会用 agentModelsMap 补全
+  // 会话级模型列表（会话创建时 agent 可能未完全初始化导致模型不全）。
   // probeAgentConfigs 有前端缓存，当前选中 agent 的探测与上方 effect 共享结果，不会重复请求。
   useEffect(() => {
-    if (hasSession || !isCreateMode || agents.length === 0) return
+    if (agents.length === 0) return
     let alive = true
     for (const a of agents) {
       probeAgentConfigs(a.type)
@@ -503,7 +505,7 @@ export default function ChatPage() {
         })
     }
     return () => { alive = false }
-  }, [agents, hasSession, isCreateMode])
+  }, [agents])
 
   // agent+模型 合并下拉的选择回调：同 agent 切模型直接应用；
   // 跨 agent 切换时暂存目标模型，待该 agent 探测完成后应用（见上方 probe effect）。

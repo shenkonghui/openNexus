@@ -28,6 +28,9 @@ type TaskManagerExecutor interface {
 	Prompt(ctx context.Context, sessionID, prompt string) (<-chan models.Message, error)
 	// RunPromptOnce 在临时 ACP 会话发送一次 prompt 并收集文本响应（不落库），用于 AI 生成分支名。
 	RunPromptOnce(ctx context.Context, agentType, modelValue, prompt string) (string, error)
+	// CancelSession 取消会话正在进行的 prompt（连带清除 goal）。任务会话的 prompt 用
+	// detached context 运行，停止/归档时仅取消 taskCtx 无法终止 agent，需显式调用。
+	CancelSession(ctx context.Context, sessionID string) error
 	// DeleteSession 删除会话（含消息），删除任务时用于同步移除其关联会话。
 	DeleteSession(ctx context.Context, sessionID string) error
 }
@@ -154,6 +157,127 @@ func (s *TaskManagerService) UnregisterSessionTask(cwd string, dbSessionID uint)
 		return t.DBSessionID != nil && *t.DBSessionID == dbSessionID
 	}, false)
 	return err
+}
+
+// ==================== 归档（回收站） ====================
+
+// ArchiveTask 归档指定任务：若正在运行先真正停止（取消编排 watcher 与底层会话 prompt，
+// 快照状态置 canceled），然后从 tasks.json 移入归档文件。直接快照 running 会让回收站
+// 永远显示“执行中”，且 agent/goal 循环仍在后台继续执行。
+// worktree 与关联会话保留，供恢复时原样放回；过期清理/彻底删除时才一并清理。
+func (s *TaskManagerService) ArchiveTask(cwd, taskID string) error {
+	s.mu.Lock()
+	s.cancelLocked(cwd, taskID)
+	s.mu.Unlock()
+	store := s.storeFor(cwd)
+	// 归档前收尾运行态：先写回 canceled，再取消会话，保证 PromptFinished 竞态时
+	// IsTaskRunning 已为 false 不会覆写状态。
+	var sessID string
+	wasRunning := false
+	_ = store.UpdateTaskStatus(taskID, func(t *models.TaskManagerTask) {
+		if models.IsTaskRunning(t.Status) {
+			wasRunning = true
+			sessID = t.SessionID
+			now := time.Now()
+			t.Status = models.TaskStatusCanceled
+			t.FinishedAt = &now
+			t.Error = "归档时停止"
+		}
+	})
+	// 任务会话的 prompt 用 detached context 运行，取消 taskCtx 并不会终止 agent；
+	// 显式取消会话（连带清除 goal，写回的 goal 末态一并进入快照），失败不阻断归档。
+	if wasRunning && sessID != "" && s.exec != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		if cerr := s.exec.CancelSession(ctx, sessID); cerr != nil {
+			slog.Warn("归档任务时取消会话失败", "task", taskID, "session", sessID, "err", cerr)
+		}
+		cancel()
+	}
+	_, err := store.ArchiveTask(taskID)
+	return err
+}
+
+// ArchiveAllTasks 归档该 cwd 下全部任务，返回归档数量。
+func (s *TaskManagerService) ArchiveAllTasks(cwd string) (int, error) {
+	def, err := s.storeFor(cwd).Load()
+	if err != nil {
+		return 0, err
+	}
+	n := 0
+	for _, t := range def.Tasks {
+		if aerr := s.ArchiveTask(cwd, t.ID); aerr != nil {
+			slog.Warn("归档任务失败", "task", t.ID, "err", aerr)
+			continue
+		}
+		n++
+	}
+	return n, nil
+}
+
+// ListArchivedTasks 返回回收站内容（按归档时间倒序）。
+func (s *TaskManagerService) ListArchivedTasks(cwd string) ([]models.ArchivedTask, error) {
+	return s.storeFor(cwd).ListArchived()
+}
+
+// RestoreArchivedTask 把归档任务恢复回 tasks.json。
+func (s *TaskManagerService) RestoreArchivedTask(cwd, taskID string) error {
+	_, err := s.storeFor(cwd).RestoreArchived(taskID)
+	return err
+}
+
+// DeleteArchivedTask 从回收站彻底删除归档任务，并清理其 worktree 与关联会话。
+func (s *TaskManagerService) DeleteArchivedTask(cwd, taskID string) error {
+	entry, err := s.storeFor(cwd).RemoveArchived(taskID)
+	if err != nil {
+		return err
+	}
+	s.cleanupArchived(cwd, entry)
+	return nil
+}
+
+// PurgeExpiredArchived 清理归档超过保留期的条目（含 worktree/会话），返回清理数量。
+// retentionDays <= 0 时取默认保留天数。失败仅告警，不阻断调用方。
+func (s *TaskManagerService) PurgeExpiredArchived(cwd string, retentionDays int) int {
+	if retentionDays <= 0 {
+		retentionDays = models.DefaultArchiveRetentionDays
+	}
+	cutoff := time.Now().AddDate(0, 0, -retentionDays)
+	expired, err := s.storeFor(cwd).PurgeArchivedBefore(cutoff)
+	if err != nil {
+		slog.Warn("清理过期归档任务失败", "cwd", cwd, "err", err)
+		return 0
+	}
+	for i := range expired {
+		s.cleanupArchived(cwd, &expired[i])
+	}
+	return len(expired)
+}
+
+// cleanupArchived 彻底删除归档条目时清理其 worktree 与关联会话（best-effort，失败仅记日志），
+// 与 deleteTaskLocked 的清理逻辑保持一致。
+func (s *TaskManagerService) cleanupArchived(cwd string, entry *models.ArchivedTask) {
+	if entry == nil {
+		return
+	}
+	if entry.WorktreePath != "" {
+		if rerr := acp.RemoveWorktree(cwd, entry.WorktreePath, entry.Branch); rerr != nil {
+			slog.Warn("删除归档任务时清理 worktree 失败", "task", entry.ID, "err", rerr)
+		}
+	}
+	if s.exec == nil {
+		return
+	}
+	sid := entry.SessionID
+	if sid == "" && entry.DBSessionID != nil {
+		if sess, gerr := s.exec.GetSessionByDBID(*entry.DBSessionID); gerr == nil && sess != nil {
+			sid = sess.SessionID
+		}
+	}
+	if sid != "" {
+		if derr := s.exec.DeleteSession(context.Background(), sid); derr != nil {
+			slog.Warn("删除归档任务时清理关联会话失败", "task", entry.ID, "session", sid, "err", derr)
+		}
+	}
 }
 
 // deleteTaskLocked 删除首个匹配的任务（需持有 s.mu）：取消运行、清理 worktree 并写回。
@@ -565,12 +689,13 @@ func (s *TaskManagerService) SendPrompt(_ context.Context, cwd, taskID, prompt s
 // Stop 停止任务。taskID 为空时停止该 cwd 下全部运行中/排队中任务。
 func (s *TaskManagerService) Stop(cwd, taskID string) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	store := s.storeFor(cwd)
 	def, err := store.Load()
 	if err != nil {
+		s.mu.Unlock()
 		return err
 	}
+	var sessIDs []string
 	for i := range def.Tasks {
 		t := &def.Tasks[i]
 		if taskID != "" && t.ID != taskID {
@@ -584,8 +709,24 @@ func (s *TaskManagerService) Stop(cwd, taskID string) error {
 		t.Status = models.TaskStatusCanceled
 		t.FinishedAt = &now
 		t.Error = "用户手动停止"
+		if t.SessionID != "" {
+			sessIDs = append(sessIDs, t.SessionID)
+		}
 	}
-	return store.Save(def)
+	saveErr := store.Save(def)
+	s.mu.Unlock()
+	// 取消底层会话 prompt（detached context，仅取消 taskCtx 无法终止 agent），
+	// 连带清除 goal 避免自动续轮；best-effort，失败仅记日志。
+	if s.exec != nil {
+		for _, sid := range sessIDs {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			if cerr := s.exec.CancelSession(ctx, sid); cerr != nil {
+				slog.Warn("停止任务时取消会话失败", "session", sid, "err", cerr)
+			}
+			cancel()
+		}
+	}
+	return saveErr
 }
 
 // cancelLocked 取消指定任务（必须在持有 s.mu 时调用）。

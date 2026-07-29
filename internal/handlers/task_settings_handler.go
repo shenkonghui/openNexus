@@ -30,6 +30,8 @@ type taskSettingsItem struct {
 	TagPrompt        string   `json:"tag_prompt"`
 	TitlePrompt      string   `json:"title_prompt"`
 	DocEditPrompt    string   `json:"doc_edit_prompt"`
+	// 归档任务在回收站的保留天数（默认 3 天）
+	ArchiveRetentionDays int `json:"archive_retention_days"`
 }
 
 type taskSettingsRequest struct {
@@ -41,6 +43,7 @@ type taskSettingsRequest struct {
 	TagPrompt        string `json:"tag_prompt"`
 	TitlePrompt      string `json:"title_prompt"`
 	DocEditPrompt    string `json:"doc_edit_prompt"`
+	ArchiveRetentionDays int    `json:"archive_retention_days"`
 }
 
 // toItem 把存储模型转换为返回给前端的结构（标签 JSON 解析为数组，空提示词填默认）。
@@ -56,6 +59,10 @@ func (h *TaskSettingsHandler) toItem(s *models.TaskSettings) taskSettingsItem {
 	docEditPrompt := strings.TrimSpace(s.DocEditPrompt)
 	if docEditPrompt == "" {
 		docEditPrompt = services.DefaultDocEditPrompt
+	}
+	retention := s.ArchiveRetentionDays
+	if retention <= 0 {
+		retention = models.DefaultArchiveRetentionDays
 	}
 	tags := []string{}
 	if raw := strings.TrimSpace(s.Tags); raw != "" {
@@ -76,6 +83,7 @@ func (h *TaskSettingsHandler) toItem(s *models.TaskSettings) taskSettingsItem {
 		TagPrompt:        tagPrompt,
 		TitlePrompt:      titlePrompt,
 		DocEditPrompt:    docEditPrompt,
+		ArchiveRetentionDays: retention,
 	}
 }
 
@@ -117,6 +125,7 @@ func (h *TaskSettingsHandler) UpdateSettings(c *gin.Context) {
 		TagPrompt:       strings.TrimSpace(req.TagPrompt),
 		TitlePrompt:     strings.TrimSpace(req.TitlePrompt),
 		DocEditPrompt:   strings.TrimSpace(req.DocEditPrompt),
+		ArchiveRetentionDays: req.ArchiveRetentionDays,
 	}
 	if err := h.settingsRepo.Upsert(s); err != nil {
 		Fail(c, http.StatusInternalServerError, "INTERNAL", "保存任务设置失败")

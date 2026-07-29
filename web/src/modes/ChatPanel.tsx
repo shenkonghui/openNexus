@@ -65,23 +65,26 @@ export default function ChatPanel({
     // 配置选项：会话级 configOptions（会话详情页）或 probeConfigs（新建任务页，已映射为 configOptions）
     const cfgOpts = ctx.configOptions.length > 0 ? ctx.configOptions : ctx.probeConfigs
     const onApplyCfg = ctx.onSetConfigOption
-    // Agent：新建任务页可选（有 agents 列表），会话详情页锁定为当前 agent（仅可切模型）
-    const hasAgentSelect = ctx.agents.length > 0 && ctx.session === null
+    // Agent：新建任务页可选（有 agents 列表），会话详情页锁定为当前 agent（仅可切模型）；
+    // agentSwitchable（任务助手）时有会话也可切换 agent（跨 agent 由调用方弃会话重建）。
+    const hasAgentSelect = ctx.agents.length > 0 && (ctx.session === null || !!ctx.agentSwitchable)
     const modelOpt = cfgOpts.find((o) => o.category === 'model' && o.type === 'select' && o.options.length > 0)
     // 合并下拉数据源：
-    // - 新建任务页：全部 agent + 各 agent 探测到的模型（agentModelsMap）；无 map 时退化为当前 agent 的探测模型
-    // - 会话详情页：仅当前 agent，模型来自会话级 model config option
+    // - 新建任务页 / agentSwitchable：全部 agent + 各 agent 探测到的模型（agentModelsMap）；
+    //   无 map 时退化为当前 agent 的探测模型
+    // - 会话详情页：仅当前 agent，模型优先探测结果（更全），回退会话级 model config option
     const sessionAgentType = ctx.session?.agent_type || ''
     const comboAgents = hasAgentSelect
       ? ctx.agents
       : sessionAgentType
         ? [{ type: sessionAgentType, display_name: sessionAgentType }]
         : []
-    const comboSelectedAgent = hasAgentSelect ? ctx.selectedAgent : sessionAgentType
-    const comboSelectedModel = hasAgentSelect ? ctx.selectedModel : (modelOpt?.current_value || '')
+    // 有会话时选中项以会话为准（agent 锁定会话 agent、模型取会话级配置当前值）
+    const comboSelectedAgent = ctx.session ? sessionAgentType : ctx.selectedAgent
+    const comboSelectedModel = ctx.session ? (modelOpt?.current_value || ctx.selectedModel) : ctx.selectedModel
     const comboModels = hasAgentSelect
       ? (ctx.agentModelsMap ?? (ctx.selectedAgent && modelOpt ? { [ctx.selectedAgent]: modelOpt.options } : {}))
-      : (sessionAgentType && modelOpt ? { [sessionAgentType]: modelOpt.options } : {})
+      : { [sessionAgentType]: ctx.agentModelsMap?.[sessionAgentType] || modelOpt?.options || [] }
     const handleComboSelect = (agentType: string, modelValue: string) => {
       if (hasAgentSelect) {
         if (ctx.onSelectAgentModel) {
@@ -215,6 +218,7 @@ export default function ChatPanel({
               commands={ctx.commands}
               modes={ctx.modes}
               skills={ctx.skills}
+              tasks={ctx.taskMentions}
               cwd={ctx.cwd}
               workspaceId={ctx.workspaceId}
               placeholder={placeholder}

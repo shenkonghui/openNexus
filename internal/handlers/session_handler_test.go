@@ -338,6 +338,7 @@ func newSessionTestRouter(store SessionStore, userID uint) *gin.Engine {
 	v1 := r.Group("/api/v1")
 	v1.POST("/sessions", h.Create)
 	v1.GET("/sessions", h.List)
+	v1.GET("/sessions/latest", h.LatestByWorkspace)
 	v1.GET("/sessions/:id", h.Get)
 	v1.DELETE("/sessions/:id", h.Delete)
 	v1.POST("/sessions/:id/prompt", h.Prompt)
@@ -426,6 +427,60 @@ func TestSessionHandler_Get_Success(t *testing.T) {
 	w := doJSON(t, r, "GET", "/api/v1/sessions/1", nil)
 	if w.Code != http.StatusOK {
 		t.Fatalf("状态码 = %d, 期望 200, body=%s", w.Code, w.Body.String())
+	}
+}
+
+// LatestByWorkspace 不应返回子会话：历史版本的编排任务执行会话是
+// source=orchestration 的子会话且 cwd 指向已删除的 worktree，
+// 若被任务助手误复用会导致"工作目录不存在"。
+// 应跳过子会话，命中更早的顶级管理会话。
+func TestSessionHandler_LatestByWorkspace_SkipsChildSessions(t *testing.T) {
+	store := newFakeSessionStore()
+	wid := uint(1)
+	parent := uint(7)
+	store.sessions[10] = &models.Session{
+		ID: 10, SessionID: "acp-10", UserID: 100, WorkspaceID: &wid,
+		Source: models.SessionSourceOrchestration, Status: models.SessionStatusActive,
+		CreatedAt: time.Now().Add(-time.Hour),
+	}
+	// 更新的子会话（历史编排任务执行会话，cwd 指向 worktree），不应被命中
+	store.sessions[11] = &models.Session{
+		ID: 11, SessionID: "acp-11", UserID: 100, WorkspaceID: &wid,
+		Source: models.SessionSourceOrchestration, Status: models.SessionStatusError,
+		ParentSessionID: &parent, Cwd: "/tmp/ws/.worktrees/tabc",
+		CreatedAt: time.Now(),
+	}
+	r := newSessionTestRouter(store, 100)
+	w := doJSON(t, r, "GET", "/api/v1/sessions/latest?workspace_id=1&source=orchestration", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("状态码 = %d, 期望 200, body=%s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Data models.Session `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("解析响应失败: %v", err)
+	}
+	if resp.Data.ID != 10 {
+		t.Errorf("返回会话 ID = %d, 期望 10（顶级管理会话，跳过子会话）", resp.Data.ID)
+	}
+}
+
+// 仅剩子会话时应返回 404，由调用方新建管理会话。
+func TestSessionHandler_LatestByWorkspace_OnlyChildSessions_NotFound(t *testing.T) {
+	store := newFakeSessionStore()
+	wid := uint(1)
+	parent := uint(7)
+	store.sessions[11] = &models.Session{
+		ID: 11, SessionID: "acp-11", UserID: 100, WorkspaceID: &wid,
+		Source: models.SessionSourceOrchestration, Status: models.SessionStatusError,
+		ParentSessionID: &parent, Cwd: "/tmp/ws/.worktrees/tabc",
+		CreatedAt: time.Now(),
+	}
+	r := newSessionTestRouter(store, 100)
+	w := doJSON(t, r, "GET", "/api/v1/sessions/latest?workspace_id=1&source=orchestration", nil)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("状态码 = %d, 期望 404, body=%s", w.Code, w.Body.String())
 	}
 }
 

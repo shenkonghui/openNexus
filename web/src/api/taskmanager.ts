@@ -153,3 +153,29 @@ export function getTaskGitStatus(workspaceId: number): Promise<{ data: { cwd: st
 export function initTaskGitRepo(workspaceId: number): Promise<{ data: { cwd: string; is_git_repo: boolean } }> {
   return apiFetch(`/taskmanager/git-init${qs(workspaceId)}`, { method: 'POST' })
 }
+
+/** 归档到回收站的任务条目（保留原任务字段 + 归档时间） */
+export type ArchivedTask = TaskManagerTask & { archived_at: string }
+
+// 归档任务（taskId 为空或 '*' 表示归档全部），返回归档数量
+export function archiveTask(workspaceId: number, taskId?: string): Promise<{ data: { archived: number } }> {
+  return apiFetch(`/taskmanager/archive${qs(workspaceId)}`, {
+    method: 'POST',
+    body: JSON.stringify(taskId ? { task_id: taskId } : {}),
+  })
+}
+
+// 回收站列表（服务端先清理过期归档再返回）
+export function listArchivedTasks(workspaceId: number): Promise<{ data: { tasks: ArchivedTask[]; retention_days: number } }> {
+  return apiFetch(`/taskmanager/archived${qs(workspaceId)}`)
+}
+
+// 从回收站恢复任务到 tasks.json
+export function restoreArchivedTask(workspaceId: number, taskId: string): Promise<void> {
+  return apiFetch(`/taskmanager/archived/${encodeURIComponent(taskId)}/restore${qs(workspaceId)}`, { method: 'POST' })
+}
+
+// 彻底删除回收站中的任务（同时清理 worktree 与关联会话）
+export function deleteArchivedTask(workspaceId: number, taskId: string): Promise<void> {
+  return apiFetch(`/taskmanager/archived/${encodeURIComponent(taskId)}${qs(workspaceId)}`, { method: 'DELETE' })
+}

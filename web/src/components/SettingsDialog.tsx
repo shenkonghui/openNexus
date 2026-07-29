@@ -103,6 +103,7 @@ export default function SettingsDialog({ initialTab = 'language', onClose }: Pro
   const [taskTagInput, setTaskTagInput] = useState('')
   const [taskTagPrompt, setTaskTagPrompt] = useState('')
   const [taskTitlePrompt, setTaskTitlePrompt] = useState('')
+  const [taskArchiveDays, setTaskArchiveDays] = useState(3)
   const [taskSettingsSaving, setTaskSettingsSaving] = useState(false)
   const [taskSettingsSaved, setTaskSettingsSaved] = useState(false)
   // goal 设置状态（通用 /goal 循环：评估 agent/模型 + 限制条件）
@@ -260,6 +261,7 @@ export default function SettingsDialog({ initialTab = 'language', onClose }: Pro
       setTaskTags(ts.tags || [])
       setTaskTagPrompt(ts.tag_prompt || '')
       setTaskTitlePrompt(ts.title_prompt || '')
+      setTaskArchiveDays(ts.archive_retention_days || 3)
       // goal 设置
       setGoalAgent(goalSettingsResp.data.agent_type || '')
       setGoalModel(goalSettingsResp.data.model_value || '')
@@ -399,10 +401,12 @@ export default function SettingsDialog({ initialTab = 'language', onClose }: Pro
         tags: taskTags,
         tag_prompt: taskTagPrompt,
         title_prompt: taskTitlePrompt,
+        archive_retention_days: taskArchiveDays,
       })
       setTaskTags(resp.data.tags || [])
       setTaskTagPrompt(resp.data.tag_prompt || '')
       setTaskTitlePrompt(resp.data.title_prompt || '')
+      setTaskArchiveDays(resp.data.archive_retention_days || 3)
       setTaskSettingsSaved(true)
     } catch (err) {
       setError(err instanceof Error ? err.message : t('common.failed'))
@@ -1187,6 +1191,15 @@ export default function SettingsDialog({ initialTab = 'language', onClose }: Pro
                         </span>
                       ))}
                     </div>
+
+                    {/* 归档任务在回收站的保留天数 */}
+                    <label className={styles.label}>{t('settings.archiveRetention')}</label>
+                    <p className={styles.sectionHint}>{t('settings.archiveRetentionHint')}</p>
+                    <input className={styles.input} type="number" min={1} max={365}
+                      value={taskArchiveDays}
+                      onChange={(e) => setTaskArchiveDays(Math.max(1, Number(e.target.value) || 3))}
+                      style={{ maxWidth: 120 }}
+                    />
 
                     {/* 高级：自定义提示词 */}
                     <details className={styles.advancedSection}>

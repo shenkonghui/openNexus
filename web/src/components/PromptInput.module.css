@@ -140,6 +140,11 @@
   color: #0ea5e9;
 }
 
+.kind_task {
+  background: rgba(99, 102, 241, 0.15);
+  color: #6366f1;
+}
+
 .kind_category {
   background: var(--bg-muted);
   color: var(--text-secondary);
