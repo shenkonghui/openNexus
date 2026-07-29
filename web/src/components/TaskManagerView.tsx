@@ -4,7 +4,7 @@ import { useTranslation } from 'react-i18next'
 import {
   getTaskManager, getTaskStatus, getTaskGitStatus, initTaskGitRepo,
   upsertTask, deleteTask, startTaskManager, stopTaskManager, saveTaskManager,
-  subscribeTaskEvents,
+  subscribeTaskEvents, genTaskId,
   type TaskManagerDef, type TaskManagerTask, type TaskPriority,
 } from '../api/taskmanager'
 import { sessionUrl, newTaskUrl } from '../utils/routes'
@@ -19,11 +19,6 @@ import { ChevronRight, ChevronDown, MessagesSquare, GitBranch, Plus, FileJson, L
 const ACTIVE_STATUSES = new Set(['queued', 'running'])
 
 const GOAL_STATUSES = new Set(['active', 'evaluating', 'achieved', 'stopped'])
-
-// 生成一个不与现有任务冲突的短 id（客户端新建任务用）。
-function genTaskId(): string {
-  return `t${Date.now().toString(36)}${Math.floor(Math.random() * 36).toString(36)}`
-}
 
 // 规范化后端返回的 def：确保 tasks 为数组（tasks.json 不存在/为空时后端可能省略 tasks 字段）。
 function normalizeDef(d: TaskManagerDef | null | undefined): TaskManagerDef {

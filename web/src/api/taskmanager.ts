@@ -42,6 +42,11 @@ function qs(workspaceId: number | null | undefined): string {
   return workspaceId ? `?workspace_id=${workspaceId}` : ''
 }
 
+// 生成一个不与现有任务冲突的短 id（客户端新建任务用）。
+export function genTaskId(): string {
+  return `t${Date.now().toString(36)}${Math.floor(Math.random() * 36).toString(36)}`
+}
+
 // 读取当前工作区的任务管理定义（tasks.json）
 export function getTaskManager(workspaceId: number): Promise<{ data: TaskManagerDef }> {
   return apiFetch(`/taskmanager${qs(workspaceId)}`)

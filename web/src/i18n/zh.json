@@ -866,7 +866,7 @@
     "aiManageTitle": "任务助手",
     "aiTitle": "任务助手",
     "aiPlaceholder": "描述你的需求，例如：新增一个重构登录模块的任务；把并发改成 5",
-    "aiHint": "用自然语言描述需求，Agent 会通过任务工具增删改任务、启停、调整并发；输入 /task 可把消息直发到某个任务的会话",
+    "aiHint": "用自然语言描述需求，Agent 会通过任务工具增删改任务、启停、调整并发；/create-task 直建任务（默认 goal+worktree），/task 直发消息到任务会话，/del-task 直删任务",
     "clear": "清空",
     "clearHint": "清空当前对话并开启新会话",
     "clearConfirm": "确定清空当前对话并开启新会话？原会话将被删除。",
@@ -909,6 +909,11 @@
     "taskCmdNotFound": "未找到任务 {{id}}",
     "taskCmdNoSession": "任务「{{title}}」尚未执行，暂无会话可发送",
     "taskCmdEmpty": "请在 /task:<任务ID> 后输入要发送的内容",
-    "taskCmdBusy": "任务「{{title}}」正在处理上一条直发消息，请稍候"
+    "taskCmdBusy": "任务「{{title}}」正在处理上一条直发消息，请稍候",
+    "createTaskCmd": "新建任务并启动（默认开启 goal 循环 + worktree 隔离）",
+    "createTaskEmpty": "请在 /create-task 后输入任务内容",
+    "taskCreated": "已创建并启动任务「{{title}}」：goal 循环已开启，worktree 将在启动时自动创建。",
+    "delTaskCmd": "删除任务：{{title}}",
+    "taskDeleted": "已删除任务「{{title}}」（关联会话与 worktree 已清理）。"
   }
 }

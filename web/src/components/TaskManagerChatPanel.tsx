@@ -11,7 +11,7 @@ import { streamPrompt, isTimeoutError } from '../api/sse'
 import { parsePermissionRequest } from '../utils/permission'
 import { Eraser } from 'lucide-react'
 import type { Agent, Message, Session, AgentCommand, ConfigOption, ConfigOptionValue, SessionMode, AgentSkill, PermissionRequestPayload } from '../types'
-import type { TaskManagerTask } from '../api/taskmanager'
+import { upsertTask, deleteTask, startTaskManager, genTaskId, type TaskManagerTask } from '../api/taskmanager'
 import type { ConvState } from './ConvStatusBar'
 import type { PanelCtx } from '../modes/types'
 import ChatPanel from '../modes/ChatPanel'
@@ -32,8 +32,20 @@ interface Props {
   onTaskChanged: () => void
 }
 
-// /task:<id> 直发命令：跳过任务助手会话，把内容直接发送到对应任务的已有会话
-const TASK_CMD_RE = /^\/task:(\S+)\s*([\s\S]*)$/
+// /task:<id> 直发命令：跳过任务助手会话，把内容直接发送到对应任务的已有会话。
+// id 后可跟「(标题)」注释（菜单插入时自动带上，便于辨认目标任务），解析时忽略。
+const TASK_CMD_RE = /^\/task:([^\s(]+)(?:\([^)]*\))?\s*([\s\S]*)$/
+
+// /create-task 直建命令：内容即任务 prompt，默认开启 goal 循环 + worktree 隔离
+const CREATE_TASK_CMD_RE = /^\/create-task(?:\s+([\s\S]*))?$/
+
+// /del-task:<id> 直删命令：id 后同样可跟「(标题)」注释，命令后多余文本忽略
+const DEL_TASK_CMD_RE = /^\/del-task:([^\s(]+)(?:\([^)]*\))?\s*[\s\S]*$/
+
+// 生成命令名里的标题注释：去掉空白与括号（避免破坏 \S+ 命令解析），过长截断
+function taskTitleNote(title: string): string {
+  return title.replace(/[\s()（）]/g, '').slice(0, 20)
+}
 
 // 编排工具调用特征：MCP 工具名或直接读写 tasks.json。命中即认为任务定义可能已变更。
 const TM_TOOL_RE = /(create|update|delete|start|stop)_task|set_max_parallel|tasks\.json/i
@@ -398,16 +410,33 @@ export default function TaskManagerChatPanel({
   }
 
   // ===== /task 直发：把消息发送到指定任务的已有会话（不经过助手会话） =====
-  // 注入到输入框斜杠菜单的合成命令：输入 /task 即可筛选出所有可直发的任务。
-  const taskCommands = useMemo<AgentCommand[]>(() => (
-    (tasks || [])
-      .filter((tk) => tk.db_session_id)
-      .map((tk) => ({
-        name: `task:${tk.id}`,
-        description: t('taskmanager.sendToTask', { title: tk.title }),
-        has_input: true,
-      }))
-  ), [tasks, t])
+  // 注入到输入框斜杠菜单的合成命令：/create-task 直建任务、/task:<id> 直发消息、
+  // /del-task:<id> 直删任务。输入 /task 或标题关键字即可筛选。
+  const taskCommands = useMemo<AgentCommand[]>(() => {
+    const cmds: AgentCommand[] = [{
+      name: 'create-task',
+      description: t('taskmanager.createTaskCmd'),
+      has_input: true,
+    }]
+    for (const tk of tasks || []) {
+      const note = taskTitleNote(tk.title)
+      const suffix = note ? `(${note})` : ''
+      // 命令名带标题注释，插入输入框后可直接辨认目标任务，如 /task:a1b2(修复登录)
+      if (tk.db_session_id) {
+        cmds.push({
+          name: `task:${tk.id}${suffix}`,
+          description: t('taskmanager.sendToTask', { title: tk.title }),
+          has_input: true,
+        })
+      }
+      cmds.push({
+        name: `del-task:${tk.id}${suffix}`,
+        description: t('taskmanager.delTaskCmd', { title: tk.title }),
+        has_input: false,
+      })
+    }
+    return cmds
+  }, [tasks, t])
 
   // 追加一条仅本地展示的消息（负 id、sequence=0，不入库，刷新后消失）
   function appendLocalMessage(role: 'user' | 'assistant', kind: string, content: string) {
@@ -430,7 +459,8 @@ export default function TaskManagerChatPanel({
     if (taskStreamsRef.current.has(task.id)) { setError(t('taskmanager.taskCmdBusy', { title: task.title })); return }
 
     const sid = task.db_session_id
-    appendLocalMessage('user', 'user_message_chunk', `/task:${task.id} ${body}`)
+    const note = taskTitleNote(task.title)
+    appendLocalMessage('user', 'user_message_chunk', `/task:${task.id}${note ? `(${note})` : ''} ${body}`)
     appendLocalMessage('assistant', 'agent_message_chunk', t('taskmanager.taskPromptSent', { title: task.title }))
 
     const ac = new AbortController()
@@ -463,14 +493,64 @@ export default function TaskManagerChatPanel({
     )
   }
 
+  // /create-task 直建任务：detail 前缀 /opennexus-goal 使任务启动即进入 goal 循环，
+  // 创建后立即启动——启动时后端自动创建 worktree（AI 命名分支）隔离执行。
+  async function handleCreateTask(content: string) {
+    setError('')
+    if (!content) { setError(t('taskmanager.createTaskEmpty')); return }
+    const title = content.split('\n')[0].slice(0, 40)
+    const agentType = (selectedAgent || agents[0]?.type || '').trim()
+    const id = genTaskId()
+    appendLocalMessage('user', 'user_message_chunk', `/create-task ${content}`)
+    try {
+      await upsertTask(workspaceId, {
+        id, title,
+        detail: `/opennexus-goal ${content}`,
+        agent_type: agentType,
+        model_value: selectedModel || undefined,
+      })
+      await startTaskManager(workspaceId, id)
+      appendLocalMessage('assistant', 'agent_message_chunk', t('taskmanager.taskCreated', { title }))
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    }
+    onTaskChanged()
+  }
+
+  // /del-task 直删任务：后端连带取消运行、清理 worktree 与关联会话
+  async function handleDeleteTask(taskId: string) {
+    setError('')
+    const task = (tasks || []).find((tk) => tk.id === taskId)
+    if (!task) { setError(t('taskmanager.taskCmdNotFound', { id: taskId })); return }
+    const note = taskTitleNote(task.title)
+    appendLocalMessage('user', 'user_message_chunk', `/del-task:${task.id}${note ? `(${note})` : ''}`)
+    try {
+      await deleteTask(workspaceId, taskId)
+      appendLocalMessage('assistant', 'agent_message_chunk', t('taskmanager.taskDeleted', { title: task.title }))
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    }
+    onTaskChanged()
+  }
+
   // ===== 发送 =====
   async function handleSend(prompt: string) {
     const text = prompt.trim()
     if (!text) return
-    // /task:<id> 命令：直发任务会话，不依赖助手会话与 agent 选择，也不受 conv 状态限制
+    // 任务直操命令：不依赖助手会话与 agent 选择，也不受 conv 状态限制
     const taskMatch = text.match(TASK_CMD_RE)
     if (taskMatch) {
       void handleSendToTask(taskMatch[1], taskMatch[2].trim())
+      return
+    }
+    const createMatch = text.match(CREATE_TASK_CMD_RE)
+    if (createMatch) {
+      void handleCreateTask((createMatch[1] || '').trim())
+      return
+    }
+    const delMatch = text.match(DEL_TASK_CMD_RE)
+    if (delMatch) {
+      void handleDeleteTask(delMatch[1])
       return
     }
     if (conv !== 'idle' || !selectedAgent) return
