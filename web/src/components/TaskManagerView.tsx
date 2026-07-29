@@ -4,25 +4,21 @@ import { useTranslation } from 'react-i18next'
 import {
   getTaskManager, getTaskStatus, getTaskGitStatus, initTaskGitRepo,
   upsertTask, deleteTask, startTaskManager, stopTaskManager, saveTaskManager,
-  subscribeTaskEvents,
+  subscribeTaskEvents, genTaskId,
   type TaskManagerDef, type TaskManagerTask, type TaskPriority,
 } from '../api/taskmanager'
 import { sessionUrl, newTaskUrl } from '../utils/routes'
 import type { Agent } from '../types'
 import LoadingSpinner from './LoadingSpinner'
 import TaskManagerChatPanel from './TaskManagerChatPanel'
+import TaskLiveWindow from './TaskLiveWindow'
 import SplitPane from './SplitPane'
 import styles from './TaskManagerView.module.css'
-import { ChevronRight, ChevronDown, MessagesSquare, GitBranch, Plus, FileJson, List, Play, PlayCircle, Square, Trash2, Target } from 'lucide-react'
+import { ChevronRight, ChevronDown, MessagesSquare, GitBranch, Plus, FileJson, List, Play, PlayCircle, Square, Trash2, Target, LayoutGrid } from 'lucide-react'
 
 const ACTIVE_STATUSES = new Set(['queued', 'running'])
 
 const GOAL_STATUSES = new Set(['active', 'evaluating', 'achieved', 'stopped'])
-
-// 生成一个不与现有任务冲突的短 id（客户端新建任务用）。
-function genTaskId(): string {
-  return `t${Date.now().toString(36)}${Math.floor(Math.random() * 36).toString(36)}`
-}
 
 // 规范化后端返回的 def：确保 tasks 为数组（tasks.json 不存在/为空时后端可能省略 tasks 字段）。
 function normalizeDef(d: TaskManagerDef | null | undefined): TaskManagerDef {
@@ -53,6 +49,8 @@ export default function TaskManagerView({ workspaceId, cwd, agents, restoreSessi
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
   // 展开/折叠的任务卡片 id 集合
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set())
+  // 「展开全部」网格模式：所有任务窗口平铺，实时展示各自会话输出
+  const [gridMode, setGridMode] = useState(() => localStorage.getItem('opennexus.taskmanager.grid') === '1')
   // git 仓库状态：null=未知/加载中；true=是仓库；false=需初始化
   const [gitRepo, setGitRepo] = useState<boolean | null>(null)
   const [gitInitializing, setGitInitializing] = useState(false)
@@ -297,7 +295,78 @@ export default function TaskManagerView({ workspaceId, cwd, agents, restoreSessi
     }
   }
 
+  // 切换「展开全部」网格模式并持久化（刷新后保持所选视图）
+  function toggleGridMode() {
+    setGridMode((v) => {
+      const next = !v
+      try { localStorage.setItem('opennexus.taskmanager.grid', next ? '1' : '0') } catch { /* ignore */ }
+      return next
+    })
+  }
+
   if (loading) return <LoadingSpinner />
+
+  // 「展开全部」网格模式：上方任务窗口按浏览器宽度自适应平铺（每格实时订阅其会话输出），
+  // 下方保留任务助手对话（可输入 /task:<id> 把消息直发到某个任务会话）。
+  if (gridMode && gitRepo !== false) {
+    return (
+      <SplitPane dir="col" storageKey="taskmanager-grid" defaultFlexes={[3, 2]}>
+        <div className={styles.gridCol}>
+          <div className={styles.toolbar}>
+            <span className={styles.toolbarTitle}>{t('taskmanager.groupTitle')}</span>
+            <div className={styles.toolbarActions}>
+              {def.tasks.some((tk) => !ACTIVE_STATUSES.has(tk.status)) && (
+                <button
+                  type="button"
+                  className={styles.toolbarBtn}
+                  onClick={handleStartAll}
+                  disabled={busy}
+                  title={t('taskmanager.startAll')}
+                >
+                  <PlayCircle size={14} /> {t('taskmanager.startAll')}
+                </button>
+              )}
+              <button
+                type="button"
+                className={styles.toolbarBtn}
+                onClick={toggleGridMode}
+                title={t('taskmanager.collapseGrid')}
+              >
+                <List size={14} /> {t('taskmanager.collapseGrid')}
+              </button>
+            </div>
+          </div>
+          <div className={styles.gridScroll}>
+            {def.tasks.length === 0 ? (
+              <div className={styles.empty}>{t('taskmanager.empty')}</div>
+            ) : (
+              <div className={styles.grid}>
+                {def.tasks.map((task) => (
+                  <TaskLiveWindow key={task.id} task={task} onOpen={openTask} />
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+        <div className={styles.gridChatCol}>
+          {!workspaceId ? (
+            <div className={styles.empty}>{t('taskmanager.empty')}</div>
+          ) : (
+            <div className={styles.chatBody}>
+              <TaskManagerChatPanel
+                agents={agents}
+                workspaceId={workspaceId}
+                cwd={cwd}
+                restoreSessionId={restoreSessionId}
+                tasks={def.tasks}
+                onTaskChanged={reloadStatus}
+              />
+            </div>
+          )}
+        </div>
+      </SplitPane>
+    )
+  }
 
   return (
     <SplitPane dir="row" storageKey="taskmanager" defaultFlexes={[1, 1]}>
@@ -327,6 +396,17 @@ export default function TaskManagerView({ workspaceId, cwd, agents, restoreSessi
                   title={t('taskmanager.newTask')}
                 >
                   <Plus size={14} /> {t('taskmanager.newTask')}
+                </button>
+              )}
+              {!jsonMode && def.tasks.length > 0 && (
+                <button
+                  type="button"
+                  className={styles.toolbarBtn}
+                  onClick={toggleGridMode}
+                  disabled={busy}
+                  title={t('taskmanager.expandAllHint')}
+                >
+                  <LayoutGrid size={14} /> {t('taskmanager.expandAll')}
                 </button>
               )}
               <button
@@ -562,6 +642,7 @@ export default function TaskManagerView({ workspaceId, cwd, agents, restoreSessi
               workspaceId={workspaceId}
               cwd={cwd}
               restoreSessionId={restoreSessionId}
+              tasks={def.tasks}
               onTaskChanged={reloadStatus}
             />
           </div>

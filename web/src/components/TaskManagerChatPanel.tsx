@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect } from 'react'
+import { useState, useRef, useCallback, useEffect, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   createSession, updateSessionTitle, setConfigOption, setSessionMode,
@@ -11,6 +11,7 @@ import { streamPrompt, isTimeoutError } from '../api/sse'
 import { parsePermissionRequest } from '../utils/permission'
 import { Eraser } from 'lucide-react'
 import type { Agent, Message, Session, AgentCommand, ConfigOption, SessionMode, AgentSkill, PermissionRequestPayload } from '../types'
+import { upsertTask, deleteTask, startTaskManager, genTaskId, type TaskManagerTask } from '../api/taskmanager'
 import type { ConvState } from './ConvStatusBar'
 import type { PanelCtx } from '../modes/types'
 import ChatPanel from '../modes/ChatPanel'
@@ -25,8 +26,25 @@ interface Props {
   /** 指定需恢复的编排管理会话 DB 主键（从侧边栏点击编排记录进入时传入）；
    *  缺省时回退到 tasks.json 登记的 parent_session_id。 */
   restoreSessionId?: number
+  /** 当前任务列表：用于 /task:<id> 命令把消息直发到对应任务会话 */
+  tasks?: TaskManagerTask[]
   /** Agent 改动 tasks.json 后触发（通常刷新编排页任务列表） */
   onTaskChanged: () => void
+}
+
+// /task:<id> 直发命令：跳过任务助手会话，把内容直接发送到对应任务的已有会话。
+// id 后可跟「(标题)」注释（菜单插入时自动带上，便于辨认目标任务），解析时忽略。
+const TASK_CMD_RE = /^\/task:([^\s(]+)(?:\([^)]*\))?\s*([\s\S]*)$/
+
+// /create-task 直建命令：内容即任务 prompt，默认开启 goal 循环 + worktree 隔离
+const CREATE_TASK_CMD_RE = /^\/create-task(?:\s+([\s\S]*))?$/
+
+// /del-task:<id> 直删命令：id 后同样可跟「(标题)」注释，命令后多余文本忽略
+const DEL_TASK_CMD_RE = /^\/del-task:([^\s(]+)(?:\([^)]*\))?\s*[\s\S]*$/
+
+// 生成命令名里的标题注释：去掉空白与括号（避免破坏 \S+ 命令解析），过长截断
+function taskTitleNote(title: string): string {
+  return title.replace(/[\s()（）]/g, '').slice(0, 20)
 }
 
 // 编排工具调用特征：MCP 工具名或直接读写 tasks.json。命中即认为任务定义可能已变更。
@@ -70,7 +88,7 @@ function buildSystemPrelude(): string {
  * 直接复用任务页的 ChatPanel（含配置栏/状态条/权限弹窗），构造最小 PanelCtx。
  */
 export default function TaskManagerChatPanel({
-  agents, workspaceId, cwd, defaultAgentType, restoreSessionId, onTaskChanged,
+  agents, workspaceId, cwd, defaultAgentType, restoreSessionId, tasks, onTaskChanged,
 }: Props) {
   const { t } = useTranslation()
 
@@ -98,6 +116,11 @@ export default function TaskManagerChatPanel({
   const [pendingPermission, setPendingPermission] = useState<PermissionRequestPayload | null>(null)
   const [permissionResponding, setPermissionResponding] = useState(false)
   const permissionQueueRef = useRef<PermissionRequestPayload[]>([])
+  // /task 直发的权限请求来自任务会话而非助手会话：request_id → 任务 db_session_id 路由表
+  const permissionSessionRef = useRef<Map<string, number>>(new Map())
+
+  // /task 直发的后台流：taskId → AbortController（避免同一任务并发直发，卸载时统一中止）
+  const taskStreamsRef = useRef<Map<string, AbortController>>(new Map())
 
   const abortRef = useRef<AbortController | null>(null)
   const pendingMessagesRef = useRef<Message[]>([])
@@ -157,19 +180,27 @@ export default function TaskManagerChatPanel({
   }, [])
 
   const handlePermissionRespond = useCallback(async (optionId: string) => {
-    if (!session || !pendingPermission) return
+    if (!pendingPermission) return
+    // /task 直发的权限请求需回给对应任务会话；否则回给助手会话
+    const sid = permissionSessionRef.current.get(pendingPermission.request_id) ?? session?.id
+    if (!sid) return
     setPermissionResponding(true)
     try {
-      await respondPermission(session.id, pendingPermission.request_id, optionId)
+      await respondPermission(sid, pendingPermission.request_id, optionId)
     } catch { /* ignore */ }
+    permissionSessionRef.current.delete(pendingPermission.request_id)
     setPermissionResponding(false)
     const next = permissionQueueRef.current.shift() || null
     setPendingPermission(next)
   }, [session, pendingPermission])
 
   const handlePermissionCancel = useCallback(() => {
-    if (session && pendingPermission) {
-      respondPermission(session.id, pendingPermission.request_id, '', true).catch(() => {})
+    if (pendingPermission) {
+      const sid = permissionSessionRef.current.get(pendingPermission.request_id) ?? session?.id
+      if (sid) {
+        respondPermission(sid, pendingPermission.request_id, '', true).catch(() => {})
+      }
+      permissionSessionRef.current.delete(pendingPermission.request_id)
     }
     const next = permissionQueueRef.current.shift() || null
     setPendingPermission(next)
@@ -228,11 +259,15 @@ export default function TaskManagerChatPanel({
   // 卸载清理
   useEffect(() => {
     mountedRef.current = true
+    const taskStreams = taskStreamsRef.current
     return () => {
       mountedRef.current = false
       if (flushRafRef.current != null) cancelAnimationFrame(flushRafRef.current)
       if (refreshTimerRef.current != null) clearTimeout(refreshTimerRef.current)
       abortRef.current?.abort()
+      // 中止所有 /task 直发的后台流（任务会话本身继续执行，仅断开本面板的接收）
+      for (const ac of taskStreams.values()) ac.abort()
+      taskStreams.clear()
     }
   }, [])
 
@@ -336,10 +371,151 @@ export default function TaskManagerChatPanel({
     }
   }
 
+  // ===== /task 直发：把消息发送到指定任务的已有会话（不经过助手会话） =====
+  // 注入到输入框斜杠菜单的合成命令：/create-task 直建任务、/task:<id> 直发消息、
+  // /del-task:<id> 直删任务。输入 /task 或标题关键字即可筛选。
+  const taskCommands = useMemo<AgentCommand[]>(() => {
+    const cmds: AgentCommand[] = [{
+      name: 'create-task',
+      description: t('taskmanager.createTaskCmd'),
+      has_input: true,
+    }]
+    for (const tk of tasks || []) {
+      const note = taskTitleNote(tk.title)
+      const suffix = note ? `(${note})` : ''
+      // 命令名带标题注释，插入输入框后可直接辨认目标任务，如 /task:a1b2(修复登录)
+      if (tk.db_session_id) {
+        cmds.push({
+          name: `task:${tk.id}${suffix}`,
+          description: t('taskmanager.sendToTask', { title: tk.title }),
+          has_input: true,
+        })
+      }
+      cmds.push({
+        name: `del-task:${tk.id}${suffix}`,
+        description: t('taskmanager.delTaskCmd', { title: tk.title }),
+        has_input: false,
+      })
+    }
+    return cmds
+  }, [tasks, t])
+
+  // 追加一条仅本地展示的消息（负 id、sequence=0，不入库，刷新后消失）
+  function appendLocalMessage(role: 'user' | 'assistant', kind: string, content: string) {
+    const msg: Message = {
+      id: -Date.now() - Math.floor(Math.random() * 1000), session_id: '', role,
+      kind, content, raw_json: '', sequence: 0,
+      execution_id: null, created_at: new Date().toISOString(),
+    }
+    setMessages((prev) => [...prev, msg])
+  }
+
+  // 后台直发到任务会话：不占用助手对话的 conv 状态（输入框保持可用），
+  // 实时输出由「展开全部」网格窗口 / 任务会话页通过 /stream 订阅呈现。
+  async function handleSendToTask(taskId: string, body: string) {
+    setError('')
+    const task = (tasks || []).find((tk) => tk.id === taskId)
+    if (!task) { setError(t('taskmanager.taskCmdNotFound', { id: taskId })); return }
+    if (!task.db_session_id) { setError(t('taskmanager.taskCmdNoSession', { title: task.title })); return }
+    if (!body) { setError(t('taskmanager.taskCmdEmpty')); return }
+    if (taskStreamsRef.current.has(task.id)) { setError(t('taskmanager.taskCmdBusy', { title: task.title })); return }
+
+    const sid = task.db_session_id
+    const note = taskTitleNote(task.title)
+    appendLocalMessage('user', 'user_message_chunk', `/task:${task.id}${note ? `(${note})` : ''} ${body}`)
+    appendLocalMessage('assistant', 'agent_message_chunk', t('taskmanager.taskPromptSent', { title: task.title }))
+
+    const ac = new AbortController()
+    taskStreamsRef.current.set(task.id, ac)
+    await streamPrompt(
+      sid,
+      body,
+      (msg) => {
+        if (!mountedRef.current) return
+        // 任务会话内的权限请求路由回该任务会话，由本面板权限弹窗代为响应
+        if (msg.kind === 'permission_request') {
+          const req = parsePermissionRequest(msg.raw_json)
+          if (req) {
+            permissionSessionRef.current.set(req.request_id, sid)
+            enqueuePermission(req)
+          }
+        }
+      },
+      () => {
+        taskStreamsRef.current.delete(task.id)
+        if (mountedRef.current) onTaskChanged()
+      },
+      (err) => {
+        taskStreamsRef.current.delete(task.id)
+        if (!mountedRef.current) return
+        setError(`${task.title}: ${isTimeoutError(err) ? t('common.timeout') : err.message}`)
+        onTaskChanged()
+      },
+      { signal: ac.signal },
+    )
+  }
+
+  // /create-task 直建任务：detail 前缀 /opennexus-goal 使任务启动即进入 goal 循环，
+  // 创建后立即启动——启动时后端自动创建 worktree（AI 命名分支）隔离执行。
+  async function handleCreateTask(content: string) {
+    setError('')
+    if (!content) { setError(t('taskmanager.createTaskEmpty')); return }
+    const title = content.split('\n')[0].slice(0, 40)
+    const agentType = (selectedAgent || agents[0]?.type || '').trim()
+    const id = genTaskId()
+    appendLocalMessage('user', 'user_message_chunk', `/create-task ${content}`)
+    try {
+      await upsertTask(workspaceId, {
+        id, title,
+        detail: `/opennexus-goal ${content}`,
+        agent_type: agentType,
+        model_value: selectedModel || undefined,
+      })
+      await startTaskManager(workspaceId, id)
+      appendLocalMessage('assistant', 'agent_message_chunk', t('taskmanager.taskCreated', { title }))
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    }
+    onTaskChanged()
+  }
+
+  // /del-task 直删任务：后端连带取消运行、清理 worktree 与关联会话
+  async function handleDeleteTask(taskId: string) {
+    setError('')
+    const task = (tasks || []).find((tk) => tk.id === taskId)
+    if (!task) { setError(t('taskmanager.taskCmdNotFound', { id: taskId })); return }
+    const note = taskTitleNote(task.title)
+    appendLocalMessage('user', 'user_message_chunk', `/del-task:${task.id}${note ? `(${note})` : ''}`)
+    try {
+      await deleteTask(workspaceId, taskId)
+      appendLocalMessage('assistant', 'agent_message_chunk', t('taskmanager.taskDeleted', { title: task.title }))
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    }
+    onTaskChanged()
+  }
+
   // ===== 发送 =====
   async function handleSend(prompt: string) {
     const text = prompt.trim()
-    if (!text || conv !== 'idle' || !selectedAgent) return
+    if (!text) return
+    // 任务直操命令：不依赖助手会话与 agent 选择，也不受 conv 状态限制
+    const taskMatch = text.match(TASK_CMD_RE)
+    if (taskMatch) {
+      void handleSendToTask(taskMatch[1], taskMatch[2].trim())
+      return
+    }
+    const createMatch = text.match(CREATE_TASK_CMD_RE)
+    if (createMatch) {
+      void handleCreateTask((createMatch[1] || '').trim())
+      return
+    }
+    const delMatch = text.match(DEL_TASK_CMD_RE)
+    if (delMatch) {
+      void handleDeleteTask(delMatch[1])
+      return
+    }
+    if (conv !== 'idle' || !selectedAgent) return
     setError('')
 
     // 首条消息：保证“一个工作区只有一个任务助手管理会话”。
@@ -445,7 +621,8 @@ export default function TaskManagerChatPanel({
     sending: conv !== 'idle',
     onSend: handleSend,
     onCancel: handleCancel,
-    commands,
+    // 合并 /task 直发命令与 agent 自身的 slash commands（菜单内按名称排序展示）
+    commands: [...taskCommands, ...commands],
     modes,
     skills,
     currentModeId: session

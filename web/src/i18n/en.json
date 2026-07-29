@@ -861,7 +861,7 @@
     "aiManageTitle": "Task Assistant",
     "aiTitle": "Task Assistant",
     "aiPlaceholder": "Describe your need, e.g.: add a task to refactor the login module; set concurrency to 5",
-    "aiHint": "Describe your needs in natural language; the agent manages tasks via task tools (create/update/delete/start/stop/set concurrency)",
+    "aiHint": "Describe your needs in natural language; the agent manages tasks via task tools (create/update/delete/start/stop/set concurrency). /create-task creates a task instantly (goal + worktree by default), /task sends a message to a task's session, /del-task deletes a task",
     "clear": "Clear",
     "clearHint": "Clear the current conversation and start a new session",
     "clearConfirm": "Clear the current conversation and start a new session? The old session will be deleted.",
@@ -894,6 +894,21 @@
     "delete": "Delete",
     "promptRequired": "Please enter a prompt",
     "jsonInvalid": "Invalid JSON",
-    "confirmDelete": "Delete this task?"
+    "confirmDelete": "Delete this task?",
+    "expandAll": "Expand All",
+    "expandAllHint": "Tile all task windows and watch each task's live output",
+    "collapseGrid": "Collapse",
+    "liveEmpty": "No output yet",
+    "sendToTask": "Send to task: {{title}}",
+    "taskPromptSent": "Sent to task \"{{title}}\". Watch live output in its window or session page.",
+    "taskCmdNotFound": "Task {{id}} not found",
+    "taskCmdNoSession": "Task \"{{title}}\" has not run yet, no session to send to",
+    "taskCmdEmpty": "Type your message after /task:<task-id>",
+    "taskCmdBusy": "Task \"{{title}}\" is still processing the previous message",
+    "createTaskCmd": "Create and start a task (goal loop + worktree enabled by default)",
+    "createTaskEmpty": "Type the task content after /create-task",
+    "taskCreated": "Task \"{{title}}\" created and started: goal loop enabled, a worktree will be created automatically on start.",
+    "delTaskCmd": "Delete task: {{title}}",
+    "taskDeleted": "Task \"{{title}}\" deleted (its session and worktree were cleaned up)."
   }
 }
