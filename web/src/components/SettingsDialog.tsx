@@ -18,6 +18,7 @@ import { translatePrompt } from '../utils/defaultPrompts'
 import EditAgentDialog, { type AgentFormPayload } from './EditAgentDialog'
 import AgentAcpCapsPanel from './AgentAcpCapsPanel'
 import AgentModelSelector from './AgentModelSelector'
+import AgentModelMultiSelect from './AgentModelMultiSelect'
 import ConfigEditor from './ConfigEditor'
 import RawConfigCard from './RawConfigCard'
 import ErrorBanner from './ErrorBanner'
@@ -834,6 +835,14 @@ export default function SettingsDialog({ initialTab = 'language', onClose }: Pro
                     <label className={styles.label}>{t('settings.selectorFilters')}</label>
                     <p className={styles.hint}>{t('settings.selectorFiltersListHint')}</p>
                     <div className={styles.inlineRow}>
+                      {/* 多选下拉：搜索过滤 + 行右侧复选框勾选，替代平铺大列表 */}
+                      <AgentModelMultiSelect
+                        groups={selectorGroups}
+                        checked={selectorChecked}
+                        onToggle={toggleSelectorCombo}
+                        onToggleGroup={toggleSelectorGroup}
+                        className={styles.input}
+                      />
                       <button type="button" className={styles.secondaryBtn}
                         onClick={() => setAllSelectorCombos(true)}
                       >{t('settings.selectorSelectAll')}</button>
@@ -845,45 +854,6 @@ export default function SettingsDialog({ initialTab = 'language', onClose }: Pro
                         disabled={defaultModelsProbing}
                         title={t('scheduledTask.probeTitle')}
                       >{defaultModelsProbing ? t('common.loading') : t('scheduledTask.probeConfig')}</button>
-                    </div>
-                    <div className={styles.selectorFilterList}>
-                      {selectorGroups.map((g) => {
-                        const keys = g.models.length > 0
-                          ? g.models.map((m) => `${g.agent.type}\u0000${m.value}`)
-                          : [`${g.agent.type}\u0000`]
-                        const onCount = keys.filter((k) => selectorChecked[k]).length
-                        return (
-                          <div key={g.agent.type} className={styles.selectorFilterGroup}>
-                            <label className={styles.selectorFilterGroupHead}>
-                              <input
-                                type="checkbox"
-                                checked={onCount === keys.length}
-                                ref={(el) => { if (el) el.indeterminate = onCount > 0 && onCount < keys.length }}
-                                onChange={() => toggleSelectorGroup(keys)}
-                              />
-                              <span>{g.agent.display_name}（{g.agent.type}）</span>
-                              <span className={styles.selectorFilterCount}>{onCount}/{keys.length}</span>
-                            </label>
-                            {g.models.length > 0 && (
-                              <div className={styles.selectorFilterModels}>
-                                {g.models.map((m) => {
-                                  const key = `${g.agent.type}\u0000${m.value}`
-                                  return (
-                                    <label key={key} className={styles.selectorFilterItem} title={m.value}>
-                                      <input
-                                        type="checkbox"
-                                        checked={!!selectorChecked[key]}
-                                        onChange={() => toggleSelectorCombo(key)}
-                                      />
-                                      <span>{m.name !== m.value ? `${m.name} (${m.value})` : m.value}</span>
-                                    </label>
-                                  )
-                                })}
-                              </div>
-                            )}
-                          </div>
-                        )
-                      })}
                     </div>
                     {/* 高级：直接编辑正则规则（勾选操作会覆写此处内容） */}
                     <details className={styles.advancedSection}>
