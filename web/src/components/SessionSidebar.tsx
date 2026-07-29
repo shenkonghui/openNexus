@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { formatTimeAgo } from '../utils/time'
@@ -6,7 +6,7 @@ import { sessionUrl, newTaskUrl, taskManagerUrl } from '../utils/routes'
 import type { Session, ScheduledTask } from '../types'
 import { listScheduledTasks } from '../api/scheduledTasks'
 import { listSessions, listRunningSessions } from '../api/sessions'
-import { getTaskManager, getTaskStatus, startTaskManager, type TaskManagerTask } from '../api/taskmanager'
+import { getTaskManager, getTaskStatus, startTaskManager, subscribeTaskEvents, type TaskManagerTask } from '../api/taskmanager'
 import { PanelLeftClose, Star, Pencil, X, Check, SquarePlus, FileText, Calendar, Settings, Zap, Loader2, CheckCircle2, XCircle, Clock3, CircleDashed, Network, Layers, History } from 'lucide-react'
 import styles from './SessionSidebar.module.css'
 import NexusLogoIcon from './NexusLogoIcon'
@@ -20,8 +20,9 @@ interface SessionSidebarProps {
   onRename?: (id: number, title: string) => void
   onCollapse?: () => void
   onNewScheduledTask?: () => void
-  /** 工作区相关回调由 AppLayout 顶部工作区选择器消费，SessionSidebar 仅作类型透传 */
+  /** 工作区切换回调由 AppLayout 顶部工作区选择器消费，SessionSidebar 仅作类型透传 */
   onWorkspaceChange?: (id: number) => void
+  /** 刷新工作区/会话列表：tasks.json 变更（如删除任务连带删会话）时由侧边栏触发，使会话列表同步 */
   onWorkspaceRefresh?: () => void
   /** 由 AppLayout 统一渲染顶栏 Logo 时隐藏，避免重复 */
   hideLogo?: boolean
@@ -88,7 +89,7 @@ function TaskStatusDot({ status }: { status: string }) {
   return <CircleDashed size={size} className={`${cls} ${styles.taskStatusIconIdle}`} />
 }
 
-export default function SessionSidebar({ sessions, workspaceId, currentId, onDelete, onRename, onCollapse, onNewScheduledTask, hideLogo, yoloEnabled, yoloSaving, onToggleYolo }: SessionSidebarProps) {
+export default function SessionSidebar({ sessions, workspaceId, currentId, onDelete, onRename, onCollapse, onNewScheduledTask, onWorkspaceRefresh, hideLogo, yoloEnabled, yoloSaving, onToggleYolo }: SessionSidebarProps) {
   const { t } = useTranslation()
   const [editingId, setEditingId] = useState<number | null>(null)
   const [editTitle, setEditTitle] = useState('')
@@ -102,6 +103,9 @@ export default function SessionSidebar({ sessions, workspaceId, currentId, onDel
   const [tmTasks, setOrchTasks] = useState<TaskManagerTask[]>([])
   // 正在通过编排引擎启动的任务 id（点击未运行任务时置位），用于展示运行中状态并避免重复点击。
   const [startingTaskId, setStartingTaskId] = useState<string | null>(null)
+  // 回调存 ref：SSE 订阅 effect 仅依赖 workspaceId，避免回调引用变化导致频繁重连。
+  const onWorkspaceRefreshRef = useRef(onWorkspaceRefresh)
+  onWorkspaceRefreshRef.current = onWorkspaceRefresh
 
   useEffect(() => {
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify(collapsed)) } catch { /* ignore */ }
@@ -125,6 +129,27 @@ export default function SessionSidebar({ sessions, workspaceId, currentId, onDel
       .catch(() => { if (alive) setOrchTasks([]) })
     return () => { alive = false }
   }, [workspaceId, location.pathname, sessions])
+
+  // 订阅 tasks.json 变更事件（SSE）：任务助手 MCP 工具/编排页增删任务时实时刷新。
+  // 删除任务会连带删除其关联会话，因此除刷新 tmTasks 外还需通过 onWorkspaceRefresh
+  // 重拉会话列表，否则左侧「任务」分组仍展示已删任务的会话条目，与任务列表不同步。
+  useEffect(() => {
+    if (!workspaceId) return
+    const ac = new AbortController()
+    let timer: ReturnType<typeof setTimeout> | null = null
+    subscribeTaskEvents(workspaceId, () => {
+      if (timer) clearTimeout(timer)
+      timer = setTimeout(() => {
+        timer = null
+        getTaskManager(workspaceId)
+          .then((r) => setOrchTasks(r.data.tasks || []))
+          .catch(() => {})
+        onWorkspaceRefreshRef.current?.()
+      }, 300)
+    }, ac.signal).catch(() => {})
+    return () => { ac.abort(); if (timer) clearTimeout(timer) }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workspaceId])
 
   useEffect(() => {
     let alive = true
