@@ -188,14 +188,23 @@ jobs:
         if: startsWith(matrix.target, 'macos-')
         working-directory: electron
         env:
-          # 均为可选：未配置 secrets 时为空，electron-builder 跳过签名、notarize.cjs 跳过公证
-          CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
-          CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+          # 用 MAC_ 前缀传入，避免把空的 CSC_LINK 直接暴露给 electron-builder
+          # （空 CSC_LINK 会被当成证书文件路径，报 "not a file" 导致 mac 构建失败）
+          MAC_CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          MAC_CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           npm install --no-audit --no-fund
+          if [ -n "$MAC_CSC_LINK" ]; then
+            # 配置了签名证书：启用签名（notarize.cjs 再按 APPLE_* 是否配置决定公证）
+            export CSC_LINK="$MAC_CSC_LINK"
+            export CSC_KEY_PASSWORD="$MAC_CSC_KEY_PASSWORD"
+          else
+            # 未配置证书：显式关闭签名自动发现，产出未签名 .dmg（否则空 CSC_LINK 会报错）
+            export CSC_IDENTITY_AUTO_DISCOVERY=false
+          fi
           npx electron-builder --mac --${{ matrix.ebArch }}
 
       - name: Install & Build (Linux)
