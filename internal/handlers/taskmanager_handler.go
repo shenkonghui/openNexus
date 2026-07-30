@@ -97,7 +97,7 @@ func (h *TaskManagerHandler) Get(c *gin.Context) {
 }
 
 type saveDefRequest struct {
-	MaxParallel int                        `json:"max_parallel"`
+	MaxParallel int                      `json:"max_parallel"`
 	Tasks       []models.TaskManagerTask `json:"tasks"`
 }
 
@@ -128,6 +128,8 @@ type upsertTaskRequest struct {
 	ModelValue string   `json:"model_value"`
 	Priority   string   `json:"priority"`
 	DependsOn  []string `json:"depends_on"`
+	// GoalCondition 为空时沿用已有任务的条件（见 TaskStore.UpsertTask 合并逻辑）。
+	GoalCondition string `json:"goal_condition"`
 }
 
 // UpsertTask POST /api/v1/taskmanager/tasks?workspace_id=123 — 新增/更新单个任务。
@@ -142,13 +144,14 @@ func (h *TaskManagerHandler) UpsertTask(c *gin.Context) {
 		return
 	}
 	task := models.TaskManagerTask{
-		ID:         strings.TrimSpace(req.ID),
-		Title:      strings.TrimSpace(req.Title),
-		Detail:     req.Detail,
-		AgentType:  req.AgentType,
-		ModelValue: strings.TrimSpace(req.ModelValue),
-		Priority:   models.NormalizeTaskPriority(req.Priority),
-		DependsOn:  req.DependsOn,
+		ID:            strings.TrimSpace(req.ID),
+		Title:         strings.TrimSpace(req.Title),
+		Detail:        req.Detail,
+		AgentType:     req.AgentType,
+		ModelValue:    strings.TrimSpace(req.ModelValue),
+		Priority:      models.NormalizeTaskPriority(req.Priority),
+		DependsOn:     req.DependsOn,
+		GoalCondition: strings.TrimSpace(req.GoalCondition),
 	}
 	if task.ID == "" {
 		Fail(c, http.StatusBadRequest, "INVALID_REQUEST", "任务 id 不能为空")

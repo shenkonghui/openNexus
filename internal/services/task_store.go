@@ -203,6 +203,7 @@ func (s *TaskStore) UpsertTask(task models.TaskManagerTask) error {
 			task.Error = cur.Error
 			task.Executions = cur.Executions
 			task.Branch = ifEmpty(task.Branch, cur.Branch)
+			task.GoalCondition = ifEmpty(task.GoalCondition, cur.GoalCondition)
 			task.Schedule = ifNilSchedule(task.Schedule, cur.Schedule)
 			if incomingPri == "" {
 				task.Priority = cur.Priority

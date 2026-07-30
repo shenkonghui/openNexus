@@ -46,6 +46,12 @@ const (
 	reconnectMaxDelay   = 60 * time.Second // 重连最大退避
 )
 
+// reconnectInfo 是一次断线重连的调度信息，供前端展示“N 秒后自动重连”倒计时。
+type reconnectInfo struct {
+	NextAttemptAt time.Time // 预计下次重连尝试时间
+	Attempt       int       // 连续重试次数（从 1 起，重连成功后清除）
+}
+
 // defaultPromptMaxDuration 是单轮 prompt 的默认最大存活时间。
 // prompt 的生命周期独立于 HTTP/SSE 请求（解耦后用 context.Background 派生），
 // 此超时兜底防止 agent 卡死导致 goroutine 永久泄漏。超时后标记 interrupted。
@@ -73,9 +79,12 @@ type Service struct {
 	connectDone map[string]chan struct{}
 	// sessionPoolKey 记录 sessionID → 连接池键，用于定位所属连接。
 	sessionPoolKey map[string]string
-	commands       map[string][]acp.AvailableCommand
-	configs        map[string][]acp.SessionConfigOption
-	modes          map[string][]acp.SessionMode
+	// reconnectSchedule 记录断开连接的下一次重连计划（poolKey → 计划），
+	// 供前端展示重连倒计时；重连成功或连接健康时清除。s.mu 保护。
+	reconnectSchedule map[string]reconnectInfo
+	commands          map[string][]acp.AvailableCommand
+	configs           map[string][]acp.SessionConfigOption
+	modes             map[string][]acp.SessionMode
 	// probeCache 缓存探测结果，按 agentType 存储，避免重复创建临时会话探测。
 	probeCache map[string][]acp.SessionConfigOption
 	// probeCachePath 是探测结果持久化文件路径，启动时从此文件预加载 probeCache。
@@ -225,6 +234,7 @@ func NewService(db *gorm.DB, messagesDir string, wsConfig config.WorkspaceConfig
 		states:                  make(map[string]string),
 		connectDone:             make(map[string]chan struct{}),
 		sessionPoolKey:          make(map[string]string),
+		reconnectSchedule:       make(map[string]reconnectInfo),
 		commands:                make(map[string][]acp.AvailableCommand),
 		configs:                 make(map[string][]acp.SessionConfigOption),
 		modes:                   make(map[string][]acp.SessionMode),
@@ -1068,7 +1078,7 @@ func (s *Service) releaseConnection(agentType, cwd string) {
 
 // ReattachPersistentConnections 主 server 启动时复用上次留下的常驻 agent：
 // 遍历心跳表，清理已死 bridge 的脏行；存活的按 agentType+cwd 重新建连
-//（ensureConnection 内部拨号同一 socket 复用原 agent），使会话恢复时可立即续用。
+// （ensureConnection 内部拨号同一 socket 复用原 agent），使会话恢复时可立即续用。
 // 仅 bridge 模式有效；backend 未注册（agent 已被禁用）时终止游离 bridge 防泄漏。
 func (s *Service) ReattachPersistentConnections() {
 	if !s.bridgeEnabled || s.acpConnRepo == nil {
@@ -1253,6 +1263,9 @@ func (s *Service) checkConnectionKey(poolKey string, delays map[string]time.Dura
 			s.mu.Unlock()
 		default:
 			delays[poolKey] = 0
+			s.mu.Lock()
+			delete(s.reconnectSchedule, poolKey)
+			s.mu.Unlock()
 			return
 		}
 	}
@@ -1267,6 +1280,12 @@ func (s *Service) checkConnectionKey(poolKey string, delays map[string]time.Dura
 	if !ok || delay == 0 {
 		delay = reconnectBaseDelay
 	}
+
+	// 登记重连计划：前端经 ConnectionStatusForSession 查询展示倒计时。
+	s.mu.Lock()
+	attempt := s.reconnectSchedule[poolKey].Attempt + 1
+	s.reconnectSchedule[poolKey] = reconnectInfo{NextAttemptAt: time.Now().Add(delay), Attempt: attempt}
+	s.mu.Unlock()
 
 	slog.Info("尝试重连 agent",
 		"agent", agentType, "cwd", cwd,
@@ -1284,6 +1303,11 @@ func (s *Service) checkConnectionKey(poolKey string, delays map[string]time.Dura
 			next = reconnectMaxDelay
 		}
 		delays[poolKey] = next
+		// 下一次尝试在下个健康检查周期再等待 next 后发起，近似刷新计划供倒计时展示；
+		// 实际尝试开始时会用精确时间覆写。
+		s.mu.Lock()
+		s.reconnectSchedule[poolKey] = reconnectInfo{NextAttemptAt: time.Now().Add(healthCheckInterval + next), Attempt: attempt}
+		s.mu.Unlock()
 		slog.Error("重连 agent 失败",
 			"agent", agentType,
 			"cwd", cwd,
@@ -1298,7 +1322,31 @@ func (s *Service) checkConnectionKey(poolKey string, delays map[string]time.Dura
 
 	slog.Info("重连 agent 成功", "agent", agentType, "cwd", cwd, "delay", delay)
 	delays[poolKey] = 0
+	s.mu.Lock()
+	delete(s.reconnectSchedule, poolKey)
+	s.mu.Unlock()
 	s.prefetchProbeConfig(s.hcCtx, agentType)
+}
+
+// ConnectionStatusForSession 返回会话所属 ACP 连接的状态与重连计划，
+// 供前端展示“连接已断开，N 秒后自动重连”倒计时。
+// state 为空表示会话尚未建立 ACP 连接（pending 会话）；
+// retryInMs 为距下次重连尝试的毫秒数（无计划或已到期为 0）。
+func (s *Service) ConnectionStatusForSession(sessionID string) (state string, retryInMs int64, attempt int) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	poolKey, ok := s.sessionPoolKey[sessionID]
+	if !ok {
+		return "", 0, 0
+	}
+	state = s.states[poolKey]
+	if info, exists := s.reconnectSchedule[poolKey]; exists {
+		attempt = info.Attempt
+		if ms := time.Until(info.NextAttemptAt).Milliseconds(); ms > 0 {
+			retryInMs = ms
+		}
+	}
+	return state, retryInMs, attempt
 }
 
 // CreateSession 创建新的 ACP 会话。
@@ -1689,14 +1737,17 @@ func (s *Service) PromptWithExecution(ctx context.Context, sessionID, prompt str
 					}
 				}
 			}
-			close(out)
-			bc.close()
-			s.unregisterBroadcaster(sessionID)
+			// 先落库终态、再关闭 channel：保证消费方（SendPrompt/RunSessionTask）看到
+			// 流关闭时可靠地通过 LastRunStatus 查到本轮的真实终态（done/interrupted），
+			// 避免中断收尾被误判为完成。
 			finishTask(finalStatus)
 			// 通知任务管理同步 tasks.json 中会话登记任务的状态（否则登记条目永远显示运行中）
 			if s.promptFinished != nil {
 				s.promptFinished.PromptFinished(session.ID, finalStatus)
 			}
+			close(out)
+			bc.close()
+			s.unregisterBroadcaster(sessionID)
 			// goal 循环：本轮正常结束后评估是否达成、决定是否自动续轮（无 goal 时立即返回）。
 			// 独立 goroutine：评估走临时会话可能耗时，不阻塞本 prompt 收尾。
 			if finalStatus == models.RunningTaskStatusDone {
@@ -1995,6 +2046,17 @@ func (s *Service) unregisterBroadcaster(sessionID string) {
 	s.mu.Lock()
 	delete(s.activePrompts, sessionID)
 	s.mu.Unlock()
+}
+
+// LastRunStatus 返回会话最近一次 prompt 的 running_task 终态（RunningTaskStatus* 常量）。
+// prompt 消费 goroutine 在关闭消息 channel 前已落库终态，因此消费方在流关闭后
+// 调用本方法可靠取到 done/interrupted；无记录时返回空串。
+func (s *Service) LastRunStatus(dbSessionID uint) string {
+	t, err := s.runningTasks.FindLatestByDBSessionID(dbSessionID)
+	if err != nil || t == nil {
+		return ""
+	}
+	return t.Status
 }
 
 // SubscribeSession 订阅指定会话当前进行中的 prompt 流，用于断点续传。

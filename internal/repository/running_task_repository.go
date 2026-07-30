@@ -44,6 +44,21 @@ func (r *RunningTaskRepository) FindByID(id uint) (*models.RunningTask, error) {
 	return &t, nil
 }
 
+// FindLatestByDBSessionID 返回指定会话最近一次 prompt 的记录（按开始时间倒序取首条）。
+// 用于消费方在消息流关闭后回查本轮真实终态；无记录时返回 (nil, nil)。
+func (r *RunningTaskRepository) FindLatestByDBSessionID(dbSessionID uint) (*models.RunningTask, error) {
+	var t models.RunningTask
+	err := r.db.Where("db_session_id = ?", dbSessionID).
+		Order("started_at DESC").Order("id DESC").First(&t).Error
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &t, nil
+}
+
 // FindInterruptedByDBSessionID 返回指定会话下所有 interrupted 状态的任务。
 func (r *RunningTaskRepository) FindInterruptedByDBSessionID(dbSessionID uint) ([]models.RunningTask, error) {
 	var tasks []models.RunningTask

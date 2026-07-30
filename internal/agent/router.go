@@ -491,6 +491,30 @@ func (r *Router) HasActivePrompt(sessionID string) bool {
 	return r.service.HasActivePrompt(sessionID)
 }
 
+// EnableGoal 为会话自动开启 goal 模式（编排任务重发/续跑时恢复 goal）。
+func (r *Router) EnableGoal(sessionID, condition string) error {
+	if r.service == nil {
+		return errors.New("service 未配置")
+	}
+	return r.service.EnableGoal(sessionID, condition)
+}
+
+// LastRunStatus 返回会话最近一次 prompt 的 running_task 终态（done/interrupted）。
+func (r *Router) LastRunStatus(dbSessionID uint) string {
+	if r.service == nil {
+		return ""
+	}
+	return r.service.LastRunStatus(dbSessionID)
+}
+
+// ConnectionStatusForSession 返回会话所属 ACP 连接的状态与重连倒计时信息。
+func (r *Router) ConnectionStatusForSession(sessionID string) (state string, retryInMs int64, attempt int) {
+	if r.service == nil {
+		return "", 0, 0
+	}
+	return r.service.ConnectionStatusForSession(sessionID)
+}
+
 // ApplyPermissions 把权限规则下发到所有连接（设置页保存后热更新）。
 func (r *Router) ApplyPermissions(mode string, allow, ask, deny []string) {
 	if r.service == nil {

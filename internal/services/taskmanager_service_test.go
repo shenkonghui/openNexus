@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"opennexus/internal/acp"
 	"opennexus/internal/models"
@@ -17,6 +18,9 @@ type mockTMExecutor struct {
 	result           acp.SessionTaskResult
 	deletedSessions  []string // 记录 DeleteSession 被调用的会话 ID
 	canceledSessions []string // 记录 CancelSession 被调用的会话 ID
+	lastRunStatus    string   // LastRunStatus 返回值（模拟 running_task 终态）
+	activePrompt     bool     // HasActivePrompt 返回值
+	enabledGoals     []string // 记录 EnableGoal 被调用的 "sessionID:condition"
 }
 
 func (m *mockTMExecutor) RunSessionTask(_ context.Context, cfg acp.SessionTaskConfig) (acp.SessionTaskResult, error) {
@@ -53,6 +57,19 @@ func (m *mockTMExecutor) CancelSession(_ context.Context, sessionID string) erro
 
 func (m *mockTMExecutor) DeleteSession(_ context.Context, sessionID string) error {
 	m.deletedSessions = append(m.deletedSessions, sessionID)
+	return nil
+}
+
+func (m *mockTMExecutor) LastRunStatus(_ uint) string {
+	return m.lastRunStatus
+}
+
+func (m *mockTMExecutor) HasActivePrompt(_ string) bool {
+	return m.activePrompt
+}
+
+func (m *mockTMExecutor) EnableGoal(sessionID, condition string) error {
+	m.enabledGoals = append(m.enabledGoals, sessionID+":"+condition)
 	return nil
 }
 
@@ -128,6 +145,60 @@ func TestExecuteTaskUsesExplicitBranch(t *testing.T) {
 	wantSuffix := filepath.Join(".worktrees", "fix", "login-crash")
 	if !strings.HasSuffix(mock.lastCfg.Cwd, wantSuffix) {
 		t.Fatalf("Cwd = %q, 期望以 %q 结尾", mock.lastCfg.Cwd, wantSuffix)
+	}
+}
+
+// TestExecuteTask_GoalAndNoWorktree 验证任务定义的 goal 条件透传给 RunSessionTask，
+// 且 NoWorktree 任务不建 worktree、直接在工作区目录运行（无需 git 仓库）。
+func TestExecuteTask_GoalAndNoWorktree(t *testing.T) {
+	cwd := t.TempDir()
+	mock := &mockTMExecutor{result: acp.SessionTaskResult{Success: true, SessionID: "s-uuid", DBSessionID: 99}}
+	svc := NewTaskManagerService(mock)
+
+	task := &models.TaskManagerTask{ID: "task1", Title: "T", Detail: "prompt", AgentType: "demo",
+		GoalCondition: "所有测试通过", NoWorktree: true}
+	if _, err := svc.executeTask(context.Background(), cwd, task, 5, 8); err != nil {
+		t.Fatalf("executeTask: %v", err)
+	}
+	if mock.lastCfg.Goal != "所有测试通过" {
+		t.Fatalf("Goal = %q, want 所有测试通过", mock.lastCfg.Goal)
+	}
+	if mock.lastCfg.Cwd != cwd {
+		t.Fatalf("Cwd = %q, 期望工作区目录 %q（不建 worktree）", mock.lastCfg.Cwd, cwd)
+	}
+}
+
+// TestSendPrompt_RestoresGoal 验证定义了 goal 的任务在重发/继续对话前
+// 会先调用 EnableGoal 恢复 goal 模式（服务重启后 goal 内存态丢失的场景）。
+func TestSendPrompt_RestoresGoal(t *testing.T) {
+	cwd := t.TempDir()
+	mock := &mockTMExecutor{}
+	svc := NewTaskManagerService(mock)
+	def := &models.TaskManagerDef{Tasks: []models.TaskManagerTask{{
+		ID: "a", Title: "A", Detail: "d", Status: models.TaskStatusInterrupt,
+		SessionID: "sess-1", GoalCondition: "验收通过",
+	}}}
+	if err := svc.Save(cwd, def); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	if err := svc.SendPrompt(context.Background(), cwd, "a", "继续"); err != nil {
+		t.Fatalf("SendPrompt: %v", err)
+	}
+	if len(mock.enabledGoals) != 1 || mock.enabledGoals[0] != "sess-1:验收通过" {
+		t.Fatalf("EnableGoal 调用 = %v, want [sess-1:验收通过]", mock.enabledGoals)
+	}
+	// 等待后台消费 goroutine 收尾（mock 返回已关闭 channel，很快结束），
+	// 避免其写回 tasks.json 与 TempDir 清理竞争。
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		got, err := svc.Load(cwd)
+		if err == nil && len(got.Tasks) == 1 && got.Tasks[0].Status != models.TaskStatusRunning {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("等待后台收尾超时")
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 
@@ -489,4 +560,184 @@ func TestPromptFinished_NoMatchIsNoop(t *testing.T) {
 	// GetSessionByDBID 返回 nil（mockTMExecutor 默认行为）也应安全
 	svc2 := NewTaskManagerService(&mockTMExecutor{})
 	svc2.PromptFinished(1, models.RunningTaskStatusDone)
+}
+
+// TestPromptFinished_GoalActiveKeepsRunning 验证 goal 生效期间 turn 正常结束不置 done，
+// 保持 running 等 goal 审核（由 GoalStateChanged 收尾）；interrupted 收尾不受 goal 门控，
+// 仍置 interrupt 可重发。
+func TestPromptFinished_GoalActiveKeepsRunning(t *testing.T) {
+	cwd := t.TempDir()
+	svc := NewTaskManagerService(&pfExecutor{cwd: cwd})
+	sess := &models.Session{ID: 9, SessionID: "s-9", Source: models.SessionSourceManual}
+	if err := svc.RegisterSessionTask(cwd, sess, "p"); err != nil {
+		t.Fatalf("登记: %v", err)
+	}
+	if err := svc.storeFor(cwd).UpdateTaskStatus("9", func(tk *models.TaskManagerTask) {
+		tk.Goal = &models.TaskGoalState{Condition: "c", Status: models.TaskGoalStatusActive}
+	}); err != nil {
+		t.Fatalf("写入 goal: %v", err)
+	}
+
+	svc.PromptFinished(9, models.RunningTaskStatusDone)
+	def, _ := svc.Load(cwd)
+	if def.Tasks[0].Status != models.TaskStatusRunning {
+		t.Fatalf("goal 生效中 turn 结束应保持 running，实际 %q", def.Tasks[0].Status)
+	}
+	if def.Tasks[0].FinishedAt != nil {
+		t.Error("goal 生效中不应设置 finished_at")
+	}
+
+	svc.PromptFinished(9, models.RunningTaskStatusInterrupted)
+	def, _ = svc.Load(cwd)
+	if def.Tasks[0].Status != models.TaskStatusInterrupt {
+		t.Fatalf("中断收尾不受 goal 门控，应置 interrupt，实际 %q", def.Tasks[0].Status)
+	}
+}
+
+// TestGoalStateChanged_AchievedSetsDone 验证 goal 达成时任务联动置 done 并写入快照。
+func TestGoalStateChanged_AchievedSetsDone(t *testing.T) {
+	cwd := t.TempDir()
+	svc := NewTaskManagerService(&pfExecutor{cwd: cwd})
+	sess := &models.Session{ID: 9, SessionID: "s-9", Source: models.SessionSourceManual}
+	if err := svc.RegisterSessionTask(cwd, sess, "p"); err != nil {
+		t.Fatalf("登记: %v", err)
+	}
+
+	svc.GoalStateChanged(9, &models.TaskGoalState{Condition: "c", Status: models.TaskGoalStatusAchieved, EvalCount: 1})
+	def, _ := svc.Load(cwd)
+	tk := def.Tasks[0]
+	if tk.Status != models.TaskStatusDone {
+		t.Fatalf("goal 达成应置 done，实际 %q", tk.Status)
+	}
+	if tk.FinishedAt == nil {
+		t.Error("finished_at 应已设置")
+	}
+	if tk.Goal == nil || tk.Goal.Status != models.TaskGoalStatusAchieved || tk.Goal.EvalCount != 1 {
+		t.Fatalf("goal 快照应写入任务: %+v", tk.Goal)
+	}
+}
+
+// TestGoalStateChanged_StoppedSetsFailed 验证 goal 终止时任务置 failed，
+// Error 记录终止原因与审计次数。
+func TestGoalStateChanged_StoppedSetsFailed(t *testing.T) {
+	cwd := t.TempDir()
+	svc := NewTaskManagerService(&pfExecutor{cwd: cwd})
+	sess := &models.Session{ID: 9, SessionID: "s-9", Source: models.SessionSourceManual}
+	if err := svc.RegisterSessionTask(cwd, sess, "p"); err != nil {
+		t.Fatalf("登记: %v", err)
+	}
+
+	svc.GoalStateChanged(9, &models.TaskGoalState{Condition: "c", Status: models.TaskGoalStatusStopped, LastReason: "超出最大轮数", EvalCount: 3})
+	def, _ := svc.Load(cwd)
+	tk := def.Tasks[0]
+	if tk.Status != models.TaskStatusFailed {
+		t.Fatalf("goal 终止应置 failed，实际 %q", tk.Status)
+	}
+	if !strings.Contains(tk.Error, "超出最大轮数") || !strings.Contains(tk.Error, "已审计 3 次") {
+		t.Fatalf("Error 应含终止原因与审计次数，实际 %q", tk.Error)
+	}
+}
+
+// TestGoalStateChanged_ClearSettlesRunningTask 验证手动 /goal clear（state 为 nil）：
+// 未达终态的 goal 快照置 stopped；无进行中 prompt 时 running 任务直接结算为 done，
+// prompt 进行中则保持 running，由 turn 结束时自然收尾。
+func TestGoalStateChanged_ClearSettlesRunningTask(t *testing.T) {
+	setup := func(active bool) (*TaskManagerService, string) {
+		cwd := t.TempDir()
+		exec := &pfExecutor{cwd: cwd}
+		exec.activePrompt = active
+		svc := NewTaskManagerService(exec)
+		sess := &models.Session{ID: 9, SessionID: "s-9", Source: models.SessionSourceManual}
+		if err := svc.RegisterSessionTask(cwd, sess, "p"); err != nil {
+			t.Fatalf("登记: %v", err)
+		}
+		if err := svc.storeFor(cwd).UpdateTaskStatus("9", func(tk *models.TaskManagerTask) {
+			tk.Goal = &models.TaskGoalState{Condition: "c", Status: models.TaskGoalStatusActive}
+		}); err != nil {
+			t.Fatalf("写入 goal: %v", err)
+		}
+		return svc, cwd
+	}
+
+	// 无进行中 prompt：直接结算为 done
+	svc, cwd := setup(false)
+	svc.GoalStateChanged(9, nil)
+	def, _ := svc.Load(cwd)
+	tk := def.Tasks[0]
+	if tk.Goal == nil || tk.Goal.Status != models.TaskGoalStatusStopped || tk.Goal.LastReason != "已手动清除" {
+		t.Fatalf("清除后 goal 快照应置 stopped/已手动清除: %+v", tk.Goal)
+	}
+	if tk.Status != models.TaskStatusDone {
+		t.Fatalf("无进行中 prompt 时清除 goal 应结算为 done，实际 %q", tk.Status)
+	}
+
+	// prompt 进行中：保持 running 由 turn 结束收尾
+	svc2, cwd2 := setup(true)
+	svc2.GoalStateChanged(9, nil)
+	def2, _ := svc2.Load(cwd2)
+	if def2.Tasks[0].Status != models.TaskStatusRunning {
+		t.Fatalf("prompt 进行中清除 goal 应保持 running，实际 %q", def2.Tasks[0].Status)
+	}
+}
+
+// TestRecoverAll_StopsZombieGoal 验证重启恢复时残留的 active/evaluating goal 快照
+// 被置 stopped（goal 为会话内存态不跨重启），已达成的末态保留。
+func TestRecoverAll_StopsZombieGoal(t *testing.T) {
+	cwd := t.TempDir()
+	svc := NewTaskManagerService(&mockTMExecutor{})
+	def := &models.TaskManagerDef{
+		MaxParallel: 1,
+		Tasks: []models.TaskManagerTask{
+			{ID: "a", Title: "A", Detail: "d", Status: models.TaskStatusRunning,
+				Goal: &models.TaskGoalState{Condition: "c", Status: models.TaskGoalStatusActive}},
+			{ID: "b", Title: "B", Detail: "d", Status: models.TaskStatusDone,
+				Goal: &models.TaskGoalState{Condition: "c", Status: models.TaskGoalStatusAchieved}},
+		},
+	}
+	if err := svc.Save(cwd, def); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	svc.RecoverAll([]string{cwd})
+	got, err := svc.Load(cwd)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got.Tasks[0].Status != models.TaskStatusInterrupt {
+		t.Errorf("running → interrupt, got %q", got.Tasks[0].Status)
+	}
+	if g := got.Tasks[0].Goal; g == nil || g.Status != models.TaskGoalStatusStopped || g.LastReason != "服务重启中断" {
+		t.Errorf("残留 active goal 应置 stopped/服务重启中断: %+v", g)
+	}
+	if g := got.Tasks[1].Goal; g == nil || g.Status != models.TaskGoalStatusAchieved {
+		t.Errorf("已达成 goal 末态应保留: %+v", g)
+	}
+}
+
+// TestRecoverAll_ReturnsInterruptedGoalTasks 验证 RecoverAll 仅返回被标记中断且
+// 定义了 goal 的任务（供重启后自动续跑），普通任务与未运行任务不返回。
+func TestRecoverAll_ReturnsInterruptedGoalTasks(t *testing.T) {
+	cwd := t.TempDir()
+	svc := NewTaskManagerService(&mockTMExecutor{})
+	def := &models.TaskManagerDef{
+		MaxParallel: 1,
+		Tasks: []models.TaskManagerTask{
+			{ID: "a", Title: "A", Detail: "d", Status: models.TaskStatusRunning, GoalCondition: "完成", SessionID: "sess-a"},
+			{ID: "b", Title: "B", Detail: "d", Status: models.TaskStatusQueued, GoalCondition: "完成"},
+			{ID: "c", Title: "C", Detail: "d", Status: models.TaskStatusRunning},                   // 无 goal 不自动续跑
+			{ID: "d", Title: "D", Detail: "d", Status: models.TaskStatusDone, GoalCondition: "完成"}, // 未运行不返回
+		},
+	}
+	if err := svc.Save(cwd, def); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	got := svc.RecoverAll([]string{cwd})
+	if len(got) != 2 {
+		t.Fatalf("应返回 2 个带 goal 的中断任务，实际 %d: %+v", len(got), got)
+	}
+	if got[0].TaskID != "a" || !got[0].HasSession || got[0].Cwd != cwd {
+		t.Errorf("任务 a 应带会话可继续对话: %+v", got[0])
+	}
+	if got[1].TaskID != "b" || got[1].HasSession {
+		t.Errorf("任务 b 无会话应重新启动: %+v", got[1])
+	}
 }

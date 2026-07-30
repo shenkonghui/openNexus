@@ -5,10 +5,11 @@ import { subscribeStream } from '../api/sse'
 import type { Message } from '../types'
 import type { TaskManagerTask } from '../api/taskmanager'
 import MessageList from './MessageList'
-import { GitBranch, ExternalLink } from 'lucide-react'
+import { GitBranch, ExternalLink, Target } from 'lucide-react'
 import styles from './TaskLiveWindow.module.css'
 
 const ACTIVE_STATUSES = new Set(['queued', 'running'])
+const GOAL_STATUSES = new Set(['active', 'evaluating', 'achieved', 'stopped'])
 
 // 空闲时两次订阅之间的间隔：subscribeStream 在会话无活跃 prompt 时会立即返回 [DONE]，
 // 通过短暂停顿避免对后端形成高频空转轮询。
@@ -137,6 +138,23 @@ export default function TaskLiveWindow({ task, onOpen }: Props) {
             <span className={styles.branch} title={task.worktree_path || task.branch}>
               <GitBranch size={11} />
               <span className={styles.branchName}>{task.branch}</span>
+            </span>
+          )}
+          {/* goal 徽标：未运行展示定义侧条件，运行后展示生命周期状态（与列表视图一致） */}
+          {!task.goal && task.goal_condition && (
+            <span className={styles.goal} title={task.goal_condition}>
+              <Target size={11} />
+              goal
+            </span>
+          )}
+          {task.goal && GOAL_STATUSES.has(task.goal.status) && (
+            <span
+              className={`${styles.goal} ${styles[`goal_${task.goal.status}`] || ''}`}
+              title={`${task.goal.condition}${task.goal.last_reason ? `\n${task.goal.last_reason}` : ''}`}
+            >
+              <Target size={11} />
+              {t(`taskmanager.goal_${task.goal.status}`)}
+              {task.goal.status === 'active' && task.goal.turns > 0 ? ` ×${task.goal.turns}` : ''}
             </span>
           )}
           <span className={`${styles.status} ${styles[`status_${task.status}`] || ''}`}>

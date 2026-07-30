@@ -33,8 +33,8 @@ type noopSchedulerMgr struct{}
 
 func (noopSchedulerMgr) AddTask(string, *models.TaskManagerTask) error    { return nil }
 func (noopSchedulerMgr) UpdateTask(string, *models.TaskManagerTask) error { return nil }
-func (noopSchedulerMgr) RemoveTask(string, string) error                    { return nil }
-func (noopSchedulerMgr) RunTask(string, string) error                       { return nil }
+func (noopSchedulerMgr) RemoveTask(string, string) error                  { return nil }
+func (noopSchedulerMgr) RunTask(string, string) error                     { return nil }
 
 func TestSetup_RegistersP5Routes(t *testing.T) {
 	db, err := database.Connect("file::memory:?cache=shared")
@@ -66,6 +66,7 @@ func TestSetup_RegistersP5Routes(t *testing.T) {
 		"POST /api/v1/sessions",
 		"GET /api/v1/sessions",
 		"GET /api/v1/sessions/:id",
+		"GET /api/v1/sessions/:id/connection",
 		"DELETE /api/v1/sessions/:id",
 		"POST /api/v1/sessions/:id/prompt",
 		"POST /api/v1/sessions/:id/cancel",

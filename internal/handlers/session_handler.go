@@ -69,6 +69,8 @@ type SessionStore interface {
 	SubscribeSession(sessionID string, lastSeq int) ([]models.Message, <-chan models.Message, error)
 	// HasActivePrompt 判断会话是否有进行中的 prompt。
 	HasActivePrompt(sessionID string) bool
+	// ConnectionStatusForSession 返回会话所属 ACP 连接的状态与重连倒计时（毫秒）。
+	ConnectionStatusForSession(sessionID string) (state string, retryInMs int64, attempt int)
 	// ListInterruptedTasks 返回指定会话下因服务重启而中断的任务。
 	ListInterruptedTasks(dbSessionID uint) ([]models.RunningTask, error)
 	// ResumeInterruptedTask 恢复中断的任务：ResumeSession + 重新发送原 prompt。
@@ -398,6 +400,22 @@ func (h *SessionHandler) Get(c *gin.Context) {
 		return
 	}
 	Success(c, http.StatusOK, sess)
+}
+
+// Connection GET /api/v1/sessions/:id/connection
+// 返回会话所属 ACP 连接的状态与自动重连倒计时，供前端展示
+// “连接已断开，N 秒后自动重连”。state 为空表示尚未建立连接。
+func (h *SessionHandler) Connection(c *gin.Context) {
+	sess, ok := h.loadOwnedSession(c)
+	if !ok {
+		return
+	}
+	state, retryInMs, attempt := h.store.ConnectionStatusForSession(sess.SessionID)
+	Success(c, http.StatusOK, gin.H{
+		"state":            state,
+		"next_retry_in_ms": retryInMs,
+		"attempt":          attempt,
+	})
 }
 
 // UpdateTitle PUT /api/v1/sessions/:id/title

@@ -148,6 +148,7 @@ export default function TaskManagerView({ workspaceId, cwd, agents, restoreSessi
   }
 
   // 提交新建任务：prompt 必填（作为 detail），标题缺省取 prompt 首行。
+  // 与 MCP create_task 行为一致：默认开启 goal 模式，完成条件取任务详情。
   async function handleCreateTask() {
     if (!workspaceId || busy) return
     const prompt = newPrompt.trim()
@@ -156,7 +157,7 @@ export default function TaskManagerView({ workspaceId, cwd, agents, restoreSessi
     const agentType = (newAgent || agents[0]?.type || '').trim()
     setBusy(true)
     try {
-      await upsertTask(workspaceId, { id: genTaskId(), title, detail: prompt, agent_type: agentType, priority: newPriority })
+      await upsertTask(workspaceId, { id: genTaskId(), title, detail: prompt, agent_type: agentType, priority: newPriority, goal_condition: prompt })
       setShowNewForm(false)
       setNewTitle('')
       setNewPrompt('')
@@ -564,6 +565,13 @@ export default function TaskManagerView({ workspaceId, cwd, agents, restoreSessi
                             <span className={styles.taskBranchName}>{task.branch}</span>
                           </span>
                         )}
+                        {/* 未运行仅有定义侧条件时也在任务行直接展示 goal 徽标，悬停可看完整条件 */}
+                        {!task.goal && task.goal_condition && (
+                          <span className={styles.taskGoal} title={task.goal_condition}>
+                            <Target size={11} />
+                            goal
+                          </span>
+                        )}
                         {task.goal && GOAL_STATUSES.has(task.goal.status) && (
                           <span
                             className={`${styles.taskGoal} ${styles[`goal_${task.goal.status}`] || ''}`}
@@ -572,6 +580,9 @@ export default function TaskManagerView({ workspaceId, cwd, agents, restoreSessi
                             <Target size={11} />
                             {t(`taskmanager.goal_${task.goal.status}`)}
                             {task.goal.status === 'active' && task.goal.turns > 0 ? ` ×${task.goal.turns}` : ''}
+                            {(task.goal.status === 'stopped' || task.goal.status === 'achieved') && (task.goal.eval_count ?? 0) > 0
+                              ? ` · ${t('taskmanager.goalEvalCount', { count: task.goal.eval_count })}`
+                              : ''}
                           </span>
                         )}
                         <span className={`${styles.taskPriority} ${styles[`priority_${task.priority || 'p1'}`] || ''}`}>
@@ -630,11 +641,25 @@ export default function TaskManagerView({ workspaceId, cwd, agents, restoreSessi
                           </div>
                         )}
                         {task.error && <div className={styles.taskError}>{task.error}</div>}
+                        {/* 未运行过的任务展示定义侧 goal 条件；运行后由下方 goal 状态块接管 */}
+                        {!task.goal && task.goal_condition && (
+                          <div className={styles.taskGoalDetail}>
+                            <div className={styles.taskGoalDetailRow}>
+                              <Target size={12} style={{ flexShrink: 0 }} />
+                              <span>goal</span>
+                            </div>
+                            <div className={styles.taskGoalCondition}>{task.goal_condition}</div>
+                          </div>
+                        )}
                         {task.goal && GOAL_STATUSES.has(task.goal.status) && (
                           <div className={styles.taskGoalDetail}>
                             <div className={styles.taskGoalDetailRow}>
                               <Target size={12} style={{ flexShrink: 0 }} />
-                              <span>{t(`taskmanager.goal_${task.goal.status}`)}{task.goal.turns > 0 ? ` · ${t('taskmanager.goalTurns', { count: task.goal.turns })}` : ''}</span>
+                              <span>
+                                {t(`taskmanager.goal_${task.goal.status}`)}
+                                {task.goal.turns > 0 ? ` · ${t('taskmanager.goalTurns', { count: task.goal.turns })}` : ''}
+                                {(task.goal.eval_count ?? 0) > 0 ? ` · ${t('taskmanager.goalEvalCount', { count: task.goal.eval_count })}` : ''}
+                              </span>
                             </div>
                             <div className={styles.taskGoalCondition}>{task.goal.condition}</div>
                             {task.goal.roles && task.goal.roles.length > 0 && (

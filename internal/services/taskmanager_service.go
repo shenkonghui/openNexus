@@ -33,6 +33,14 @@ type TaskManagerExecutor interface {
 	CancelSession(ctx context.Context, sessionID string) error
 	// DeleteSession 删除会话（含消息），删除任务时用于同步移除其关联会话。
 	DeleteSession(ctx context.Context, sessionID string) error
+	// LastRunStatus 返回会话最近一次 prompt 的真实终态（done/interrupted），
+	// 消息流关闭后回查用，避免中断收尾被误判为完成；空串表示无记录。
+	LastRunStatus(dbSessionID uint) string
+	// HasActivePrompt 判断会话是否有进行中的 prompt（goal 清除时判断能否直接结算终态）。
+	HasActivePrompt(sessionID string) bool
+	// EnableGoal 为会话自动开启 goal 模式（已有生效 goal 时不重置），
+	// 用于任务重发/继续对话时恢复服务重启丢失的 goal 内存态。
+	EnableGoal(sessionID, condition string) error
 }
 
 // TaskManagerService 管理任务管理：读写工作区管理数据目录中的 tasks.json、按并发上限调度任务、
@@ -466,7 +474,6 @@ func (s *TaskManagerService) runTask(run *orchRun, t *models.TaskManagerTask, wo
 
 	fin := time.Now()
 	s.updateTask(run.cwd, t.ID, func(task *models.TaskManagerTask) {
-		task.FinishedAt = &fin
 		task.SessionID = result.SessionID
 		if result.DBSessionID > 0 {
 			dbID := result.DBSessionID
@@ -475,14 +482,34 @@ func (s *TaskManagerService) runTask(run *orchRun, t *models.TaskManagerTask, wo
 		if runErr != nil {
 			task.Status = models.TaskStatusFailed
 			task.Error = runErr.Error()
+			task.FinishedAt = &fin
+			return
+		}
+		if result.Background {
+			// 收集超时/调用取消但会话仍在后台运行：保持 running，
+			// 由 PromptFinished 在 prompt 真正结束时按真实终态收尾。
+			return
+		}
+		if result.Interrupted {
+			// 中断收尾（超时/断开）：置 interrupt 可重发，不算完成也不算失败。
+			task.Status = models.TaskStatusInterrupt
+			task.Error = result.Error
+			task.FinishedAt = &fin
 			return
 		}
 		if !result.Success {
 			task.Status = models.TaskStatusFailed
 			task.Error = result.Error
+			task.FinishedAt = &fin
+			return
+		}
+		if goalActive(task) {
+			// goal 生效中：审核通过（achieved）才算完成，保持 running，
+			// 由 GoalStateChanged 在 goal 达成/终止时收尾。
 			return
 		}
 		task.Status = models.TaskStatusDone
+		task.FinishedAt = &fin
 	})
 }
 
@@ -493,7 +520,7 @@ const taskBranchNamePrompt = `请为以下开发任务生成一个简短的英�
 仅输出分支名，不要输出其他任何内容。`
 
 // generateTaskBranch 生成任务的 worktree 分支名：优先用任务的 agent 做一次性 AI 命名
-//（规范化为 feat//fix/ 前缀），失败回退到标题/详情清洗，仍为空则兜底 task-<ID>。
+// （规范化为 feat//fix/ 前缀），失败回退到标题/详情清洗，仍为空则兜底 task-<ID>。
 func (s *TaskManagerService) generateTaskBranch(ctx context.Context, agentType string, t *models.TaskManagerTask) string {
 	desc := strings.TrimSpace(t.Title)
 	if desc == "" {
@@ -520,15 +547,6 @@ func (s *TaskManagerService) generateTaskBranch(ctx context.Context, agentType s
 
 // executeTask 创建 worktree 并调用 RunSessionTask 执行任务。
 func (s *TaskManagerService) executeTask(ctx context.Context, cwd string, t *models.TaskManagerTask, workspaceID, userID uint) (acp.SessionTaskResult, error) {
-	// 解析仓库根（worktree add 需在公共 git 仓库下执行）
-	repoRoot := cwd
-	if root, err := acp.GitRoot(cwd); err == nil {
-		repoRoot = root
-	}
-	if err := acp.EnsureWorktreesDir(repoRoot); err != nil {
-		return acp.SessionTaskResult{}, fmt.Errorf("创建 worktrees 目录: %w", err)
-	}
-
 	// 解析 agent 类型（提前到 worktree 创建前，AI 生成分支名也需要它）：
 	// 任务未指定时回退到首个已注册 agent。直接把空 agent_type 传给 RunSessionTask
 	// 会因 GetBackend 失败而报"agent 类型未注册"。
@@ -544,30 +562,44 @@ func (s *TaskManagerService) executeTask(ctx context.Context, cwd string, t *mod
 		}
 	}
 
-	// 分支名：任务已指定则沿用（重跑场景保持不变）；否则 AI 生成 feat//fix/ 前缀分支名并去重。
-	branch := t.Branch
-	if branch == "" {
-		branch = acp.UniqueWorktreeName(repoRoot, s.generateTaskBranch(ctx, agentType, t))
-	}
-	// worktree 目录跟随分支名（feat/xxx 形成嵌套目录）；重跑时复用已记录路径。
-	wtPath := t.WorktreePath
-	if wtPath == "" {
-		wtPath = acp.WorktreePath(repoRoot, branch)
-	}
+	// 运行目录：缺省在专属 git worktree 内隔离运行；NoWorktree 任务直接在工作区目录运行。
+	runCwd := cwd
+	if !t.NoWorktree {
+		// 解析仓库根（worktree add 需在公共 git 仓库下执行）
+		repoRoot := cwd
+		if root, err := acp.GitRoot(cwd); err == nil {
+			repoRoot = root
+		}
+		if err := acp.EnsureWorktreesDir(repoRoot); err != nil {
+			return acp.SessionTaskResult{}, fmt.Errorf("创建 worktrees 目录: %w", err)
+		}
 
-	// 若 worktree 已存在（如上次中断），先清理重建
-	if _, err := os.Stat(wtPath); err == nil {
-		_ = acp.RemoveWorktree(repoRoot, wtPath, branch)
-	}
-	if err := acp.CreateWorktree(repoRoot, branch, wtPath, ""); err != nil {
-		return acp.SessionTaskResult{}, fmt.Errorf("创建 worktree: %w", err)
-	}
+		// 分支名：任务已指定则沿用（重跑场景保持不变）；否则 AI 生成 feat//fix/ 前缀分支名并去重。
+		branch := t.Branch
+		if branch == "" {
+			branch = acp.UniqueWorktreeName(repoRoot, s.generateTaskBranch(ctx, agentType, t))
+		}
+		// worktree 目录跟随分支名（feat/xxx 形成嵌套目录）；重跑时复用已记录路径。
+		wtPath := t.WorktreePath
+		if wtPath == "" {
+			wtPath = acp.WorktreePath(repoRoot, branch)
+		}
 
-	// 记录 branch/worktreePath
-	s.updateTask(cwd, t.ID, func(task *models.TaskManagerTask) {
-		task.Branch = branch
-		task.WorktreePath = wtPath
-	})
+		// 若 worktree 已存在（如上次中断），先清理重建
+		if _, err := os.Stat(wtPath); err == nil {
+			_ = acp.RemoveWorktree(repoRoot, wtPath, branch)
+		}
+		if err := acp.CreateWorktree(repoRoot, branch, wtPath, ""); err != nil {
+			return acp.SessionTaskResult{}, fmt.Errorf("创建 worktree: %w", err)
+		}
+
+		// 记录 branch/worktreePath
+		s.updateTask(cwd, t.ID, func(task *models.TaskManagerTask) {
+			task.Branch = branch
+			task.WorktreePath = wtPath
+		})
+		runCwd = wtPath
+	}
 
 	cfg := acp.SessionTaskConfig{
 		AgentType:   agentType,
@@ -576,8 +608,11 @@ func (s *TaskManagerService) executeTask(ctx context.Context, cwd string, t *mod
 		UserID:      userID,
 		WorkspaceID: workspaceID,
 		Source:      models.SessionSourceManual,
-		// 任务在其专属 git worktree 内运行：用 worktree 路径覆盖工作区 cwd。
-		Cwd: wtPath,
+		// 任务在其专属 git worktree（或 NoWorktree 时的工作区目录）内运行。
+		Cwd: runCwd,
+		// 任务定义了 goal 时自动开启 goal 模式：达成前任务保持 running，
+		// 终态由 GoalStateChanged 回调收尾（achieved→done / stopped→failed）。
+		Goal: strings.TrimSpace(t.GoalCondition),
 		// 会话落库后立即回写 db_session_id/session_id，使前端启动后能马上导航到该会话
 		//（无需等 RunSessionTask 阻塞返回）。
 		OnSessionCreated: func(dbID uint, sid string) {
@@ -637,6 +672,14 @@ func (s *TaskManagerService) SendPrompt(_ context.Context, cwd, taskID, prompt s
 	s.taskCtx[taskKey] = cancel
 	s.mu.Unlock()
 
+	// 任务定义了 goal：重发/继续对话前恢复 goal 模式（服务重启会丢失 goal 内存态；
+	// 已有生效 goal 时 EnableGoal 不重置，保留续轮/审计计数）。
+	if cond := strings.TrimSpace(task.GoalCondition); cond != "" {
+		if err := s.exec.EnableGoal(task.SessionID, cond); err != nil {
+			slog.Warn("继续对话前恢复 goal 失败", "task", taskID, "session", task.SessionID, "err", err)
+		}
+	}
+
 	// 同步发送以便把会话不存在等错误立即反馈给调用方；消息流在后台消费。
 	// 使用 runCtx 而非调用方 ctx：MCP 工具请求返回后其 ctx 即被取消，会误中断对话。
 	ch, err := s.exec.Prompt(runCtx, task.SessionID, prompt)
@@ -667,13 +710,28 @@ func (s *TaskManagerService) SendPrompt(_ context.Context, cwd, taskID, prompt s
 			select {
 			case _, ok := <-ch:
 				if !ok {
-					// 消息流结束：仅在仍为运行态时置 done（Stop 会先置 canceled）
+					// 消息流结束：回查本轮真实终态（prompt 消费方在关闭流前已落库），
+					// 中断收尾置 interrupt 而非 done；goal 生效中保持 running，
+					// 由 GoalStateChanged 收尾。仅在仍为运行态时写入（Stop 会先置 canceled）。
+					runStatus := ""
+					if task.DBSessionID != nil {
+						runStatus = s.exec.LastRunStatus(*task.DBSessionID)
+					}
 					fin := time.Now()
 					s.updateTask(cwd, taskID, func(t *models.TaskManagerTask) {
-						if models.IsTaskRunning(t.Status) {
-							t.Status = models.TaskStatusDone
-							t.FinishedAt = &fin
+						if !models.IsTaskRunning(t.Status) {
+							return
 						}
+						if runStatus != "" && runStatus != models.RunningTaskStatusDone {
+							t.Status = models.TaskStatusInterrupt
+							t.FinishedAt = &fin
+							return
+						}
+						if goalActive(t) {
+							return
+						}
+						t.Status = models.TaskStatusDone
+						t.FinishedAt = &fin
 					})
 					return
 				}
@@ -866,21 +924,45 @@ func (s *TaskManagerService) PromptFinished(dbSessionID uint, runStatus string) 
 	}
 	now := time.Now()
 	s.updateTask(cwd, taskID, func(t *models.TaskManagerTask) {
-		if models.IsTaskRunning(t.Status) {
-			t.Status = status
-			t.FinishedAt = &now
+		if !models.IsTaskRunning(t.Status) {
+			return
 		}
+		if status == models.TaskStatusDone && goalActive(t) {
+			// goal 生效中：本轮结束不算任务完成，保持 running 等 goal 审核，
+			// 达成/终止时由 GoalStateChanged 收尾。
+			return
+		}
+		t.Status = status
+		t.FinishedAt = &now
 	})
+}
+
+// goalActive 报告任务的 goal 是否仍在推进（生效中/评估中）。此期间任务保持
+// running，审核通过（achieved）才置 done，失败/终止（stopped）置 failed。
+func goalActive(t *models.TaskManagerTask) bool {
+	return t.Goal != nil &&
+		(t.Goal.Status == models.TaskGoalStatusActive || t.Goal.Status == models.TaskGoalStatusEvaluating)
 }
 
 // GoalStateChanged 实现 acp.GoalStateNotifier：goal 生命周期变化时把状态快照写回
 // tasks.json 中对应会话的任务条目（state 为 nil 表示 goal 已清除，保留末态供展示），
 // 写入触发 SSE 事件，任务列表自动刷新 goal 徽标。
+// goal 终态同时联动任务终态：achieved → done，stopped → failed（goal 生效期间
+// 任务一直保持 running，这里是唯一的收尾点）；仅改写运行态任务，避免覆盖
+// canceled 等人工终态。
 func (s *TaskManagerService) GoalStateChanged(dbSessionID uint, state *models.TaskGoalState) {
 	cwd, taskID := s.taskForSession(dbSessionID)
 	if taskID == "" {
 		return
 	}
+	// 手动清除时需判断会话是否还有进行中的 prompt（有则由 turn 结束时自然结算）。
+	promptActive := false
+	if state == nil {
+		if sess, err := s.exec.GetSessionByDBID(dbSessionID); err == nil && sess != nil {
+			promptActive = s.exec.HasActivePrompt(sess.SessionID)
+		}
+	}
+	now := time.Now()
 	s.updateTask(cwd, taskID, func(t *models.TaskManagerTask) {
 		if state == nil {
 			// 手动清除：未达终态时标记为已终止，已达成/已终止的末态保留
@@ -889,9 +971,37 @@ func (s *TaskManagerService) GoalStateChanged(dbSessionID uint, state *models.Ta
 				t.Goal.LastReason = "已手动清除"
 				t.Goal.UpdatedAt = time.Now()
 			}
+			// goal 门控解除后，若任务仍在 running 且无进行中 prompt，
+			// 说明本轮已因 goal 生效而保持 running，这里直接结算为完成。
+			if t.Status == models.TaskStatusRunning && !promptActive {
+				t.Status = models.TaskStatusDone
+				t.Error = ""
+				t.FinishedAt = &now
+			}
 			return
 		}
 		t.Goal = state
+		switch state.Status {
+		case models.TaskGoalStatusAchieved:
+			if models.IsTaskRunning(t.Status) || t.Status == models.TaskStatusInterrupt {
+				t.Status = models.TaskStatusDone
+				t.Error = ""
+				t.FinishedAt = &now
+			}
+		case models.TaskGoalStatusStopped:
+			if models.IsTaskRunning(t.Status) || t.Status == models.TaskStatusInterrupt {
+				t.Status = models.TaskStatusFailed
+				reason := strings.TrimSpace(state.LastReason)
+				if reason == "" {
+					reason = "goal 已终止"
+				}
+				if state.EvalCount > 0 {
+					reason = fmt.Sprintf("%s（已审计 %d 次）", reason, state.EvalCount)
+				}
+				t.Error = reason
+				t.FinishedAt = &now
+			}
+		}
 	})
 }
 
@@ -942,7 +1052,11 @@ func firstLine(prompt string, maxLen int) string {
 
 // RecoverAll 在服务启动时调用，将所有 cwd 的 running/queued 状态重置为 interrupt。
 // 遍历由外部提供的 cwd 列表（通常来自各 workspace 的 cwd）。
-func (s *TaskManagerService) RecoverAll(cwds []string) {
+// goal 是会话内存态不跨重启存活，残留的 active/evaluating 快照一并置
+// stopped，避免重启后僵尸 goal 徽标持续显示“生效中”。
+// 返回本次被标记中断且定义了 goal 的任务，供启动后自动续跑（仅带 goal 的自动恢复）。
+func (s *TaskManagerService) RecoverAll(cwds []string) []InterruptedGoalTask {
+	var resumable []InterruptedGoalTask
 	for _, cwd := range cwds {
 		def, err := s.storeFor(cwd).Load()
 		if err != nil {
@@ -953,12 +1067,63 @@ func (s *TaskManagerService) RecoverAll(cwds []string) {
 			if models.IsTaskRunning(def.Tasks[i].Status) {
 				def.Tasks[i].Status = models.TaskStatusInterrupt
 				changed = true
+				if strings.TrimSpace(def.Tasks[i].GoalCondition) != "" {
+					resumable = append(resumable, InterruptedGoalTask{
+						Cwd:        cwd,
+						TaskID:     def.Tasks[i].ID,
+						HasSession: def.Tasks[i].SessionID != "",
+					})
+				}
+			}
+			if g := def.Tasks[i].Goal; g != nil &&
+				(g.Status == models.TaskGoalStatusActive || g.Status == models.TaskGoalStatusEvaluating) {
+				g.Status = models.TaskGoalStatusStopped
+				g.LastReason = "服务重启中断"
+				g.UpdatedAt = time.Now()
+				changed = true
 			}
 		}
 		if changed {
 			if err := s.storeFor(cwd).Save(def); err != nil {
 				slog.Warn("RecoverAll 写回失败", "cwd", cwd, "err", err)
 			}
+		}
+	}
+	return resumable
+}
+
+// InterruptedGoalTask 记录 RecoverAll 时因重启被标记中断、且定义了 goal 的任务。
+type InterruptedGoalTask struct {
+	Cwd        string
+	TaskID     string
+	HasSession bool // 已有会话可直接继续对话；否则需重新启动
+}
+
+// AutoResumeGoalTasks 服务重启后自动续跑带 goal 的中断任务：
+// 已有会话的走继续对话（SendPrompt 会自动恢复 goal 模式），
+// 重启前仍在排队、尚无会话的重新启动。普通任务（无 goal）不自动续跑，
+// 由用户手动决定，避免重启意外拉起大批 agent 会话。
+// lookupWorkspace 用于无会话任务重新启动时取 workspaceID/userID。
+func (s *TaskManagerService) AutoResumeGoalTasks(tasks []InterruptedGoalTask, lookupWorkspace func(cwd string) (*models.Workspace, error)) {
+	const resumePrompt = "服务重启导致上一轮执行中断。请检查当前进度，继续完成任务目标，无需向用户确认。"
+	for _, it := range tasks {
+		if it.HasSession {
+			if err := s.SendPrompt(context.Background(), it.Cwd, it.TaskID, resumePrompt); err != nil {
+				slog.Warn("重启自动续跑失败（继续对话）", "cwd", it.Cwd, "task", it.TaskID, "err", err)
+			} else {
+				slog.Info("重启自动续跑（继续对话）", "cwd", it.Cwd, "task", it.TaskID)
+			}
+			continue
+		}
+		ws, err := lookupWorkspace(it.Cwd)
+		if err != nil || ws == nil {
+			slog.Warn("重启自动续跑失败：找不到工作区", "cwd", it.Cwd, "task", it.TaskID, "err", err)
+			continue
+		}
+		if err := s.Start(context.Background(), it.Cwd, ws.ID, ws.UserID, it.TaskID); err != nil {
+			slog.Warn("重启自动续跑失败（重新启动）", "cwd", it.Cwd, "task", it.TaskID, "err", err)
+		} else {
+			slog.Info("重启自动续跑（重新启动）", "cwd", it.Cwd, "task", it.TaskID)
 		}
 	}
 }

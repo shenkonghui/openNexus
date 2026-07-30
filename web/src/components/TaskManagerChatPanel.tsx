@@ -522,7 +522,7 @@ export default function TaskManagerChatPanel({
     )
   }
 
-  // /create-task 直建任务：detail 前缀 /goal 使任务启动即进入 goal 循环，
+  // /create-task 直建任务：goal_condition 使任务启动即自动开启 goal 循环（完成条件即任务内容），
   // 创建后立即启动——启动时后端自动创建 worktree（AI 命名分支）隔离执行。
   async function handleCreateTask(content: string) {
     setError('')
@@ -534,7 +534,8 @@ export default function TaskManagerChatPanel({
     try {
       await upsertTask(workspaceId, {
         id, title,
-        detail: `/goal ${content}`,
+        detail: content,
+        goal_condition: content,
         agent_type: agentType,
         model_value: selectedModel || undefined,
       })

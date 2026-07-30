@@ -194,7 +194,7 @@ export default function ChatPanel({
       )}
 
       <div className={styles.bottomArea}>
-        <ConvStatusBar state={conv}>
+        <ConvStatusBar state={conv} reconnect={ctx.reconnect}>
           {ctx.pendingPermission && (
             <PermissionDialog
               request={ctx.pendingPermission}

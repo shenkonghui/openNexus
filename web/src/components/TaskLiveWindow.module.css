@@ -76,6 +76,44 @@
   flex-shrink: 0;
 }
 
+/* goal 徽标：与列表视图 .taskGoal 同款，网格窗口头部展示 goal 定义/生命周期状态 */
+.goal {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-weight: 500;
+  background: var(--bg-hover);
+  color: var(--text-muted);
+  flex-shrink: 0;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.goal_active {
+  background: var(--info-bg);
+  color: var(--info);
+}
+
+.goal_evaluating {
+  background: var(--warning-bg);
+  color: var(--warning);
+}
+
+.goal_achieved {
+  background: var(--success-bg);
+  color: var(--success);
+}
+
+.goal_stopped {
+  background: var(--bg-hover);
+  color: var(--text-muted);
+}
+
 .status_running {
   background: var(--info-bg);
   color: var(--info);

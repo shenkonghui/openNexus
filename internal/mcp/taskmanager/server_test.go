@@ -2,10 +2,13 @@ package taskmanagermcp
 
 import (
 	"context"
+	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/google/jsonschema-go/jsonschema"
 
+	"opennexus/internal/acp"
 	"opennexus/internal/models"
 )
 
@@ -47,6 +50,31 @@ func TestTaskManagerJSONSchemaTagsValid(t *testing.T) {
 	t.Run("sendPromptIn", func(t *testing.T) { _, err := jsonschema.For[sendPromptIn](nil); check(t, err) })
 	t.Run("setMaxParallelIn", func(t *testing.T) { _, err := jsonschema.For[setMaxParallelIn](nil); check(t, err) })
 	t.Run("listTasksIn", func(t *testing.T) { _, err := jsonschema.For[listTasksIn](nil); check(t, err) })
+}
+
+// TestResolveGoalCondition 验证 create_task 的 goal 入参解析：默认开启（留空回退任务详情）、
+// off 等别名显式关闭、超长截断且不破坏 UTF-8 rune 边界。
+func TestResolveGoalCondition(t *testing.T) {
+	if got := resolveGoalCondition("验收标准", "detail"); got != "验收标准" {
+		t.Errorf("显式 goal = %q, want 验收标准", got)
+	}
+	if got := resolveGoalCondition("", "detail"); got != "detail" {
+		t.Errorf("留空应回退任务详情, got %q", got)
+	}
+	for _, alias := range []string{"off", "OFF", "none", "false", "disable"} {
+		if got := resolveGoalCondition(alias, "detail"); got != "" {
+			t.Errorf("%q 应关闭 goal, got %q", alias, got)
+		}
+	}
+	// 超长截断：中文 3 字节/字，截断后仍须是合法 UTF-8 且不超上限。
+	long := strings.Repeat("目", acp.GoalMaxConditionLen)
+	got := resolveGoalCondition(long, "detail")
+	if len(got) > acp.GoalMaxConditionLen {
+		t.Errorf("截断后长度 %d 超上限 %d", len(got), acp.GoalMaxConditionLen)
+	}
+	if !utf8.ValidString(got) {
+		t.Error("截断后不是合法 UTF-8")
+	}
 }
 
 // fakeTaskCreator 仅实现 Load，供 expandTaskIDs 测试使用。

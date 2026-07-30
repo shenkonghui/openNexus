@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { useParams, useNavigate, useLocation } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { useRequireAuth } from '../hooks/useRequireAuth'
-import { getSession, listMessages, cancelSession, listCommands, listModes, listSkills, listConfigOptions, setConfigOption, setSessionMode, respondPermission, deleteSession, updateSessionTitle, createSession, resumeSession, listSessionExecutions, getInterruptedTasks } from '../api/sessions'
+import { getSession, listMessages, cancelSession, listCommands, listModes, listSkills, listConfigOptions, setConfigOption, setSessionMode, respondPermission, deleteSession, updateSessionTitle, createSession, resumeSession, listSessionExecutions, getInterruptedTasks, getSessionConnection } from '../api/sessions'
 import { getWorkspace } from '../api/workspaces'
 import { listScheduledTasks, listExecutions } from '../api/scheduledTasks'
 import { listAgents, probeAgentConfigs, preconnectAgent, listAgentCommands, listAgentModes } from '../api/agents'
@@ -135,6 +135,11 @@ export default function ChatPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [convState, setConvState] = useState<ConvState>('idle')
+  // 断线重连倒计时：后端推真实退避计划（nextRetryAt 为本地时间戳），本地 1s 递减展示
+  const [reconnectPlan, setReconnectPlan] = useState<{ nextRetryAt: number; attempt: number } | null>(null)
+  const [reconnectSeconds, setReconnectSeconds] = useState(0)
+  // 连接断开期间阻止轮询把 reconnecting 重置回 idle
+  const connDownRef = useRef(false)
   const abortRef = useRef<AbortController | null>(null)
   const mountedRef = useRef(true)
   // lastSeqRef 记录最后接收到的消息 sequence，用于断点续传重连时携带 Last-Event-ID
@@ -602,6 +607,9 @@ export default function ChatPage() {
   // 当组件卸载或切换到不同会话时，中断旧的 SSE 流，防止内存泄漏和 React 警告
   useEffect(() => {
     mountedRef.current = true
+    // 切换会话时清除上个会话的重连倒计时状态
+    connDownRef.current = false
+    setReconnectPlan(null)
     return () => {
       mountedRef.current = false
       if (flushRafRef.current != null) {
@@ -627,7 +635,7 @@ export default function ChatPage() {
 
     const interval = setInterval(() => {
       if (!mountedRef.current) return
-      if (abortRef.current == null) {
+      if (abortRef.current == null && !connDownRef.current) {
         setConvState((s) => (
           s === 'streaming' || s === 'reconnecting' || s === 'connecting' ? 'idle' : s
         ))
@@ -635,10 +643,34 @@ export default function ChatPage() {
       // 流式进行时（abortRef 非空）跳过消息拉取，避免 DB 数据覆盖实时 SSE 流，
       // 也避免每 5 秒整体替换 messages 数组触发全量重渲染。
       loadData({ quiet: true, skipMessages: !!abortRef.current })
+      // 顺带拉取连接状态：断开时后端 healthCheckLoop 正在退避重连，
+      // 展示“N 秒后自动重连”倒计时；恢复后由上方兜底逻辑自动回到 idle。
+      if (session.status === 'active') {
+        getSessionConnection(session.id).then(({ data }) => {
+          if (!mountedRef.current) return
+          const down = data.state === 'disconnected'
+          connDownRef.current = down
+          if (down) {
+            setReconnectPlan({ nextRetryAt: Date.now() + Math.max(0, data.next_retry_in_ms), attempt: data.attempt })
+            setConvState((s) => (s === 'waiting_permission' ? s : 'reconnecting'))
+          } else {
+            setReconnectPlan(null)
+          }
+        }).catch(() => { /* 忽略：下一轮轮询重试 */ })
+      }
     }, 5000)
 
     return () => clearInterval(interval)
   }, [hasSession, session?.id, session?.status, session?.source, loadData])
+
+  // 重连倒计时本地 1s 递减；到 0 后保持 0（后端尝试中），下轮轮询刷新计划。
+  useEffect(() => {
+    if (!reconnectPlan) return
+    const tick = () => setReconnectSeconds(Math.max(0, Math.ceil((reconnectPlan.nextRetryAt - Date.now()) / 1000)))
+    tick()
+    const timer = setInterval(tick, 1000)
+    return () => clearInterval(timer)
+  }, [reconnectPlan])
 
   // 会话进入非活跃态（agent 进程退出/重连失败等被标 error/closed）时，挂起权限的接收方已失效，
   // 清除权限栏，避免「等待操作确认」与「不在活跃状态」同时存在的死锁状态——否则权限栏永远无法消除、会话无法恢复。
@@ -1126,6 +1158,7 @@ export default function ChatPage() {
           session: activeSession,
           messages,
           convState: displayConvState,
+          reconnect: reconnectPlan ? { seconds: reconnectSeconds, attempt: reconnectPlan.attempt } : null,
           sending,
           onSend: handleSend,
           onCancel: handleCancel,

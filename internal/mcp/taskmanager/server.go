@@ -27,6 +27,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -95,7 +96,7 @@ func newServer(prefsRepo *repository.UserAgentPrefsRepository, wsResolver Worksp
 	addTool("create_task", func() {
 		mcp.AddTool(srv, &mcp.Tool{
 			Name:        "create_task",
-			Description: "在当前工作区的任务管理（tasks.json）中新增一个编排任务。任务默认 status=pending、priority=p1，可由编排调度器启动（基于 git worktree 隔离执行）。这是管理编排任务的首选方式（结构化、自带校验），优先于手写 tasks.json。",
+			Description: "在当前工作区的任务管理（tasks.json）中新增一个编排任务。任务默认 status=pending、priority=p1，可由编排调度器启动（默认基于 git worktree 隔离执行，并自动开启 goal 模式：goal 达成后任务才置为完成）。这是管理编排任务的首选方式（结构化、自带校验），优先于手写 tasks.json。",
 		}, func(ctx context.Context, _ *mcp.CallToolRequest, in createTaskIn) (*mcp.CallToolResult, createTaskOut, error) {
 			return handleCreateTask(ctx, prefsRepo, wsResolver, orchCreator, in)
 		})
@@ -258,6 +259,8 @@ func resolveTaskCwd(ctx context.Context, wsResolver WorkspaceResolver, workspace
 type createTaskIn struct {
 	Title       string   `json:"title" jsonschema:"任务标题"`
 	Detail      string   `json:"detail" jsonschema:"任务详情，即发给 agent 的 prompt"`
+	Goal        string   `json:"goal,omitempty" jsonschema:"goal 完成条件（验收标准）。任务运行时自动开启 goal 模式：每轮结束自动审计，goal 达成后任务才置为完成。缺省默认开启并以任务详情作为完成条件；填 off 显式关闭"`
+	Worktree    *bool    `json:"worktree,omitempty" jsonschema:"是否在独立 git worktree 分支中运行任务，缺省 true；false 则直接在工作区目录运行"`
 	AgentType   string   `json:"agent_type,omitempty" jsonschema:"执行任务的 agent 类型，留空则继承用户最近使用的 agent"`
 	ModelValue  string   `json:"model_value,omitempty" jsonschema:"模型值，留空则用 agent 默认"`
 	Priority    string   `json:"priority,omitempty" jsonschema:"优先级，取值 p0、p1、p2，缺省为 p1"`
@@ -269,6 +272,27 @@ type createTaskIn struct {
 type createTaskOut struct {
 	TaskID string `json:"task_id"`
 	Title  string `json:"title"`
+}
+
+// resolveGoalCondition 解析 create_task 的 goal 入参：默认开启（留空以任务详情作为
+// 完成条件）；off 等别名显式关闭（返回空串）；超长时按字节上限截断（退到 rune 边界），
+// 避免运行时 EnableGoal 校验失败退化为无 goal。
+func resolveGoalCondition(goal, detail string) string {
+	cond := strings.TrimSpace(goal)
+	switch strings.ToLower(cond) {
+	case "off", "none", "false", "no", "disable", "disabled":
+		return ""
+	case "":
+		cond = detail
+	}
+	if len(cond) > acp.GoalMaxConditionLen {
+		cut := cond[:acp.GoalMaxConditionLen]
+		for len(cut) > 0 && !utf8.ValidString(cut) {
+			cut = cut[:len(cut)-1]
+		}
+		cond = cut
+	}
+	return cond
 }
 
 // handleCreateTask 在指定工作区的管理数据目录 tasks.json 中新增一个编排任务（status=pending）。
@@ -296,18 +320,24 @@ func handleCreateTask(ctx context.Context, prefsRepo *repository.UserAgentPrefsR
 		return nil, createTaskOut{}, err
 	}
 
+	// goal：默认开启（留空以任务详情作为完成条件）；off 等别名显式关闭。
+	goalCond := resolveGoalCondition(in.Goal, detail)
+
 	// 生成简短唯一 id（与前端 TaskManagerTaskDialog 一致：t + base36）
 	taskID := "t" + strconv.FormatInt(time.Now().UnixNano(), 36)
 
 	task := models.TaskManagerTask{
-		ID:         taskID,
-		Title:      title,
-		Detail:     detail,
-		AgentType:  agentType,
-		ModelValue: strings.TrimSpace(in.ModelValue),
-		Priority:   models.NormalizeTaskPriority(in.Priority),
-		Status:     models.TaskStatusPending,
-		DependsOn:  in.DependsOn,
+		ID:            taskID,
+		Title:         title,
+		Detail:        detail,
+		AgentType:     agentType,
+		ModelValue:    strings.TrimSpace(in.ModelValue),
+		Priority:      models.NormalizeTaskPriority(in.Priority),
+		Status:        models.TaskStatusPending,
+		DependsOn:     in.DependsOn,
+		GoalCondition: goalCond,
+		// worktree 缺省开启；仅显式传 false 时直接在工作区目录运行。
+		NoWorktree: in.Worktree != nil && !*in.Worktree,
 	}
 	// 显式指定分支名时规范化为 feat//fix/ 前缀；留空则启动时由 AI 自动生成。
 	if b := strings.TrimSpace(in.Branch); b != "" {
@@ -600,7 +630,7 @@ type taskSummary struct {
 }
 
 type listTasksOut struct {
-	MaxParallel int               `json:"max_parallel"`
+	MaxParallel int           `json:"max_parallel"`
 	Tasks       []taskSummary `json:"tasks"`
 }
 

@@ -51,6 +51,8 @@ export interface PanelCtx {
   session: Session | null
   messages: Message[]
   convState: ConvState
+  // 断线自动重连倒计时（reconnecting 态展示；null/缺省时回退默认文案）
+  reconnect?: { seconds: number; attempt: number } | null
   sending: boolean
 
   onSend: (prompt: string) => void

@@ -34,8 +34,10 @@ const legacyGoalCommandName = "opennexus-goal"
 const (
 	defaultGoalMaxTurns    = 20
 	defaultGoalMaxDuration = 60 * time.Minute
-	// goalMaxConditionLen 完成条件上限（对齐 Claude Code /goal 的 4000 字符）。
-	goalMaxConditionLen = 4000
+	// GoalMaxConditionLen 完成条件上限（对齐 Claude Code /goal 的 4000 字符）；
+	// 导出供 MCP create_task 等外部入口截断/校验 goal 条件。
+	GoalMaxConditionLen = 4000
+	goalMaxConditionLen = GoalMaxConditionLen
 	// goalTranscriptMaxMsgs / goalTranscriptMaxChars 控制送评的对话摘录规模。
 	goalTranscriptMaxMsgs  = 40
 	goalTranscriptMaxChars = 8000
@@ -49,6 +51,7 @@ type sessionGoal struct {
 	Condition  string
 	StartedAt  time.Time
 	Turns      int    // 已自动续轮次数
+	EvalCount  int    // 已执行的达成审计次数（一轮会签算一次）
 	LastReason string // 最近一次评估理由
 	Evaluating bool   // 评估进行中（防重入）
 	// Roles 自动选取的评估角色（空=无匹配，走内置评估；多个时会签评估，全部 YES 才算达成）；
@@ -125,6 +128,36 @@ func (s *Service) setGoal(sessionID, condition string) {
 	s.goals[sessionID] = &sessionGoal{Condition: condition, StartedAt: time.Now()}
 }
 
+// goalDirective 返回附加给 agent 的目标工作指示（/goal set 与任务自动开启共用）。
+func goalDirective(condition string) string {
+	return "请朝以下目标持续工作。每轮结束后系统会自动评估是否达成，未达成会要求你继续，无需向用户确认。\n\n目标（完成条件）：\n" + condition
+}
+
+// EnableGoal 以编程方式为会话开启 goal 模式（等价 /goal <条件>），供编排任务自动开启使用。
+// 会话已有生效 goal 时不重置（保留续轮/审计计数），仅重新通知 active 快照。
+func (s *Service) EnableGoal(sessionID, condition string) error {
+	condition = strings.TrimSpace(condition)
+	if condition == "" {
+		return fmt.Errorf("goal 完成条件不能为空")
+	}
+	if len(condition) > goalMaxConditionLen {
+		return fmt.Errorf("goal 完成条件过长（%d 字符），上限 %d 字符", len(condition), goalMaxConditionLen)
+	}
+	session, err := s.sessions.FindBySessionID(sessionID)
+	if err != nil {
+		return fmt.Errorf("会话不存在: %w", err)
+	}
+	if _, ok := s.getGoal(sessionID); !ok {
+		s.setGoal(sessionID, condition)
+		s.recordGoalEvent(session, "设定 goal（任务自动开启）："+condition, models.ToolCallStatusCompleted)
+		slog.Info("goal 已自动开启", "session", sessionID, "agent", session.AgentType, "chars", len(condition))
+	}
+	if g, ok := s.getGoal(sessionID); ok {
+		s.notifyGoalState(session, models.TaskGoalStatusActive, &g, "")
+	}
+	return nil
+}
+
 // recordGoalEvent 把 goal 生命周期事件写入工具调用记录（kind=goal），
 // 使会话「记录」面板与工具调用记录页能看到设定/评估/续轮/终止轨迹。
 func (s *Service) recordGoalEvent(session *models.Session, title, status string) {
@@ -174,7 +207,7 @@ func (s *Service) interceptGoal(session *models.Session, sessionID, prompt strin
 			s.notifyGoalState(session, models.TaskGoalStatusActive, &g, "")
 		}
 		slog.Info("goal 已设定", "session", sessionID, "agent", session.AgentType, "chars", len(arg))
-		*promptForAgent = "请朝以下目标持续工作。每轮结束后系统会自动评估是否达成，未达成会要求你继续，无需向用户确认。\n\n目标（完成条件）：\n" + arg
+		*promptForAgent = goalDirective(arg)
 		return false, nil
 	case "clear":
 		if s.clearGoal(sessionID) {
@@ -188,7 +221,7 @@ func (s *Service) interceptGoal(session *models.Session, sessionID, prompt strin
 		if !ok {
 			return true, s.syntheticCommandReply(session, prompt, "当前会话没有生效中的 goal。用 /goal <完成条件> 设定。", executionID)
 		}
-		text := fmt.Sprintf("🎯 goal 生效中\n\n完成条件：%s\n\n已自动续轮：%d 次\n持续时间：%s", g.Condition, g.Turns, time.Since(g.StartedAt).Round(time.Second))
+		text := fmt.Sprintf("🎯 goal 生效中\n\n完成条件：%s\n\n已自动续轮：%d 次\n已审计：%d 次\n持续时间：%s", g.Condition, g.Turns, g.EvalCount, time.Since(g.StartedAt).Round(time.Second))
 		if len(g.Roles) > 1 {
 			text += "\n评估角色：" + goalRoleNames(g.Roles) + "（自动选取，会签评估）"
 		} else if len(g.Roles) == 1 {
@@ -268,6 +301,7 @@ func (s *Service) notifyGoalState(session *models.Session, status string, g *ses
 		Condition:  g.Condition,
 		Status:     status,
 		Turns:      g.Turns,
+		EvalCount:  g.EvalCount,
 		LastReason: reason,
 		UpdatedAt:  time.Now(),
 	}
@@ -295,15 +329,28 @@ func (s *Service) goalOnTurnEnd(sessionID string) {
 		}
 		s.goalMu.Unlock()
 	}()
-	s.evaluateAndContinueGoal(sessionID, g)
+	// 循环驱动：续轮 prompt 结束后直接评估下一轮，不依赖 finisher 再次触发 goalOnTurnEnd——
+	// 彼时本 goroutine 尚未退出，Evaluating 仍为 true，新触发会被去重丢弃，
+	// 曾导致第 2 轮起 goal 循环停摆（不再评估、任务永远 running）。
+	for s.evaluateAndContinueGoal(sessionID, g) {
+	}
 }
 
 // evaluateAndContinueGoal 执行一次 goal 评估：限制检查 → 小模型评估 → 续轮或终止。
-func (s *Service) evaluateAndContinueGoal(sessionID string, g *sessionGoal) {
+// 返回 true 表示已续轮且新一轮已结束，调用方应继续下一次评估；返回 false 表示循环终止。
+func (s *Service) evaluateAndContinueGoal(sessionID string, g *sessionGoal) bool {
+	// goal 已被清除/重设（如续轮期间用户 CancelSession 或 /goal clear）则终止循环，
+	// 避免拿着旧 goal 继续评估、与用户意图对抗。
+	s.goalMu.Lock()
+	cur, ok := s.goals[sessionID]
+	s.goalMu.Unlock()
+	if !ok || cur != g {
+		return false
+	}
 	session, err := s.GetSession(sessionID)
 	if err != nil {
 		s.clearGoal(sessionID)
-		return
+		return false
 	}
 
 	// 限制条件（评估 agent/模型也来自同一设置）
@@ -328,18 +375,18 @@ func (s *Service) evaluateAndContinueGoal(sessionID string, g *sessionGoal) {
 	if g.Turns >= maxTurns {
 		s.clearGoal(sessionID)
 		reason := fmt.Sprintf("自动续轮达到上限（%d 次）", maxTurns)
-		s.recordGoalEvent(session, "goal 终止："+reason, models.ToolCallStatusFailed)
+		s.recordGoalEvent(session, fmt.Sprintf("goal 终止：%s，已审计 %d 次", reason, g.EvalCount), models.ToolCallStatusFailed)
 		s.notifyGoalState(session, models.TaskGoalStatusStopped, g, reason)
-		s.goalNotify(session, fmt.Sprintf("⏹️ goal 已终止：%s。可重新 /goal 设定。", reason))
-		return
+		s.goalNotify(session, fmt.Sprintf("⏹️ goal 已终止：%s（已审计 %d 次）。可重新 /goal 设定。", reason, g.EvalCount))
+		return false
 	}
 	if time.Since(g.StartedAt) >= maxDuration {
 		s.clearGoal(sessionID)
 		reason := fmt.Sprintf("持续时间超过上限（%s）", maxDuration)
-		s.recordGoalEvent(session, "goal 终止："+reason, models.ToolCallStatusFailed)
+		s.recordGoalEvent(session, fmt.Sprintf("goal 终止：%s，已审计 %d 次", reason, g.EvalCount), models.ToolCallStatusFailed)
 		s.notifyGoalState(session, models.TaskGoalStatusStopped, g, reason)
-		s.goalNotify(session, fmt.Sprintf("⏹️ goal 已终止：%s。可重新 /goal 设定。", reason))
-		return
+		s.goalNotify(session, fmt.Sprintf("⏹️ goal 已终止：%s（已审计 %d 次）。可重新 /goal 设定。", reason, g.EvalCount))
+		return false
 	}
 
 	transcript := s.goalTranscript(session.SessionID)
@@ -373,16 +420,22 @@ func (s *Service) evaluateAndContinueGoal(sessionID string, g *sessionGoal) {
 		}
 	}
 
+	// 一轮评估（含会签多角色）算一次审计，进入评估前递增；
+	// 锁内写入，避免与 status 分支的快照读取竞争。
+	s.goalMu.Lock()
+	g.EvalCount++
+	s.goalMu.Unlock()
+
 	s.notifyGoalState(session, models.TaskGoalStatusEvaluating, g, "")
 
 	achieved, reason, evalErr := s.runGoalEvaluation(session, g, evalAgent, evalModel, transcript)
 	if evalErr != nil {
 		// 评估失败保守终止，避免无评估依据地无限续轮
 		s.clearGoal(sessionID)
-		s.recordGoalEvent(session, fmt.Sprintf("goal 评估失败：%v", evalErr), models.ToolCallStatusFailed)
+		s.recordGoalEvent(session, fmt.Sprintf("goal 评估失败：%v，已审计 %d 次", evalErr, g.EvalCount), models.ToolCallStatusFailed)
 		s.notifyGoalState(session, models.TaskGoalStatusStopped, g, fmt.Sprintf("评估失败：%v", evalErr))
-		s.goalNotify(session, fmt.Sprintf("⚠️ goal 评估失败（%v），已停止自动续轮。可重新 /goal 设定。", evalErr))
-		return
+		s.goalNotify(session, fmt.Sprintf("⚠️ goal 评估失败（%v），已停止自动续轮（已审计 %d 次）。可重新 /goal 设定。", evalErr, g.EvalCount))
+		return false
 	}
 
 	if achieved {
@@ -399,7 +452,7 @@ func (s *Service) evaluateAndContinueGoal(sessionID string, g *sessionGoal) {
 		}
 		s.goalNotify(session, msg)
 		slog.Info("goal 达成", "session", sessionID, "turns", g.Turns)
-		return
+		return false
 	}
 
 	// 未达成：自动续轮
@@ -410,7 +463,7 @@ func (s *Service) evaluateAndContinueGoal(sessionID string, g *sessionGoal) {
 	} else {
 		// 评估期间被用户 clear/cancel，放弃续轮
 		s.goalMu.Unlock()
-		return
+		return false
 	}
 	s.goalMu.Unlock()
 
@@ -431,15 +484,17 @@ func (s *Service) evaluateAndContinueGoal(sessionID string, g *sessionGoal) {
 	ch, err := s.PromptWithExecution(context.Background(), sessionID, contPrompt, nil)
 	if err != nil {
 		s.clearGoal(sessionID)
-		s.recordGoalEvent(session, fmt.Sprintf("goal 自动续轮失败：%v", err), models.ToolCallStatusFailed)
+		s.recordGoalEvent(session, fmt.Sprintf("goal 自动续轮失败：%v，已审计 %d 次", err, g.EvalCount), models.ToolCallStatusFailed)
 		s.notifyGoalState(session, models.TaskGoalStatusStopped, g, fmt.Sprintf("自动续轮失败：%v", err))
 		s.goalNotify(session, fmt.Sprintf("⚠️ goal 自动续轮失败（%v），已停止。", err))
-		return
+		return false
 	}
 	// 必须消费主订阅 channel，否则 buffer 满会阻塞 prompt 消费 goroutine；
 	// 前端经 5s 轮询 + subscribeStream 断点续传照常收到消息。
 	for range ch {
 	}
+	// 新一轮已结束，由调用方循环继续下一次评估
+	return true
 }
 
 // runGoalEvaluation 执行一次 goal 评估。无角色时走内置单评估；

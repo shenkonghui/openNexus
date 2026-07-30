@@ -283,10 +283,11 @@ func main() {
 	tmSvc := services.NewTaskManagerService(agentRouter)
 	// 服务重启后将各工作区 tasks.json 中残留的 running/queued 标为 interrupt，
 	// 否则「全部启动」会因误判仍在运行而跳过这些任务。
+	var interruptedGoalTasks []services.InterruptedGoalTask
 	if cwds, err := wsRepo.ListCwds(); err != nil {
 		log.Printf("编排任务恢复：列举工作区 cwd 失败: %v", err)
 	} else {
-		tmSvc.RecoverAll(cwds)
+		interruptedGoalTasks = tmSvc.RecoverAll(cwds)
 	}
 	tmH := handlers.NewTaskManagerHandler(tmSvc, agentRouter)
 	// prompt 流结束时回调任务管理，同步 tasks.json 中会话登记任务的状态
@@ -294,6 +295,11 @@ func main() {
 	acpSvc.SetPromptFinishedNotifier(tmSvc)
 	// goal 生命周期变化时回调任务管理，把状态写回 tasks.json 供任务列表展示 goal 徽标。
 	acpSvc.SetGoalStateNotifier(tmSvc)
+	// 带 goal 的中断任务重启后自动续跑（普通任务不自动，由用户手动决定）。
+	// 放在通知器接线之后后台执行，不阻塞启动；连接断开由 Prompt 自动恢复。
+	if len(interruptedGoalTasks) > 0 {
+		go tmSvc.AutoResumeGoalTasks(interruptedGoalTasks, wsRepo.FindByCwd)
+	}
 
 	// 工具调用历史：ACP 流与终端桥接双路记录，供「工具调用记录」页面查询
 	toolCallRepo := repository.NewToolCallRecordRepository(db)

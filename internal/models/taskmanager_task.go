@@ -88,8 +88,9 @@ const (
 // 同步到 tasks.json，使任务列表能展示 goal 进展；nil 表示该任务无 goal。
 type TaskGoalState struct {
 	Condition  string    `json:"condition"`
-	Status     string    `json:"status"` // 见 TaskGoalStatus* 常量
-	Turns      int       `json:"turns"`  // 已自动续轮次数
+	Status     string    `json:"status"`               // 见 TaskGoalStatus* 常量
+	Turns      int       `json:"turns"`                // 已自动续轮次数
+	EvalCount  int       `json:"eval_count,omitempty"` // 已执行的达成审计（会签评估）次数
 	LastReason string    `json:"last_reason,omitempty"`
 	Roles      []string  `json:"roles,omitempty"` // 自动选取的评估角色名
 	UpdatedAt  time.Time `json:"updated_at"`
@@ -130,6 +131,11 @@ type TaskManagerTask struct {
 	ModelValue string `json:"model_value,omitempty"`
 	// Priority 任务优先级：p0 / p1 / p2，缺省 p1。
 	Priority string `json:"priority,omitempty"`
+	// GoalCondition 是任务定义的 goal 完成条件（输入侧）；非空时任务运行自动开启 goal 模式，
+	// 每轮结束自动审计，goal 达成后任务才置为完成（运行时快照见 Goal 字段）。
+	GoalCondition string `json:"goal_condition,omitempty"`
+	// NoWorktree 为 true 时不创建独立 git worktree，直接在工作区目录运行（缺省 false=worktree 隔离）。
+	NoWorktree bool `json:"no_worktree,omitempty"`
 
 	// Schedule 非 nil 时表示定时任务；任务管理/手动任务为 nil。
 	Schedule *TaskSchedule `json:"schedule,omitempty"`
@@ -210,7 +216,7 @@ func (t *TaskManagerTask) UnmarshalJSON(data []byte) error {
 
 // TaskManagerDef 是 tasks.json 的顶层结构。
 type TaskManagerDef struct {
-	MaxParallel int              `json:"max_parallel"` // 并发上限，<=0 视为串行(=1)
+	MaxParallel int               `json:"max_parallel"` // 并发上限，<=0 视为串行(=1)
 	Tasks       []TaskManagerTask `json:"tasks"`
 }
 

@@ -90,6 +90,7 @@ func Setup(authSvc *services.AuthService, jwtSvc *services.JWTService, agentRout
 			protected.GET("/sessions/running", sessionH.RunningSessions)
 			protected.GET("/sessions/latest", sessionH.LatestByWorkspace)
 			protected.GET("/sessions/:id", sessionH.Get)
+			protected.GET("/sessions/:id/connection", sessionH.Connection)
 			protected.PUT("/sessions/:id/title", sessionH.UpdateTitle)
 			protected.PUT("/sessions/:id/yolo", sessionH.UpdateYolo)
 			protected.DELETE("/sessions/:id", sessionH.Delete)

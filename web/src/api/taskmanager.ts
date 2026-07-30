@@ -7,6 +7,8 @@ export interface TaskGoalState {
   condition: string
   status: string // active|evaluating|achieved|stopped
   turns: number
+  /** 已执行的达成审计（会签评估）次数 */
+  eval_count?: number
   last_reason?: string
   roles?: string[]
   updated_at: string
@@ -29,6 +31,10 @@ export interface TaskManagerTask {
   finished_at?: string
   error?: string
   depends_on?: string[]
+  /** 任务定义的 goal 完成条件（输入侧）；非空时运行自动开启 goal 模式 */
+  goal_condition?: string
+  /** true 时不建独立 worktree，直接在工作区目录运行 */
+  no_worktree?: boolean
   /** goal 状态（会话设定 /goal 后同步） */
   goal?: TaskGoalState
 }
@@ -63,7 +69,7 @@ export function saveTaskManager(workspaceId: number, def: TaskManagerDef): Promi
 // 新增/更新单个任务
 export function upsertTask(
   workspaceId: number,
-  task: { id: string; title: string; detail: string; agent_type: string; model_value?: string; priority?: string; depends_on?: string[] },
+  task: { id: string; title: string; detail: string; agent_type: string; model_value?: string; priority?: string; depends_on?: string[]; goal_condition?: string },
 ): Promise<{ data: TaskManagerTask }> {
   return apiFetch(`/taskmanager/tasks${qs(workspaceId)}`, {
     method: 'POST',

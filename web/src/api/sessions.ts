@@ -62,6 +62,18 @@ export function getSession(id: number): Promise<{ data: Session }> {
   return apiFetch(`/sessions/${id}`)
 }
 
+/** 会话所属 ACP 连接的状态与自动重连倒计时（后端 healthCheckLoop 的真实退避计划） */
+export interface SessionConnectionStatus {
+  state: string // connected | connecting | disconnected | 空（尚未建立连接）
+  next_retry_in_ms: number
+  attempt: number
+}
+
+// 获取会话连接状态（断线重连倒计时展示用）
+export function getSessionConnection(id: number): Promise<{ data: SessionConnectionStatus }> {
+  return apiFetch(`/sessions/${id}/connection`)
+}
+
 // 更新会话标题
 export function updateSessionTitle(id: number, title: string): Promise<{ data: Session }> {
   return apiFetch(`/sessions/${id}/title`, {
