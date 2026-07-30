@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   build:
-    name: Build ${{ matrix.os }}-${{ matrix.arch }}
+    name: Build CLI ${{ matrix.os }}-${{ matrix.arch }}
     runs-on: ${{ matrix.os == 'darwin' && 'macos-latest' || 'windows-latest' }}
     strategy:
       matrix:
@@ -77,39 +77,6 @@ jobs:
           Compress-Archive -Path "dist/opennexus-${{ matrix.os }}-${{ matrix.arch }}.exe" `
             -DestinationPath "dist/opennexus-${{ matrix.os }}-${{ matrix.arch }}.zip" -Force
 
-      # ========== 桌面客户端：macOS arm64 / Windows amd64 ==========
-      - name: Setup Rust (Desktop)
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Setup pnpm (Desktop)
-        uses: pnpm/action-setup@v4
-        with:
-          version: 9
-
-      - name: Install pake-cli (Desktop)
-        run: pnpm install -g pake-cli@3.13.0
-
-      - name: Build macOS Desktop (arm64)
-        if: matrix.os == 'darwin' && matrix.arch == 'arm64'
-        run: |
-          chmod +x scripts/build-pake.sh scripts/package-darwin.sh
-          ./scripts/build-pake.sh dist ${{ github.ref_name }} app
-          ./scripts/package-darwin.sh dist opennexus-darwin-arm64 dist
-          cd dist && tar czf opennexus-darwin-desktop.tar.gz openNexus.app
-
-      - name: Build Windows Desktop (amd64)
-        if: matrix.os == 'windows' && matrix.arch == 'amd64'
-        shell: bash
-        run: |
-          ./scripts/build-pake.sh dist ${{ github.ref_name }} x64
-
-      - name: Package Windows Desktop (amd64)
-        if: matrix.os == 'windows' && matrix.arch == 'amd64'
-        shell: pwsh
-        run: |
-          ./scripts/package-windows.ps1 -OutDir dist -BinName opennexus-windows-amd64.exe -PakeDir dist
-          Compress-Archive -Path dist/openNexus -DestinationPath dist/opennexus-windows-desktop.zip -Force
-
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -119,11 +86,11 @@ jobs:
             dist/*.zip
           if-no-files-found: error
 
-  # ========== Electron 桌面客户端:macOS arm64 (.dmg) + Windows x86_64 (.exe) ==========
-  # 独立 job，与 Pake 流程并存。两者产物都会进 Release。
+  # ========== Electron 桌面客户端（唯一桌面打包方案）==========
+  # 覆盖 macOS arm64/x64 (.dmg)、Linux x64 (.AppImage)、Windows x64 (.exe)。
+  # 独立 job：自带前端+后端构建，不依赖 CLI 构建，产物直接进 Release。
   electron:
     name: Electron ${{ matrix.target }}
-    needs: build
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -306,19 +273,14 @@ jobs:
           {
             echo "## openNexus ${{ github.ref_name }}"
             echo ""
-            echo "### Electron 桌面客户端（推荐）"
+            echo "### 桌面客户端（Electron）"
             echo ""
             echo "| 平台 | 文件 | 说明 |"
             echo "|------|------|------|"
             echo "| macOS Apple Silicon | \`openNexus-*-arm64.dmg\` | 双击安装，拖入 Applications |"
+            echo "| macOS Intel | \`openNexus-*-x64.dmg\` | 双击安装，拖入 Applications |"
+            echo "| Linux x86_64 | \`openNexus-*.AppImage\` | \`chmod +x\` 后运行 |"
             echo "| Windows x86_64 | \`openNexus-*-x64.exe\` | 双击 NSIS 安装程序 |"
-            echo ""
-            echo "### Pake 桌面客户端（轻量，系统 WebView）"
-            echo ""
-            echo "| 平台 | 文件 | 说明 |"
-            echo "|------|------|------|"
-            echo "| macOS Apple Silicon | \`opennexus-darwin-desktop.tar.gz\` | 解压后双击 \`openNexus.app\` |"
-            echo "| Windows x86_64 | \`opennexus-windows-desktop.zip\` | 解压后运行 \`openNexus/launch.bat\` |"
             echo ""
             echo "### 命令行版本"
             echo ""
@@ -331,7 +293,7 @@ jobs:
             echo ""
             echo "- **Electron macOS**：下载 \`.dmg\`，拖拽安装到 Applications 后启动"
             echo "- **Electron Windows**：下载 \`.exe\`，按安装向导完成"
-            echo "- **Pake 桌面版**：解压后运行对应启动脚本"
+            echo "- **Electron Linux**：下载 \`.AppImage\`，\`chmod +x\` 后运行"
             echo "- **命令行版**：解压后执行 \`./opennexus\`，浏览器访问 http://127.0.0.1:8080"
           } > release-notes.md
 
