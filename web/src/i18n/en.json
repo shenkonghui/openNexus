@@ -92,7 +92,8 @@
     "recentRun": "Recent Run",
     "mcpGateway": "MCP Gateway",
     "taskmanager": "Task Assistant",
-    "more": "Advanced",
+    "more": "More",
+    "conversations": "Conversations",
     "toolCalls": "Tool Calls",
     "trash": "Trash"
   },
@@ -135,6 +136,21 @@
     "statusFailed": "Failed",
     "statusInProgress": "Running",
     "statusPending": "Pending",
+    "loading": "Loading...",
+    "loadMore": "Load More"
+  },
+  "conversations": {
+    "title": "Conversations",
+    "subtitle": "Only user messages and the agent's final reply of each turn; thoughts and tool calls are excluded",
+    "refresh": "Refresh",
+    "filterTask": "Task",
+    "taskAll": "All tasks",
+    "total": "{{count}} records",
+    "empty": "No conversation records yet",
+    "roleUser": "User",
+    "roleAgent": "Agent",
+    "expand": "Show more",
+    "collapse": "Collapse",
     "loading": "Loading...",
     "loadMore": "Load More"
   },

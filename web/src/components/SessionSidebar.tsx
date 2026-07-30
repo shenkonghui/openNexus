@@ -7,7 +7,7 @@ import type { Session, ScheduledTask } from '../types'
 import { listScheduledTasks } from '../api/scheduledTasks'
 import { listSessions, listRunningSessions } from '../api/sessions'
 import { getTaskManager, getTaskStatus, startTaskManager, subscribeTaskEvents, listArchivedTasks, type TaskManagerTask } from '../api/taskmanager'
-import { PanelLeftClose, Star, Pencil, X, Check, SquarePlus, FileText, Calendar, Settings, Zap, Loader2, CheckCircle2, XCircle, Clock3, CircleDashed, Network, Layers, History, Trash2 } from 'lucide-react'
+import { PanelLeftClose, Star, Pencil, X, Check, SquarePlus, FileText, Calendar, Settings, Zap, Loader2, CheckCircle2, XCircle, Clock3, CircleDashed, Network, Layers, History, Trash2, MessagesSquare } from 'lucide-react'
 import styles from './SessionSidebar.module.css'
 import NexusLogoIcon from './NexusLogoIcon'
 import UserMenu from './UserMenu'
@@ -568,6 +568,16 @@ export default function SessionSidebar({ sessions, workspaceId, currentId, onDel
                     <span className={styles.itemTitle}>
                       <Network size={13} style={{ marginRight: 4, verticalAlign: '-2px' }} />
                       {t('nav.mcpGateway')}
+                    </span>
+                  </div>
+                </Link>
+              </div>
+              <div className={`${styles.item} ${location.pathname === '/conversations' ? styles.itemActive : ''}`}>
+                <Link to="/conversations" className={styles.itemLink}>
+                  <div className={styles.itemRow}>
+                    <span className={styles.itemTitle}>
+                      <MessagesSquare size={13} style={{ marginRight: 4, verticalAlign: '-2px' }} />
+                      {t('nav.conversations')}
                     </span>
                   </div>
                 </Link>

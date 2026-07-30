@@ -92,7 +92,8 @@
     "recentRun": "最近执行",
     "mcpGateway": "MCP 网关",
     "taskmanager": "任务助手",
-    "more": "高级",
+    "more": "更多",
+    "conversations": "对话记录",
     "toolCalls": "工具调用记录",
     "trash": "回收站"
   },
@@ -135,6 +136,21 @@
     "statusFailed": "失败",
     "statusInProgress": "执行中",
     "statusPending": "等待中",
+    "loading": "加载中...",
+    "loadMore": "加载更多"
+  },
+  "conversations": {
+    "title": "对话记录",
+    "subtitle": "只展示用户发送的消息与 agent 每轮的最终回复，不含思考与工具调用",
+    "refresh": "刷新",
+    "filterTask": "任务",
+    "taskAll": "全部任务",
+    "total": "共 {{count}} 条",
+    "empty": "暂无对话记录",
+    "roleUser": "用户",
+    "roleAgent": "Agent",
+    "expand": "展开全文",
+    "collapse": "收起",
     "loading": "加载中...",
     "loadMore": "加载更多"
   },

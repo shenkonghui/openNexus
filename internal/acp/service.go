@@ -2409,6 +2409,12 @@ func (s *Service) FindMessageByID(messageID uint) (*models.Message, error) {
 	return s.messages.FindByID(messageID)
 }
 
+// MessageRepo 暴露消息仓库实例（与写入路径共享同一把文件锁），
+// 供「对话记录」等跨会话查询的 handler 复用，避免另建实例产生读写竞态。
+func (s *Service) MessageRepo() *repository.MessageRepository {
+	return s.messages
+}
+
 // ListMessagesRecent 返回最近的若干条消息 + 是否还有更早的消息（供前端「加载更多」）。
 // beforeSeq>0 时仅返回 sequence<beforeSeq 的消息（向前翻页游标）；<=0 时不限制。
 // limit<=0 时使用默认页大小；limit>maxMessagePageSize 时截断为最大值。

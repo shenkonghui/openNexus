@@ -330,6 +330,8 @@ func main() {
 	// 任务归档保留天数配置注入任务管理 handler（tmH 先于此处创建，故用 setter）
 	tmH.SetSettingsRepo(taskSettingsRepo)
 	sessionRepo := repository.NewSessionRepository(db)
+	// 对话记录：跨会话提炼用户消息与 agent 最终回复，供「对话记录」页面查询
+	convH := handlers.NewConversationHandler(sessionRepo, acpSvc.MessageRepo())
 	taskMetaSvc := services.NewTaskMetaService(taskSettingsRepo, sessionRepo, agentRouter)
 	acpSvc.SetTaskMetaTrigger(taskMetaSvc)
 	taskSettingsH := handlers.NewTaskSettingsHandler(taskSettingsRepo)
@@ -379,7 +381,7 @@ func main() {
 	subAgentH := handlers.NewSubAgentHandler(noteSettingsRepo, cfg.Agents.MCP.ConfigPath, publicBase)
 	subAgentH.SyncAllSubagentMCP()
 
-	engine := router.Setup(authSvc, jwtSvc, agentRouter, agentCfgH, registryH, schedTaskH, noteH, taskSettingsH, goalSettingsH, agentPrefsH, configH, mcpH, logH, debugH, subAgentH, tmH, permSettingsH, toolCallH, tmSvc, cfg.Agents.Skills, cfg.Agents.Commands, cfg.Agents.Rules, cfg.Agents.SubAgents, cfg.Agents.Selector, cfg.Server.Mode, cfg.Server.WebDist, cfg.Auth.AutoLogin)
+	engine := router.Setup(authSvc, jwtSvc, agentRouter, agentCfgH, registryH, schedTaskH, noteH, taskSettingsH, goalSettingsH, agentPrefsH, configH, mcpH, logH, debugH, subAgentH, tmH, permSettingsH, toolCallH, convH, tmSvc, cfg.Agents.Skills, cfg.Agents.Commands, cfg.Agents.Rules, cfg.Agents.SubAgents, cfg.Agents.Selector, cfg.Server.Mode, cfg.Server.WebDist, cfg.Auth.AutoLogin)
 	engine.Any("/mcp/notes", gin.WrapH(notesmcp.Handler(noteRepo, noteSettingsRepo)))
 	engine.Any("/mcp/notes/*path", gin.WrapH(notesmcp.Handler(noteRepo, noteSettingsRepo)))
 	// taskmanager MCP server：主 agent 通过 MCP 工具管理工作区任务（tasks.json）。
