@@ -202,6 +202,21 @@ func branchExists(repoRoot, branch string) bool {
 	return cmd.Run() == nil
 }
 
+// CurrentBranch 返回 path（可为 worktree 目录）当前检出的分支名；
+// 处于游离 HEAD 或非 git 目录时返回空串（best-effort，不报错）。
+func CurrentBranch(path string) string {
+	cmd := exec.Command("git", "-C", path, "rev-parse", "--abbrev-ref", "HEAD")
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	branch := strings.TrimSpace(string(out))
+	if branch == "HEAD" { // 游离 HEAD
+		return ""
+	}
+	return branch
+}
+
 // UniqueWorktreeName 在 name 基础上生成不冲突的 worktree 名：
 // 若 .worktrees/<name> 目录或同名分支已存在，则依次尝试 name-2、name-3…
 func UniqueWorktreeName(repoRoot, name string) string {

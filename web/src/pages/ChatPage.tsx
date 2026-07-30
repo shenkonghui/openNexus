@@ -140,6 +140,9 @@ export default function ChatPage() {
   const [reconnectSeconds, setReconnectSeconds] = useState(0)
   // 连接断开期间阻止轮询把 reconnecting 重置回 idle
   const connDownRef = useRef(false)
+  // 后端繁忙状态（有活跃 prompt 或生效中的 goal），从 5s 轮询的 Connection 接口获取。
+  // 发送队列 flush 前检查此状态，避免 goal 续轮期间队列消息并发打入同一 ACP 会话。
+  const [backendBusy, setBackendBusy] = useState(false)
   const abortRef = useRef<AbortController | null>(null)
   const mountedRef = useRef(true)
   // lastSeqRef 记录最后接收到的消息 sequence，用于断点续传重连时携带 Last-Event-ID
@@ -606,6 +609,8 @@ export default function ChatPage() {
     // 切换会话时清除上个会话的重连倒计时状态
     connDownRef.current = false
     setReconnectPlan(null)
+    // 切换会话时重置后端繁忙状态，避免上个会话的残留标记阻塞队列
+    setBackendBusy(false)
     return () => {
       mountedRef.current = false
       if (flushRafRef.current != null) {
@@ -632,8 +637,12 @@ export default function ChatPage() {
     const interval = setInterval(() => {
       if (!mountedRef.current) return
       if (abortRef.current == null && !connDownRef.current) {
+        // 后端繁忙（有活跃 prompt 或生效中的 goal）时不把 conv 重置回 idle，
+        // 避免发送队列在 goal 续轮期间错误续发。
         setConvState((s) => (
-          s === 'streaming' || s === 'reconnecting' || s === 'connecting' ? 'idle' : s
+          s === 'streaming' || s === 'reconnecting' || s === 'connecting'
+            ? (backendBusy ? 'streaming' : 'idle')
+            : s
         ))
       }
       // 流式进行时（abortRef 非空）跳过消息拉取，避免 DB 数据覆盖实时 SSE 流，
@@ -646,6 +655,8 @@ export default function ChatPage() {
           if (!mountedRef.current) return
           const down = data.state === 'disconnected'
           connDownRef.current = down
+          // 更新后端繁忙状态：有活跃 prompt 或生效中的 goal
+          setBackendBusy(!!data.has_active_prompt || !!data.goal_active)
           if (down) {
             setReconnectPlan({ nextRetryAt: Date.now() + Math.max(0, data.next_retry_in_ms), attempt: data.attempt })
             setConvState((s) => (s === 'waiting_permission' ? s : 'reconnecting'))
@@ -657,7 +668,7 @@ export default function ChatPage() {
     }, 5000)
 
     return () => clearInterval(interval)
-  }, [hasSession, session?.id, session?.status, session?.source, loadData])
+  }, [hasSession, session?.id, session?.status, session?.source, loadData, backendBusy])
 
   // 重连倒计时本地 1s 递减；到 0 后保持 0（后端尝试中），下轮轮询刷新计划。
   useEffect(() => {
@@ -1158,6 +1169,7 @@ export default function ChatPage() {
           sending,
           onSend: handleSend,
           onCancel: handleCancel,
+          backendBusy,
           commands,
           modes,
           skills,

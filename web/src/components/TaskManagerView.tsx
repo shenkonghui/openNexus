@@ -320,17 +320,8 @@ export default function TaskManagerView({ workspaceId, cwd, agents, restoreSessi
     })
   }, [])
 
-  // 全局快捷键 Cmd/Ctrl+Shift+L 切换多任务网格视图
-  useEffect(() => {
-    function handleKey(e: KeyboardEvent) {
-      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === 'l') {
-        e.preventDefault()
-        toggleGridMode()
-      }
-    }
-    document.addEventListener('keydown', handleKey)
-    return () => document.removeEventListener('keydown', handleKey)
-  }, [toggleGridMode])
+  // 全局 Cmd/Ctrl+Shift+L 快捷键已在 AppLayout 注册，
+  // 此处仅由工具栏按钮调用 toggleGridMode。
 
   if (loading) return <LoadingSpinner />
 
@@ -402,7 +393,15 @@ export default function TaskManagerView({ workspaceId, cwd, agents, restoreSessi
             )}
           </div>
         </div>
-        <div className={styles.gridChatCol} onMouseDown={() => setFocusedTaskId(null)}>
+        <div
+          className={styles.gridChatCol}
+          onMouseDown={(e) => {
+            // 点击输入区（composer：输入框 + 配置栏）时保留已选中的任务焦点，
+            // 以便继续输入并直发到该任务；仅点击消息/助手区域才取消焦点、回到与助手对话。
+            if ((e.target as HTMLElement).closest('[data-composer]')) return
+            setFocusedTaskId(null)
+          }}
+        >
           {!workspaceId ? (
             <div className={styles.empty}>{t('taskmanager.empty')}</div>
           ) : (

@@ -39,6 +39,8 @@
   },
   "prompt": {
     "send": "发送",
+    "queueSend": "加入发送队列，当前任务结束后自动发送",
+    "queueRemove": "从队列移除",
     "slashMenuTitle": "输入筛选 command / skill / 模式（↑↓ 选择，Enter 确认）",
     "slashNoMatch": "无匹配项",
     "slashKindCommand": "Command",
@@ -50,6 +52,8 @@
     "slashKindTag": "Tag",
     "slashKindTask": "Task-select",
     "slashKindArchive": "Task-Archive",
+    "slashKindRun": "Task-run",
+    "slashKindTaskGroup": "task",
     "mentionMenuTitle": "选择引用类型（↑↓ 选择，Enter 进入）",
     "categoryLabel": "类型",
     "categoryBack": "返回类型列表",
@@ -58,6 +62,17 @@
     "categoryFileDesc": "浏览工作目录文件",
     "categoryNoteDesc": "按标签选择笔记",
     "categoryTaskDesc": "{{count}} 个任务，选中后消息直发到该任务会话",
+      "taskSelectCommand": "task-select",
+      "taskSelectDesc": "选择任务，消息直发到该任务会话",
+      "taskArchiveCommand": "task-archive",
+      "taskArchiveDesc": "选择任务归档到回收站（支持全部）",
+      "taskCreateCommand": "task-create",
+      "taskCreateDesc": "输入任务描述后创建新任务",
+      "taskRunCommand": "task-run",
+      "taskRunDesc": "选择任务并运行（支持全部）",
+      "runMenuTitle": "选择要运行的任务（支持全部）",
+      "runAllLabel": "全部任务",
+      "runAllDesc": "运行当前全部 {{count}} 个待执行任务",
     "categoryArchiveDesc": "{{count}} 个任务，选中后归档到回收站（支持全部）",
     "commandMenuTitle": "选择 Command（↑↓ 选择，Enter 确认）",
     "skillMenuTitle": "选择 Skill（↑↓ 选择，Enter 确认）",
@@ -225,6 +240,7 @@
     "deleteSuccess": "任务已删除",
     "noSessions": "暂无任务",
     "promptPlaceholder": "输入 prompt，/ 命令/模式，@ 文件引用，Enter 发送，Shift+Enter 换行",
+    "queuePlaceholder": "任务运行中，发送的消息将加入队列，结束后自动续发",
     "sending": "发送中...",
     "cancelPrompt": "取消",
     "resume": "恢复任务",
@@ -853,7 +869,11 @@
     "tabName": "Agent 终端",
     "tabHint": "Agent 执行的命令统一在此展示（只读）",
     "exitCode": "进程已退出，退出码 {{code}}",
-    "signal": "进程被信号终止：{{signal}}"
+    "signal": "进程被信号终止：{{signal}}",
+    "moveToPanel": "移到右侧终端面板",
+    "movedHint": "终端输出已移至右侧终端面板",
+    "collapse": "收起",
+    "expand": "展开"
   },
   "browser": {
     "urlPlaceholder": "输入网址（https://...）",
@@ -966,6 +986,10 @@
     "taskCmdEmpty": "请在 @task 引用后输入要发送的内容",
     "taskCmdBusy": "任务「{{title}}」正在处理上一条直发消息，请稍候",
     "taskArchived": "已归档任务「{{title}}」，可在回收站查看或恢复。",
-    "taskArchivedAll": "已归档全部 {{count}} 个任务，可在回收站查看或恢复。"
+    "taskArchivedAll": "已归档全部 {{count}} 个任务，可在回收站查看或恢复。",
+      "taskCreated": "已创建任务「{{title}}」，可在任务列表查看。",
+      "untitledTask": "新任务",
+      "taskRunStarted": "已启动任务「{{title}}」。",
+      "taskRunStartedAll": "已启动全部待执行任务。"
   }
 }

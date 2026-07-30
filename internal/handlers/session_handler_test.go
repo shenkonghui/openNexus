@@ -264,6 +264,7 @@ func (f *fakeSessionStore) SubscribeSession(_ string, _ int) ([]models.Message, 
 }
 
 func (f *fakeSessionStore) HasActivePrompt(_ string) bool { return false }
+func (f *fakeSessionStore) GoalActive(_ string) bool       { return false }
 
 func (f *fakeSessionStore) ConnectionStatusForSession(_ string) (string, int64, int) {
 	return "", 0, 0
@@ -807,6 +808,7 @@ func (s *commandsFakeStore) SubscribeSession(string, int) ([]models.Message, <-c
 	return nil, nil, nil
 }
 func (s *commandsFakeStore) HasActivePrompt(string) bool                             { return false }
+func (s *commandsFakeStore) GoalActive(string) bool                                { return false }
 func (s *commandsFakeStore) ConnectionStatusForSession(string) (string, int64, int)  { return "", 0, 0 }
 func (s *commandsFakeStore) ListInterruptedTasks(uint) ([]models.RunningTask, error) { return nil, nil }
 func (s *commandsFakeStore) ListRunningDBSessionIDs(uint) ([]uint, error)            { return nil, nil }

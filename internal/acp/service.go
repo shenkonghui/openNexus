@@ -30,6 +30,7 @@ var (
 	ErrSessionNotFound  = errors.New("会话不存在")
 	ErrSessionNotActive = errors.New("会话不在活跃状态")
 	ErrSessionClosed    = errors.New("会话已关闭，无法恢复")
+	ErrSessionBusy      = errors.New("会话正在处理中，请稍后重试")
 )
 
 // 连接状态常量。
@@ -1517,16 +1518,28 @@ func (s *Service) PromptWithExecution(ctx context.Context, sessionID, prompt str
 		return nil, err
 	}
 	// 内置命令拦截（客户端侧处理，不发给 agent，优先于原生同名命令）：
+	// /shell <命令> 在会话工作目录直接执行 shell 并把输出合成回复返回（不打扰 agent）；
 	// /yolo-on|off|status 开关会话 YOLO（on/off 可附带任务内容，
 	// 切换后把发给 agent 的 prompt 改写为剩余任务）；/goal 由通用 goal 控制器处理
 	// （status/clear 本地合成回复直接返回；set 把发给 agent 的 prompt 改写为 goal directive）。
 	promptForAgent := prompt
+	if handled, shellCh := s.interceptShell(session, sessionID, prompt, executionID); handled {
+		return shellCh, nil
+	}
 	if handled, yoloCh := s.interceptYolo(session, sessionID, prompt, executionID, &promptForAgent); handled {
 		return yoloCh, nil
 	}
 	if handled, goalCh := s.interceptGoal(session, sessionID, prompt, executionID, &promptForAgent); handled {
 		return goalCh, nil
 	}
+	// 互斥检查：同一会话已有进行中的 prompt 时拒绝新的 prompt 请求。
+	// goal 续轮在前一轮结束后才发起（broadcaster 已注销），不会与自身竞争；
+	// 此检查主要防止前端发送队列与 goal 续轮、编排/MCP 并发请求等场景的并发双 prompt，
+	// 避免 ACP 会话状态混乱、广播器覆盖、goal 评估污染等问题。
+	if s.HasActivePrompt(sessionID) {
+		return nil, ErrSessionBusy
+	}
+
 	// error/closed 会话：发送前尝试自动恢复（复用共享连接、重建 ACP 会话并注入最近历史），
 	// 成功后状态回到 active 继续发送；恢复失败才返回 ErrSessionNotActive。
 	reconnected := false
@@ -1747,7 +1760,7 @@ func (s *Service) PromptWithExecution(ctx context.Context, sessionID, prompt str
 			}
 			close(out)
 			bc.close()
-			s.unregisterBroadcaster(sessionID)
+			s.unregisterBroadcaster(sessionID, bc)
 			// goal 循环：本轮正常结束后评估是否达成、决定是否自动续轮（无 goal 时立即返回）。
 			// 独立 goroutine：评估走临时会话可能耗时，不阻塞本 prompt 收尾。
 			if finalStatus == models.RunningTaskStatusDone {
@@ -1848,6 +1861,9 @@ func (s *Service) PromptWithExecution(ctx context.Context, sessionID, prompt str
 			// tool_call_update 同样高频（shell/read 输出流式），逐条 Create 会拖死
 			// ACP 订阅 buffer。实时推前端；按 toolCallId 只保留最新一条延迟落库
 			//（前端 parseToolCalls 本就按 id 合并，历史只需终态）。
+			// 例外：内嵌 terminal 锚点的 update 每个终端仅出现一次，覆盖去重会把它
+			// 冲掉，导致历史回放（多任务实时窗口、断线续传）渲染不出内嵌终端——
+			// 覆盖时保留锚点行（NDJSON），且锚点 update 到达时立即 flush 落库。
 			pendingToolUpdates := map[string]models.Message{}
 			var toolUpdateOrder []string
 			// pendingToolMeta 同窗口攒批工具调用记录的增量（状态/退出码等），随 flush 一并落库
@@ -1912,8 +1928,11 @@ func (s *Service) PromptWithExecution(ctx context.Context, sessionID, prompt str
 						if id == "" {
 							id = fmt.Sprintf("seq-%d", msg.Sequence)
 						}
-						if _, exists := pendingToolUpdates[id]; !exists {
+						if prev, exists := pendingToolUpdates[id]; !exists {
 							toolUpdateOrder = append(toolUpdateOrder, id)
+						} else {
+							// 覆盖前保留旧 raw 中的 terminal 锚点行（前端按多行合并 raw_json）
+							msg.RawJSON = keepTerminalAnchorRaw(prev.RawJSON, msg.RawJSON)
 						}
 						pendingToolUpdates[id] = msg
 						if u.ToolCallUpdate != nil && s.toolCallRecords != nil {
@@ -1924,6 +1943,11 @@ func (s *Service) PromptWithExecution(ctx context.Context, sessionID, prompt str
 							}
 							mergeToolCallDelta(pendingToolMeta[id], u.ToolCallUpdate)
 							s.linkToolCallTerminal(session.ID, u.ToolCallUpdate)
+						}
+						if hasTerminalContent(u.ToolCallUpdate) {
+							// 锚点 update 立即落库（每终端一次，低频）：中途订阅的
+							// 多任务窗口 / 断线续传按 DB 回放时才能拿到终端锚点
+							flushToolUpdates()
 						}
 					} else if msg.Kind == models.MessageKindUsageUpdate || msg.Kind == models.MessageKindSessionInfoUpdate {
 						// 用量/会话信息是高频心跳：只推前端，不落库、不阻塞 out。
@@ -2035,16 +2059,26 @@ func (s *Service) CancelSession(ctx context.Context, sessionID string) error {
 }
 
 // registerBroadcaster 注册指定会话的活跃 prompt 广播器。
+// 若会话已有活跃广播器（理论上不应发生，HasActivePrompt 检查应已拦截），
+// 记录告警以便排查并发双 prompt 问题。
 func (s *Service) registerBroadcaster(sessionID string, bc *msgBroadcaster) {
 	s.mu.Lock()
+	if old, ok := s.activePrompts[sessionID]; ok && old != bc {
+		slog.Warn("会话已有活跃 prompt 广播器，新的将覆盖旧的（可能导致断点续传失效）",
+			"session", sessionID)
+	}
 	s.activePrompts[sessionID] = bc
 	s.mu.Unlock()
 }
 
 // unregisterBroadcaster 移除指定会话的活跃 prompt 广播器。
-func (s *Service) unregisterBroadcaster(sessionID string) {
+// 仅当传入的 bc 与当前注册的广播器一致时才删除，防止并发 prompt 场景下
+// 先结束的一方误删另一方的广播器导致断点续传失效。
+func (s *Service) unregisterBroadcaster(sessionID string, bc *msgBroadcaster) {
 	s.mu.Lock()
-	delete(s.activePrompts, sessionID)
+	if cur, ok := s.activePrompts[sessionID]; ok && cur == bc {
+		delete(s.activePrompts, sessionID)
+	}
 	s.mu.Unlock()
 }
 
@@ -2109,6 +2143,16 @@ func (s *Service) HasActivePrompt(sessionID string) bool {
 	s.mu.RLock()
 	_, ok := s.activePrompts[sessionID]
 	s.mu.RUnlock()
+	return ok
+}
+
+// GoalActive 判断指定会话是否有生效中的 goal（评估中或等待续轮）。
+// 供前端在 flush 发送队列前检查：goal 生效期间不应续发，避免队列消息
+// 与 goal 续轮并发打到同一 ACP 会话。
+func (s *Service) GoalActive(sessionID string) bool {
+	s.goalMu.Lock()
+	defer s.goalMu.Unlock()
+	_, ok := s.goals[sessionID]
 	return ok
 }
 
@@ -2491,7 +2535,7 @@ func (s *Service) ListCommands(sessionID string) ([]acp.AvailableCommand, error)
 // 内置命令在客户端侧拦截、优先于 agent 原生同名命令，因此同名时用内置描述覆盖
 // 原生条目，保证弹窗描述与实际行为一致。
 func appendBuiltinCommands(cmds []acp.AvailableCommand) []acp.AvailableCommand {
-	for _, builtin := range append([]acp.AvailableCommand{builtinGoalCommand()}, builtinYoloCommands()...) {
+	for _, builtin := range append([]acp.AvailableCommand{builtinGoalCommand(), builtinShellCommand()}, builtinYoloCommands()...) {
 		replaced := false
 		for i, c := range cmds {
 			if c.Name == builtin.Name {

@@ -67,6 +67,10 @@ export interface SessionConnectionStatus {
   state: string // connected | connecting | disconnected | 空（尚未建立连接）
   next_retry_in_ms: number
   attempt: number
+  /** 会话是否有进行中的 prompt（后端 HasActivePrompt） */
+  has_active_prompt: boolean
+  /** 会话是否有生效中的 goal（评估中或等待续轮） */
+  goal_active: boolean
 }
 
 // 获取会话连接状态（断线重连倒计时展示用）

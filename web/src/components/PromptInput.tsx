@@ -40,7 +40,7 @@ export interface TaskMentionItem {
 type TriggerType = 'slash' | 'mention' | null
 type MentionCategory = 'command' | 'skill' | 'file' | 'note' | 'task' | 'archive'
 type MentionType = MentionCategory | 'mode' | 'tag'
-type NavigateAction = 'back' | 'file-up' | 'tag-up'
+type NavigateAction = 'back' | 'file-up' | 'tag-up' | 'task-select' | 'task-archive' | 'task-run' | 'task-back' | 'archive-back' | 'run-back'
 
 interface CategoryRow {
   kind: 'category'
@@ -104,6 +104,7 @@ function buildSlashItems(
   commands: AgentCommand[],
   modes: SessionMode[],
   skills: AgentSkill[],
+  hasTasks: boolean,
   t: (key: string) => string,
 ): ItemRow[] {
   const items: ItemRow[] = []
@@ -153,7 +154,66 @@ function buildSlashItems(
     })
   }
 
+  // /task-select 命令：选中后进入任务子菜单选择具体任务（仅任务助手面板传入 tasks 时显示）
+  if (hasTasks && matchesQuery([t('prompt.taskSelectCommand'), 'task-select', t('prompt.slashKindTaskGroup')], query)) {
+    items.push({
+      kind: 'item',
+      type: 'task',
+      label: '/' + t('prompt.taskSelectCommand'),
+      path: 'task-select',
+      desc: t('prompt.taskSelectDesc'),
+      insertText: '',
+      kindLabel: t('prompt.slashKindTaskGroup'),
+      navigate: 'task-select',
+    })
+  }
+
+  // /task-run 命令：选中后进入运行子菜单选择要运行的任务
+  if (hasTasks && matchesQuery([t('prompt.taskRunCommand'), 'task-run', t('prompt.slashKindTaskGroup')], query)) {
+    items.push({
+      kind: 'item',
+      type: 'task',
+      label: '/' + t('prompt.taskRunCommand'),
+      path: 'task-run',
+      desc: t('prompt.taskRunDesc'),
+      insertText: '',
+      kindLabel: t('prompt.slashKindTaskGroup'),
+      navigate: 'task-run',
+    })
+  }
+
+  // /task-archive 命令：选中后进入归档子菜单选择要归档的任务
+  if (hasTasks && matchesQuery([t('prompt.taskArchiveCommand'), 'task-archive', t('prompt.slashKindTaskGroup')], query)) {
+    items.push({
+      kind: 'item',
+      type: 'archive',
+      label: '/' + t('prompt.taskArchiveCommand'),
+      path: 'task-archive',
+      desc: t('prompt.taskArchiveDesc'),
+      insertText: '',
+      kindLabel: t('prompt.slashKindTaskGroup'),
+      navigate: 'task-archive',
+    })
+  }
+
+  // /task-create 命令：插入 @task-create 标记，用户输入描述后由 TaskManagerChatPanel 直接创建
+  if (hasTasks && matchesQuery([t('prompt.taskCreateCommand'), 'task-create', t('prompt.slashKindTaskGroup')], query)) {
+    items.push({
+      kind: 'item',
+      type: 'task',
+      label: '/' + t('prompt.taskCreateCommand'),
+      path: 'task-create',
+      desc: t('prompt.taskCreateDesc'),
+      insertText: '@task-create ',
+      kindLabel: t('prompt.slashKindTaskGroup'),
+    })
+  }
+
   items.sort((a, b) => {
+    // 任务助手：/task* 系列命令（type=task/archive）置顶，优先于 agent 命令与其它一切
+    const taskGroup = (r: ItemRow) => (r.type === 'task' || r.type === 'archive' ? 0 : 1)
+    const taskDiff = taskGroup(a) - taskGroup(b)
+    if (taskDiff !== 0) return taskDiff
     // agent 命令优先于一切
     const agentDiff = Number(b.isAgent ?? false) - Number(a.isAgent ?? false)
     if (agentDiff !== 0) return agentDiff
@@ -196,6 +256,7 @@ export default function PromptInput({
   const [selectedIdx, setSelectedIdx] = useState(0)
   const [cursorPos, setCursorPos] = useState(0)
   const [mentionCategory, setMentionCategory] = useState<MentionCategory | null>(null)
+  const [slashSubMode, setSlashSubMode] = useState<'task' | 'archive' | 'run' | null>(null)
   const [fileEntries, setFileEntries] = useState<FileEntry[]>([])
   const [fileLoading, setFileLoading] = useState(false)
   const [fileBrowsePath, setFileBrowsePath] = useState('')
@@ -219,35 +280,14 @@ export default function PromptInput({
 
   const slashItems = useMemo<ItemRow[]>(() => {
     if (trigger.type !== 'slash') return []
-    return buildSlashItems(trigger.query, commands, modes, skills, t)
-  }, [trigger, commands, modes, skills, t])
+    return buildSlashItems(trigger.query, commands, modes, skills, tasks !== undefined, t)
+  }, [trigger, commands, modes, skills, tasks, t])
 
   const rootCategories = useMemo<CategoryRow[]>(() => {
     if (trigger.type !== 'mention') return []
     const query = trigger.query
     const cats: CategoryRow[] = []
 
-    // 任务引用（任务助手面板专属）：传入 tasks 即展示（含空列表），
-    // 选中任务后整条消息直发到该任务会话
-    if (tasks !== undefined && matchesQuery([t('prompt.slashKindTask'), 'task'], query)) {
-      cats.push({
-        kind: 'category',
-        category: 'task',
-        label: t('prompt.slashKindTask'),
-        desc: t('prompt.categoryTaskDesc', { count: tasks.length }),
-        kindLabel: t('prompt.categoryLabel'),
-      })
-    }
-    // 归档任务（任务助手面板专属）：选中后把任务移入回收站，支持全部
-    if (tasks !== undefined && matchesQuery([t('prompt.slashKindArchive'), 'archive-task', 'archive'], query)) {
-      cats.push({
-        kind: 'category',
-        category: 'archive',
-        label: t('prompt.slashKindArchive'),
-        desc: t('prompt.categoryArchiveDesc', { count: tasks.length }),
-        kindLabel: t('prompt.categoryLabel'),
-      })
-    }
     if (commands.length > 0 && matchesQuery([t('prompt.slashKindCommand'), 'command'], query)) {
       cats.push({
         kind: 'category',
@@ -290,55 +330,6 @@ export default function PromptInput({
   const mentionItems = useMemo<MenuRow[]>(() => {
     if (trigger.type !== 'mention' || !mentionCategory) return []
     const query = trigger.query
-
-    if (mentionCategory === 'task') {
-      const items: MenuRow[] = [backRow(t('prompt.categoryBack'), t('prompt.slashKindTask'), 'back')]
-      for (const tk of tasks ?? []) {
-        if (!matchesQuery([tk.id, tk.title], query)) continue
-        const note = taskTitleNote(tk.title)
-        items.push({
-          kind: 'item',
-          type: 'task',
-          label: tk.title,
-          path: tk.id,
-          desc: tk.desc || tk.id,
-          // 引用带标题注释，插入后可直接辨认目标任务，如 @task:a1b2(修复登录)
-          insertText: `@task:${tk.id}${note ? `(${note})` : ''} `,
-          kindLabel: t('prompt.slashKindTask'),
-        })
-      }
-      return items
-    }
-
-    if (mentionCategory === 'archive') {
-      const items: MenuRow[] = [backRow(t('prompt.categoryBack'), t('prompt.slashKindArchive'), 'back')]
-      // 首条「全部任务」：插入 @archive-task:* 一次性归档所有任务
-      if (matchesQuery([t('prompt.archiveAllLabel'), 'all', '*'], query)) {
-        items.push({
-          kind: 'item',
-          type: 'task',
-          label: t('prompt.archiveAllLabel'),
-          path: '*',
-          desc: t('prompt.archiveAllDesc', { count: (tasks ?? []).length }),
-          insertText: `@archive-task:*(${t('prompt.archiveAllLabel')}) `,
-          kindLabel: t('prompt.slashKindArchive'),
-        })
-      }
-      for (const tk of tasks ?? []) {
-        if (!matchesQuery([tk.id, tk.title], query)) continue
-        const note = taskTitleNote(tk.title)
-        items.push({
-          kind: 'item',
-          type: 'task',
-          label: tk.title,
-          path: tk.id,
-          desc: tk.desc || tk.id,
-          insertText: `@archive-task:${tk.id}${note ? `(${note})` : ''} `,
-          kindLabel: t('prompt.slashKindArchive'),
-        })
-      }
-      return items
-    }
 
     if (mentionCategory === 'command') {
       const items: MenuRow[] = [backRow(t('prompt.categoryBack'), t('prompt.slashKindCommand'), 'back')]
@@ -450,8 +441,102 @@ export default function PromptInput({
     fileParentPath, noteTags, notes, noteBrowseTag, tasks, t,
   ])
 
+  // 斜杠菜单子模式（/task-select → 任务列表）：当 trigger 重置时一并清空
+  useEffect(() => {
+    if (trigger.type !== 'slash') setSlashSubMode(null)
+  }, [trigger.type])
+
+  const slashTaskItems = useMemo<MenuRow[]>(() => {
+    if (slashSubMode !== 'task') return []
+    const query = trigger.type === 'slash' ? trigger.query : ''
+    const items: MenuRow[] = [backRow(t('prompt.categoryBack'), t('prompt.slashKindTaskGroup'), 'task-back')]
+    for (const tk of tasks ?? []) {
+      if (!matchesQuery([tk.id, tk.title, tk.desc || ''], query)) continue
+      const note = taskTitleNote(tk.title)
+      items.push({
+        kind: 'item',
+        type: 'task',
+        label: tk.title,
+        path: tk.id,
+        desc: tk.desc || tk.id,
+        insertText: `@task:${tk.id}${note ? `(${note})` : ''} `,
+        kindLabel: t('prompt.slashKindTask'),
+      })
+    }
+    return items
+  }, [slashSubMode, trigger, tasks, t])
+
+  // 归档子菜单：选中后插入 @archive-task:id(title) 引用
+  const slashArchiveItems = useMemo<MenuRow[]>(() => {
+    if (slashSubMode !== 'archive') return []
+    const query = trigger.type === 'slash' ? trigger.query : ''
+    const items: MenuRow[] = [backRow(t('prompt.categoryBack'), t('prompt.slashKindTaskGroup'), 'archive-back')]
+    // 首条「全部任务」
+    if (matchesQuery([t('prompt.archiveAllLabel'), 'all', '*'], query)) {
+      items.push({
+        kind: 'item',
+        type: 'archive',
+        label: t('prompt.archiveAllLabel'),
+        path: '*',
+        desc: t('prompt.archiveAllDesc', { count: (tasks ?? []).length }),
+        insertText: `@archive-task:*(${t('prompt.archiveAllLabel')}) `,
+        kindLabel: t('prompt.slashKindArchive'),
+      })
+    }
+    for (const tk of tasks ?? []) {
+      if (!matchesQuery([tk.id, tk.title, tk.desc || ''], query)) continue
+      const note = taskTitleNote(tk.title)
+      items.push({
+        kind: 'item',
+        type: 'archive',
+        label: tk.title,
+        path: tk.id,
+        desc: tk.desc || tk.id,
+        insertText: `@archive-task:${tk.id}${note ? `(${note})` : ''} `,
+        kindLabel: t('prompt.slashKindArchive'),
+      })
+    }
+    return items
+  }, [slashSubMode, trigger, tasks, t])
+
+  // 运行子菜单：选中后插入 @run-task:id(title) 引用（* = 全部待执行任务）
+  const slashRunItems = useMemo<MenuRow[]>(() => {
+    if (slashSubMode !== 'run') return []
+    const query = trigger.type === 'slash' ? trigger.query : ''
+    const items: MenuRow[] = [backRow(t('prompt.categoryBack'), t('prompt.slashKindTaskGroup'), 'run-back')]
+    // 首条「全部任务」
+    if (matchesQuery([t('prompt.runAllLabel'), 'all', '*'], query)) {
+      items.push({
+        kind: 'item',
+        type: 'task',
+        label: t('prompt.runAllLabel'),
+        path: '*',
+        desc: t('prompt.runAllDesc', { count: (tasks ?? []).length }),
+        insertText: `@run-task:*(${t('prompt.runAllLabel')}) `,
+        kindLabel: t('prompt.slashKindRun'),
+      })
+    }
+    for (const tk of tasks ?? []) {
+      if (!matchesQuery([tk.id, tk.title, tk.desc || ''], query)) continue
+      const note = taskTitleNote(tk.title)
+      items.push({
+        kind: 'item',
+        type: 'task',
+        label: tk.title,
+        path: tk.id,
+        desc: tk.desc || tk.id,
+        insertText: `@run-task:${tk.id}${note ? `(${note})` : ''} `,
+        kindLabel: t('prompt.slashKindRun'),
+      })
+    }
+    return items
+  }, [slashSubMode, trigger, tasks, t])
+
   const activeRows: MenuRow[] = trigger.type === 'slash'
-    ? slashItems
+    ? (slashSubMode === 'task' ? slashTaskItems
+      : slashSubMode === 'archive' ? slashArchiveItems
+        : slashSubMode === 'run' ? slashRunItems
+          : slashItems)
     : trigger.type === 'mention'
       ? (mentionCategory ? mentionItems : rootCategories)
       : []
@@ -549,6 +634,25 @@ export default function PromptInput({
     setText(before + after)
   }
 
+  // 进入任务子菜单时把 /命令文本收缩为单独的 "/"，让 trigger.query 变空，
+  // 从而展示全部任务（否则残留的 "task-select" 会被当作过滤词，导致找不到任务）。
+  function resetSlashQuery() {
+    if (trigger.type === null) return
+    const before = text.slice(0, trigger.startPos)
+    const after = text.slice(cursorPos)
+    const newText = before + '/' + after
+    const newCursor = before.length + 1
+    setText(newText)
+    setCursorPos(newCursor)
+    requestAnimationFrame(() => {
+      const el = textareaRef.current
+      if (el) {
+        el.focus()
+        el.setSelectionRange(newCursor, newCursor)
+      }
+    })
+  }
+
   function applyRow(row: MenuRow) {
     if (trigger.type === null) return
 
@@ -560,6 +664,29 @@ export default function PromptInput({
       return
     }
 
+    if (row.navigate === 'task-select') {
+      resetSlashQuery()
+      setSlashSubMode('task')
+      setSelectedIdx(0)
+      return
+    }
+    if (row.navigate === 'task-archive') {
+      resetSlashQuery()
+      setSlashSubMode('archive')
+      setSelectedIdx(0)
+      return
+    }
+    if (row.navigate === 'task-run') {
+      resetSlashQuery()
+      setSlashSubMode('run')
+      setSelectedIdx(0)
+      return
+    }
+    if (row.navigate === 'task-back' || row.navigate === 'archive-back' || row.navigate === 'run-back') {
+      setSlashSubMode(null)
+      setSelectedIdx(0)
+      return
+    }
     if (row.navigate === 'back') {
       goBack()
       return
@@ -730,22 +857,24 @@ export default function PromptInput({
   }
 
   const menuTitle = trigger.type === 'slash'
-    ? t('prompt.slashMenuTitle')
+    ? (slashSubMode === 'task'
+      ? t('prompt.taskMenuTitle')
+      : slashSubMode === 'archive'
+        ? t('prompt.archiveMenuTitle')
+        : slashSubMode === 'run'
+          ? t('prompt.runMenuTitle')
+          : t('prompt.slashMenuTitle'))
     : !mentionCategory
       ? t('prompt.mentionMenuTitle')
       : mentionCategory === 'command'
         ? t('prompt.commandMenuTitle')
         : mentionCategory === 'skill'
           ? t('prompt.skillMenuTitle')
-          : mentionCategory === 'task'
-            ? t('prompt.taskMenuTitle')
-            : mentionCategory === 'archive'
-              ? t('prompt.archiveMenuTitle')
-              : mentionCategory === 'file'
-              ? t('prompt.fileMenuTitle', { path: fileBrowsePath || cwd })
-              : noteBrowseTag
-                ? t('prompt.noteMenuTitle', { tag: noteBrowseTag })
-                : t('prompt.noteTagMenuTitle')
+          : mentionCategory === 'file'
+            ? t('prompt.fileMenuTitle', { path: fileBrowsePath || cwd })
+            : noteBrowseTag
+              ? t('prompt.noteMenuTitle', { tag: noteBrowseTag })
+              : t('prompt.noteTagMenuTitle')
 
   const menuLoading = trigger.type === 'mention' && (
     (mentionCategory === 'file' && fileLoading) ||

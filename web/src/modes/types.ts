@@ -58,6 +58,9 @@ export interface PanelCtx {
   onSend: (prompt: string) => void
   onCancel: () => void
 
+  /** 后端是否有进行中的 prompt 或生效中的 goal。发送队列 flush 前检查：为 true 时挂起队列。 */
+  backendBusy?: boolean
+
   // ===== 对话相关元数据 =====
   commands: AgentCommand[]
   modes: SessionMode[]

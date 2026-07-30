@@ -30,7 +30,10 @@ interface AgentModelSelectorProps {
 interface ComboEntry {
   agentType: string
   modelValue: string
+  /** 下拉列表项展示：完整「agent · 模型」 */
   label: string
+  /** 触发按钮（收起态）展示：仅模型名（无模型时回退 agent 名） */
+  modelLabel: string
   title: string
 }
 
@@ -83,12 +86,13 @@ export default function AgentModelSelector({
             agentType: agent.type,
             modelValue: m.value,
             label: `${agent.display_name} · ${truncateSelectLabel(m.name, 24)}`,
+            modelLabel: truncateSelectLabel(m.name, 24),
             title: fullOptionLabel(`${agent.display_name} · ${m.name}`, m.description),
           })
         }
       } else if (matches(agent.type)) {
         // 模型未知（探测中/失败/该 agent 无模型配置）：仅显示 agent，使用其默认模型
-        list.push({ agentType: agent.type, modelValue: '', label: agent.display_name, title: agent.display_name })
+        list.push({ agentType: agent.type, modelValue: '', label: agent.display_name, modelLabel: agent.display_name, title: agent.display_name })
       }
     }
 
@@ -97,8 +101,9 @@ export default function AgentModelSelector({
       const agent = agents.find((a) => a.type === selectedAgent)
       const model = (modelsByAgent[selectedAgent] || []).find((m) => m.value === selectedModel)
       const name = agent?.display_name || selectedAgent
-      const label = selectedModel ? `${name} · ${truncateSelectLabel(model?.name || selectedModel, 24)}` : name
-      list.unshift({ agentType: selectedAgent, modelValue: selectedModel, label, title: label })
+      const modelName = selectedModel ? truncateSelectLabel(model?.name || selectedModel, 24) : name
+      const label = selectedModel ? `${name} · ${modelName}` : name
+      list.unshift({ agentType: selectedAgent, modelValue: selectedModel, label, modelLabel: modelName, title: label })
     }
     return list
   }, [agents, modelsByAgent, regexes, selectedAgent, selectedModel])
@@ -116,7 +121,8 @@ export default function AgentModelSelector({
   }, [entries, query])
 
   const selectedEntry = entries.find((e) => e.agentType === selectedAgent && e.modelValue === selectedModel)
-  const triggerLabel = selectedAgent ? (selectedEntry?.label || selectedAgent) : ''
+  // 收起态触发按钮仅显示模型名（展开后列表项才显示完整 agent · 模型）
+  const triggerLabel = selectedAgent ? (selectedEntry?.modelLabel || selectedModel || selectedAgent) : ''
 
   useEffect(() => {
     if (!open) return

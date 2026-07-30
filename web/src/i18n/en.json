@@ -39,6 +39,8 @@
   },
   "prompt": {
     "send": "Send",
+    "queueSend": "Add to send queue; sent automatically when the current task finishes",
+    "queueRemove": "Remove from queue",
     "slashMenuTitle": "Filter commands / skills / modes (↑↓ select, Enter confirm)",
     "slashNoMatch": "No matches",
     "slashKindCommand": "Command",
@@ -50,6 +52,8 @@
     "slashKindTag": "Tag",
     "slashKindTask": "Task-select",
     "slashKindArchive": "Task-Archive",
+    "slashKindRun": "Task-run",
+    "slashKindTaskGroup": "task",
     "mentionMenuTitle": "Choose reference type (↑↓ select, Enter to enter)",
     "categoryLabel": "Type",
     "categoryBack": "Back to types",
@@ -58,6 +62,17 @@
     "categoryFileDesc": "Browse workspace files",
     "categoryNoteDesc": "Select notes by tag",
     "categoryTaskDesc": "{{count}} tasks — message goes straight to the chosen task's session",
+      "taskSelectCommand": "task-select",
+      "taskSelectDesc": "Select a task — message goes straight to its session",
+      "taskArchiveCommand": "task-archive",
+      "taskArchiveDesc": "Archive a task to trash (all supported)",
+      "taskCreateCommand": "task-create",
+      "taskCreateDesc": "Enter task description to create a new task",
+      "taskRunCommand": "task-run",
+      "taskRunDesc": "Select a task and run it (all supported)",
+      "runMenuTitle": "Choose task to run (all supported)",
+      "runAllLabel": "All tasks",
+      "runAllDesc": "Run all {{count}} current pending tasks",
     "categoryArchiveDesc": "{{count}} tasks — archive the chosen task to trash (all supported)",
     "commandMenuTitle": "Choose Command (↑↓ select, Enter confirm)",
     "skillMenuTitle": "Choose Skill (↑↓ select, Enter confirm)",
@@ -225,6 +240,7 @@
     "deleteSuccess": "Session deleted",
     "noSessions": "No sessions",
     "promptPlaceholder": "Type your prompt, / for commands, @ for files. Enter to send, Shift+Enter for new line",
+    "queuePlaceholder": "Task running — messages you send are queued and sent automatically when it finishes",
     "sending": "Sending...",
     "cancelPrompt": "Cancel",
     "resume": "Recover",
@@ -853,7 +869,11 @@
     "tabName": "Agent Terminal",
     "tabHint": "Commands run by the agent are shown here (read-only)",
     "exitCode": "Process exited with code {{code}}",
-    "signal": "Process terminated by signal: {{signal}}"
+    "signal": "Process terminated by signal: {{signal}}",
+    "moveToPanel": "Move to terminal panel",
+    "movedHint": "Terminal output moved to the terminal panel",
+    "collapse": "Collapse",
+    "expand": "Expand"
   },
   "browser": {
     "urlPlaceholder": "Enter URL (https://...)",
@@ -966,6 +986,10 @@
     "taskCmdEmpty": "Type your message after the @task reference",
     "taskCmdBusy": "Task \"{{title}}\" is still processing the previous message",
     "taskArchived": "Task \"{{title}}\" archived — view or restore it in Trash.",
-    "taskArchivedAll": "Archived all {{count}} tasks — view or restore them in Trash."
+    "taskArchivedAll": "Archived all {{count}} tasks — view or restore them in Trash.",
+      "taskCreated": "Created task \"{{title}}\" — visible in the task list.",
+      "untitledTask": "New Task",
+      "taskRunStarted": "Started task \"{{title}}\".",
+      "taskRunStartedAll": "Started all pending tasks."
   }
 }

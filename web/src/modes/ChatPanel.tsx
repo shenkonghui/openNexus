@@ -259,7 +259,8 @@ export default function ChatPanel({
           <p className={styles.classifyHint}>{t('notes.classifyTaskHint')}</p>
         ) : (
           // 统一 composer：输入框 + 配置栏合并为一个圆角卡片（参考 Cursor 输入区）
-          <div className={styles.composer}>
+          // data-composer：供多任务网格模式识别“点击落在输入区”，从而保留已选中的任务焦点
+          <div className={styles.composer} data-composer="true">
             <PromptInput
               onSend={sendOrQueue}
               onCancel={ctx.onCancel}

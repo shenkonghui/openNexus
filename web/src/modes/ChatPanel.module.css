@@ -162,6 +162,59 @@
   flex-shrink: 0;
 }
 
+/* 发送队列：任务运行期间暂存的消息，任务结束后按序自动发送 */
+.sendQueue {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0 16px 6px;
+  padding: 6px 8px;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  background: var(--bg-surface);
+}
+
+.queueItem {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.queueIcon {
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+
+.queueText {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.queueRemove {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 2px;
+  border-radius: 4px;
+  line-height: 1;
+}
+
+.queueRemove:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
 .classifyHint {
   margin: 0;
   padding: 12px 16px;

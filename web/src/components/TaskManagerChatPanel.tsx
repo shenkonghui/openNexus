@@ -11,7 +11,7 @@ import { streamPrompt, isTimeoutError } from '../api/sse'
 import { parsePermissionRequest } from '../utils/permission'
 import { Eraser } from 'lucide-react'
 import type { Agent, Message, Session, AgentCommand, ConfigOption, ConfigOptionValue, SessionMode, AgentSkill, PermissionRequestPayload } from '../types'
-import { archiveTask, type TaskManagerTask } from '../api/taskmanager'
+import { archiveTask, upsertTask, genTaskId, startTaskManager, type TaskManagerTask } from '../api/taskmanager'
 import type { ConvState } from './ConvStatusBar'
 import type { PanelCtx } from '../modes/types'
 import ChatPanel from '../modes/ChatPanel'
@@ -43,6 +43,12 @@ const LEADING_TASK_MENTION_RE = /^\s*(?:@task:[^\s(]+(?:\([^)]*\))?\s*)+/
 
 // @archive-task:<id> 归档引用（@ 菜单「归档任务」分类插入）：id 为 * 表示归档全部任务
 const ARCHIVE_MENTION_RE = /@archive-task:([^\s(]+)(?:\([^)]*\))?/g
+
+// @task-create 标记（/task-create 命令插入）：发送时解析剩余文本作为任务详情直接创建
+const TASK_CREATE_RE = /@task-create\b/
+
+// @run-task:<id> 运行引用（/task-run 命令插入）：id 为 * 表示启动全部待执行任务
+const RUN_MENTION_RE = /@run-task:([^\s(]+)(?:\([^)]*\))?/g
 
 // 生成命令名里的标题注释：去掉空白与括号（避免破坏 \S+ 命令解析），过长截断
 function taskTitleNote(title: string): string {
@@ -106,7 +112,32 @@ export default function TaskManagerChatPanel({
   const [error, setError] = useState('')
 
   // 配置：无会话时用 probeConfigs；有会话时用 configOptions（会话级模型/模式等）
-  const [selectedAgent, setSelectedAgent] = useState(defaultAgentType || agents[0]?.type || '')
+  // 初始值优先级：defaultAgentType > localStorage(上次使用) > agents[0]
+  const LAST_AGENT_KEY = 'opennexus.lastAgent'
+  const [selectedAgent, setSelectedAgent] = useState(
+    defaultAgentType
+    || (() => { try { return localStorage.getItem(LAST_AGENT_KEY) || '' } catch { return '' } })()
+    || agents[0]?.type
+    || '',
+  )
+
+  // agents 异步加载完成后补全 selectedAgent（刷新后 agents 初始为空）
+  useEffect(() => {
+    if (selectedAgent || agents.length === 0) return
+    let saved = ''
+    try { saved = localStorage.getItem(LAST_AGENT_KEY) || '' } catch { /* ignore */ }
+    if (saved && agents.some((a) => a.type === saved)) {
+      setSelectedAgent(saved)
+    } else {
+      setSelectedAgent(agents[0]?.type || '')
+    }
+  }, [agents, selectedAgent])
+
+  // 切换 agent 时持久化
+  const handleSelectAgent = useCallback((val: string) => {
+    setSelectedAgent(val)
+    try { localStorage.setItem(LAST_AGENT_KEY, val) } catch { /* ignore */ }
+  }, [])
   const [selectedModel, setSelectedModel] = useState('')
   const [probeConfigs, setProbeConfigs] = useState<ConfigOption[]>([])
   const [configOptions, setConfigOptions] = useState<ConfigOption[]>([])
@@ -354,7 +385,7 @@ export default function TaskManagerChatPanel({
         setSession(sResp.data)
         setMessages(mResp.data.messages || [])
         setHasMore(!!mResp.data.has_more)
-        setSelectedAgent(sResp.data.agent_type)
+        handleSelectAgent(sResp.data.agent_type)
       } catch { /* 会话可能已删除：忽略，保持空会话，允许重新新建 */ }
       finally {
         clearTimeout(timeoutId)
@@ -532,10 +563,70 @@ export default function TaskManagerChatPanel({
     onTaskChanged()
   }
 
+  // @run-task 启动任务（taskId 为 '*' 表示启动全部待执行任务）
+  async function handleRunTask(taskId: string) {
+    setError('')
+    if (taskId !== '*') {
+      const task = (tasks || []).find((tk) => tk.id === taskId)
+      if (!task) { setError(t('taskmanager.taskCmdNotFound', { id: taskId })); return }
+    }
+    try {
+      await startTaskManager(workspaceId, taskId === '*' ? undefined : taskId)
+      if (taskId === '*') {
+        appendLocalMessage('assistant', 'agent_message_chunk', t('taskmanager.taskRunStartedAll'))
+      } else {
+        const task = (tasks || []).find((tk) => tk.id === taskId)
+        appendLocalMessage('assistant', 'agent_message_chunk', t('taskmanager.taskRunStarted', { title: task?.title || taskId }))
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    }
+    onTaskChanged()
+  }
+
+  // @task-create 直接创建任务：detail 取剩余文本，标题取首行，默认 goal 模式
+  async function handleCreateTaskFromInput(detail: string) {
+    const agentType = (selectedAgent || agents[0]?.type || '').trim()
+    const title = detail.split('\n')[0].slice(0, 40) || t('taskmanager.untitledTask')
+    try {
+      await upsertTask(workspaceId, {
+        id: genTaskId(),
+        title,
+        detail,
+        agent_type: agentType,
+        priority: 'p1',
+        goal_condition: detail,
+      })
+      appendLocalMessage('assistant', 'agent_message_chunk', t('taskmanager.taskCreated', { title }))
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    }
+    onTaskChanged()
+  }
+
   // ===== 发送 =====
   async function handleSend(prompt: string) {
     const text = prompt.trim()
     if (!text) return
+    // @task-create：剔除标记后剩余文本作为任务详情直接创建
+    if (TASK_CREATE_RE.test(text)) {
+      setInputText('')
+      const detail = text.replace(TASK_CREATE_RE, '').trim()
+      if (detail) {
+        appendLocalMessage('user', 'user_message_chunk', text)
+        void handleCreateTaskFromInput(detail)
+      }
+      return
+    }
+    // @run-task 运行引用：逐个启动选中任务（* = 全部待执行），不进入助手会话
+    const runIds = [...text.matchAll(RUN_MENTION_RE)].map((m) => m[1])
+    if (runIds.length > 0) {
+      setInputText('')
+      appendLocalMessage('user', 'user_message_chunk', text)
+      const ids = runIds.includes('*') ? ['*'] : [...new Set(runIds)]
+      for (const id of ids) void handleRunTask(id)
+      return
+    }
     // @archive-task 归档引用：逐个归档选中任务（* = 全部），不进入助手会话
     const archiveIds = [...text.matchAll(ARCHIVE_MENTION_RE)].map((m) => m[1])
     if (archiveIds.length > 0) {
@@ -573,7 +664,7 @@ export default function TaskManagerChatPanel({
         if (latest.data) {
           activeSession = latest.data
           setSession(activeSession)
-          setSelectedAgent(activeSession.agent_type)
+          handleSelectAgent(activeSession.agent_type)
           try {
             const hist = await listMessages(activeSession.id)
             setMessages(hist.data.messages || [])
@@ -699,7 +790,7 @@ export default function TaskManagerChatPanel({
     // 有会话时仍展示全部 agent·模型组合（管理会话可弃，跨 agent 确认后开新会话）
     agentSwitchable: true,
     selectedAgent,
-    onSelectAgent: (val: string) => { setSelectedAgent(val) },
+    onSelectAgent: handleSelectAgent,
     selectedModel,
     probeConfigs,
     // 合并下拉选择回调：

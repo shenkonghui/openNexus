@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, createContext, useContext, type ReactNode, type ComponentProps, type MouseEvent as ReactMouseEvent } from 'react'
-import { Link, useSearchParams } from 'react-router-dom'
+import { Link, useSearchParams, useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { PanelLeftOpen, PanelLeftClose } from 'lucide-react'
 import SessionSidebar from './SessionSidebar'
@@ -9,7 +9,7 @@ import SettingsDialog, { parseSettingsTab } from './SettingsDialog'
 import { getPermissionSettings, updatePermissionSettings } from '../api/permissions'
 import type { PermissionSettings } from '../types'
 import { useFileViewer } from '../context/FileViewerContext'
-import { newTaskUrl } from '../utils/routes'
+import { newTaskUrl, taskManagerUrl } from '../utils/routes'
 import NexusLogoIcon from './NexusLogoIcon'
 import styles from './AppLayout.module.css'
 
@@ -161,6 +161,20 @@ export default function AppLayout({ sidebarProps, children }: AppLayoutProps) {
     document.addEventListener('keydown', handleToggle)
     return () => document.removeEventListener('keydown', handleToggle)
   }, [])
+
+  // Cmd/Ctrl+Shift+L 进入任务助手多任务网格模式（全局快捷键，任意页面可用）
+  const navigate = useNavigate()
+  useEffect(() => {
+    function handleGridShortcut(e: KeyboardEvent) {
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === 'l') {
+        e.preventDefault()
+        try { localStorage.setItem('opennexus.taskmanager.grid', '1') } catch { /* ignore */ }
+        navigate(taskManagerUrl(workspaceId))
+      }
+    }
+    document.addEventListener('keydown', handleGridShortcut)
+    return () => document.removeEventListener('keydown', handleGridShortcut)
+  }, [navigate, workspaceId])
 
   function toggle() { setCollapsed((v) => !v) }
 

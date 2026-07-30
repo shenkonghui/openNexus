@@ -428,10 +428,34 @@ func (s *TaskManagerService) Start(ctx context.Context, cwd string, workspaceID 
 
 	for _, t := range targets {
 		t := t
+		// 已有存活会话的任务：在原会话继续（重发任务详情），复用 SendPrompt，
+		// 保留原 session/worktree 与 goal 进度，而非重置重建（executeTask 会清理重建 worktree + 新建会话）。
+		// 会话已不存在（被删除）则回退到全新执行。
+		if s.taskHasLiveSession(&t) {
+			go func(task models.TaskManagerTask) {
+				if err := s.SendPrompt(context.Background(), run.cwd, task.ID, task.Detail); err != nil {
+					slog.Warn("在原会话继续任务失败", "task", task.ID, "session", task.SessionID, "err", err)
+					s.updateTask(run.cwd, task.ID, func(tk *models.TaskManagerTask) {
+						tk.Status = models.TaskStatusFailed
+						tk.Error = err.Error()
+					})
+				}
+			}(t)
+			continue
+		}
 		run.wg.Add(1)
 		go s.runTask(run, &t, workspaceID, userID)
 	}
 	return nil
+}
+
+// taskHasLiveSession 判断任务是否已有仍存在的会话，可在原会话继续而非重置重建。
+func (s *TaskManagerService) taskHasLiveSession(t *models.TaskManagerTask) bool {
+	if strings.TrimSpace(t.SessionID) == "" || t.DBSessionID == nil {
+		return false
+	}
+	sess, err := s.exec.GetSessionByDBID(*t.DBSessionID)
+	return err == nil && sess != nil
 }
 
 // runTask 执行单个任务：获取槽位 → 创建 worktree → 运行会话 → 更新状态。
@@ -854,10 +878,29 @@ func (s *TaskManagerService) RegisterSessionTask(cwd string, sess *models.Sessio
 				def.Tasks[i].Detail = prompt
 				changed = true
 			}
-			title := strings.TrimSpace(sess.Title)
-			if title != "" && strings.TrimSpace(def.Tasks[i].Title) == "" {
-				def.Tasks[i].Title = title
-				changed = true
+			if strings.TrimSpace(def.Tasks[i].Title) == "" {
+				// 标题回填：优先用会话标题，其次回退到 prompt 首行（与下方新建条目分支一致）。
+				// 创建时以空 prompt 登记的条目（如 worktree 新建对话）title 为空，
+				// 若这里只认 sess.Title 而不回退 firstLine(prompt)，首次发送后仍会无标题。
+				title := strings.TrimSpace(sess.Title)
+				if title == "" {
+					title = firstLine(prompt, 40)
+				}
+				if title != "" {
+					def.Tasks[i].Title = title
+					changed = true
+				}
+			}
+			// worktree 信息回填：创建时若已固定到 worktree 目录，补全 worktree_path/branch，
+			// 使任务列表正确显示 worktree 执行模式而非 local。
+			if strings.TrimSpace(def.Tasks[i].WorktreePath) == "" {
+				if wtPath, branch := sessionWorktree(cwd, sess); wtPath != "" {
+					def.Tasks[i].WorktreePath = wtPath
+					if strings.TrimSpace(def.Tasks[i].Branch) == "" {
+						def.Tasks[i].Branch = branch
+					}
+					changed = true
+				}
 			}
 			if !models.IsTaskRunning(def.Tasks[i].Status) {
 				now := time.Now()
@@ -879,20 +922,34 @@ func (s *TaskManagerService) RegisterSessionTask(cwd string, sess *models.Sessio
 	}
 	now := time.Now()
 	dbID := sess.ID
+	wtPath, branch := sessionWorktree(cwd, sess)
 	task := models.TaskManagerTask{
-		ID:          strconv.FormatUint(uint64(sess.ID), 10),
-		Title:       title,
-		Detail:      prompt,
-		AgentType:   sess.AgentType,
-		ModelValue:  sess.ModelValue,
-		Priority:    models.TaskPriorityP1,
-		Status:      models.TaskStatusRunning,
-		SessionID:   sess.SessionID,
-		DBSessionID: &dbID,
-		StartedAt:   &now,
+		ID:           strconv.FormatUint(uint64(sess.ID), 10),
+		Title:        title,
+		Detail:       prompt,
+		AgentType:    sess.AgentType,
+		ModelValue:   sess.ModelValue,
+		Priority:     models.TaskPriorityP1,
+		Status:       models.TaskStatusRunning,
+		SessionID:    sess.SessionID,
+		DBSessionID:  &dbID,
+		StartedAt:    &now,
+		WorktreePath: wtPath,
+		Branch:       branch,
 	}
 	def.Tasks = append(def.Tasks, task)
 	return store.Save(def)
+}
+
+// sessionWorktree 若会话被固定到不同于工作区 cwd 的目录（用户选择了 worktree/
+// 自定义目录或自动创建的 worktree），返回其路径与检出分支，用于任务列表
+// 标注 worktree 执行模式（否则手动新建的 worktree 任务会误显示为 local）。
+func sessionWorktree(cwd string, sess *models.Session) (wtPath, branch string) {
+	sc := strings.TrimSpace(sess.Cwd)
+	if sc == "" || sc == strings.TrimSpace(cwd) {
+		return "", ""
+	}
+	return sc, acp.CurrentBranch(sc)
 }
 
 // PromptFinished 实现 acp.PromptFinishedNotifier：会话 prompt 流结束时同步 tasks.json

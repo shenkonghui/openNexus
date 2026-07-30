@@ -491,6 +491,14 @@ func (r *Router) HasActivePrompt(sessionID string) bool {
 	return r.service.HasActivePrompt(sessionID)
 }
 
+// GoalActive 判断会话是否有生效中的 goal（评估中或等待续轮）。
+func (r *Router) GoalActive(sessionID string) bool {
+	if r.service == nil {
+		return false
+	}
+	return r.service.GoalActive(sessionID)
+}
+
 // EnableGoal 为会话自动开启 goal 模式（编排任务重发/续跑时恢复 goal）。
 func (r *Router) EnableGoal(sessionID, condition string) error {
 	if r.service == nil {

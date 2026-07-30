@@ -109,6 +109,39 @@ func (s *Service) linkToolCallTerminal(dbSessionID uint, tu *acp.SessionToolCall
 	}
 }
 
+// hasTerminalContent 判断 tool_call_update 是否内嵌 terminal 锚点 content（每个终端仅下发一次）。
+func hasTerminalContent(tu *acp.SessionToolCallUpdate) bool {
+	if tu == nil {
+		return false
+	}
+	for _, c := range tu.Content {
+		if c.Terminal != nil && c.Terminal.TerminalId != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// keepTerminalAnchorRaw 在按 toolCallId 覆盖去重时保留旧 raw_json 中含 terminal 锚点的行：
+// 锚点 update 每个终端仅出现一次，直接覆盖会让历史回放丢失内嵌终端。
+// 返回 NDJSON（锚点行在前），前端合并逻辑本就支持多行 raw_json。
+func keepTerminalAnchorRaw(prevRaw, newRaw string) string {
+	const anchorMark = `"type":"terminal"`
+	if prevRaw == "" || strings.Contains(newRaw, anchorMark) {
+		return newRaw
+	}
+	var anchors []string
+	for _, line := range strings.Split(prevRaw, "\n") {
+		if strings.Contains(line, anchorMark) {
+			anchors = append(anchors, line)
+		}
+	}
+	if len(anchors) == 0 {
+		return newRaw
+	}
+	return strings.Join(append(anchors, newRaw), "\n")
+}
+
 // handleTerminalExitRecord 是 TerminalBridge 退出回调：按 terminal_id 回填退出码；
 // 无关联记录（agent 未内嵌 terminal content 或落库时序竞争）时兜底创建独立 shell 记录，
 // 保证委托终端执行的命令始终留有 命令/目录/退出码。

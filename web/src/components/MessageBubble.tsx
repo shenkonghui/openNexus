@@ -5,6 +5,7 @@ import { parseDiffsFromMessage, shortPath } from '../utils/diff'
 import { restoreToCheckpoint } from '../api/filesystem'
 import DiffView from './DiffView'
 import MarkdownContent from './MarkdownContent'
+import InlineAgentTerminal from './InlineAgentTerminal'
 import { ChevronDown, ChevronRight, MoreHorizontal } from 'lucide-react'
 import styles from './MessageBubble.module.css'
 
@@ -122,6 +123,29 @@ export function toolOutputFromRaw(rawJSON: string): string {
   return parts.join('\n').trim()
 }
 
+// 提取 tool_call 关联的 ACP 终端 ID（content 中的 {type:'terminal', terminalId} 项），
+// 用于在对话输出位置内嵌实时终端窗口。raw_json 兼容多行 NDJSON。
+export function terminalIdsFromRaw(rawJSON: string): string[] {
+  if (!rawJSON) return []
+  const ids: string[] = []
+  for (const part of rawJSON.split('\n')) {
+    const line = part.trim()
+    if (!line) continue
+    try {
+      const raw = JSON.parse(line) as Record<string, any>
+      if (!Array.isArray(raw.content)) continue
+      for (const item of raw.content) {
+        if (item?.type === 'terminal' && typeof item.terminalId === 'string' && item.terminalId && !ids.includes(item.terminalId)) {
+          ids.push(item.terminalId)
+        }
+      }
+    } catch {
+      /* 跳过无法解析的行 */
+    }
+  }
+  return ids
+}
+
 /** 工具调用展示文案：有具体命令时优先显示命令，避免只显示 "Bash"；
  *  Write/Read 等文件工具补充目标路径，避免只显示裸工具名 */
 export function toolLabel(msg: Message): string {
@@ -169,6 +193,12 @@ function MessageBubble({ message, defaultOpen = false, forceCollapsed = false, s
   // 工具输出文本（rawOutput / content 文本块），展开时显示
   const toolOutput = useMemo(
     () => (message.role === 'tool' ? toolOutputFromRaw(message.raw_json) : ''),
+    [message],
+  )
+
+  // 该 tool_call 关联的 ACP 终端：在气泡输出位置内嵌实时终端窗口
+  const terminalIds = useMemo(
+    () => (message.role === 'tool' ? terminalIdsFromRaw(message.raw_json) : []),
     [message],
   )
 
@@ -270,6 +300,10 @@ function MessageBubble({ message, defaultOpen = false, forceCollapsed = false, s
             )}
           </div>
         )}
+        {/* 内嵌终端窗口渲染在折叠体之外：运行中即使气泡折叠也可见 */}
+        {terminalIds.map((tid) => (
+          <InlineAgentTerminal key={tid} terminalId={tid} bubbleOpen={!collapsible || open} />
+        ))}
         {!collapsible || open ? (
           <>
             {isUser ? (

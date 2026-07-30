@@ -2,6 +2,7 @@ package acp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -260,6 +261,14 @@ func (s *Service) syntheticCommandReply(session *models.Session, prompt, reply s
 		out <- m
 	}
 	close(out)
+	// 本地合成回复（/shell、/goal status|clear 等）不发给 agent、不走正常 prompt
+	// 生命周期，因此永远不会触发下方的 PromptFinished 收尾。但发送前 handler 已把
+	// 会话登记任务置为 running（RegisterSessionTask），若不在此收尾，已完成任务发
+	// 这类命令后会永远卡在“执行中”。这里立即以 done 通知任务管理，让运行态回落到
+	// 真实终态（goal 生效中的任务由任务侧 goalActive 判定继续保持 running）。
+	if s.promptFinished != nil {
+		s.promptFinished.PromptFinished(session.ID, models.RunningTaskStatusDone)
+	}
 	return out
 }
 
@@ -481,7 +490,29 @@ func (s *Service) evaluateAndContinueGoal(sessionID string, g *sessionGoal) bool
 	s.recordGoalEvent(session, recTitle, models.ToolCallStatusCompleted)
 	slog.Info("goal 未达成，自动续轮", "session", sessionID, "turn", g.Turns, "reason", reason)
 
-	ch, err := s.PromptWithExecution(context.Background(), sessionID, contPrompt, nil)
+	// 续轮 prompt：若会话繁忙（前端发送队列等并发场景），间隔重试而非直接终止。
+	// 前端有 goal_active 检查 + 后端 HasActivePrompt 互斥，理论上极少触发；
+	// 此重试是安全网，防止极端时序下 goal 被意外终止。
+	var ch <-chan models.Message
+	for retry := 0; retry < 5; retry++ {
+		// 重试前确认 goal 未被用户清除
+		s.goalMu.Lock()
+		if _, ok := s.goals[sessionID]; !ok {
+			s.goalMu.Unlock()
+			return false
+		}
+		s.goalMu.Unlock()
+
+		ch, err = s.PromptWithExecution(context.Background(), sessionID, contPrompt, nil)
+		if err == nil {
+			break
+		}
+		if !errors.Is(err, ErrSessionBusy) {
+			break
+		}
+		slog.Info("goal 续轮时会话繁忙，等待后重试", "session", sessionID, "retry", retry+1)
+		time.Sleep(3 * time.Second)
+	}
 	if err != nil {
 		s.clearGoal(sessionID)
 		s.recordGoalEvent(session, fmt.Sprintf("goal 自动续轮失败：%v，已审计 %d 次", err, g.EvalCount), models.ToolCallStatusFailed)
