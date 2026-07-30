@@ -25,8 +25,6 @@ let backendCrashed = false
 let currentPort = null // 当前后端监听端口，重载时复用以保持前端 baseURL 不变
 const LOG_TAG = '[opennexus-electron]'
 
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
-
 // 探测一个空闲端口传给后端(SERVER_PORT 环境变量,后端 config.go 已支持)。
 function pickFreePort() {
   return new Promise((resolve, reject) => {
@@ -136,6 +134,27 @@ function waitReady(port, timeoutMs = 30000) {
   })
 }
 
+// 轮询直到端口不再可连接（旧后端已释放）。比固定 sleep 更快也更可靠：
+// 连接被拒即认为端口已释放；超时兜底后也返回，让重启流程继续尝试。
+function waitPortReleased(port, timeoutMs = 8000) {
+  const deadline = Date.now() + timeoutMs
+  return new Promise((resolve) => {
+    const tick = () => {
+      const sock = net.connect(port, '127.0.0.1')
+      sock.once('connect', () => {
+        sock.destroy()
+        if (Date.now() > deadline) return resolve() // 超时兜底
+        setTimeout(tick, 200)
+      })
+      sock.once('error', () => {
+        sock.destroy()
+        resolve() // 连接被拒 = 端口已释放
+      })
+    }
+    tick()
+  })
+}
+
 // 同步杀死后端进程树。Windows 下 SIGTERM 无效,需用 taskkill。
 function killBackend() {
   if (!backend || backend.killed) return
@@ -183,6 +202,12 @@ async function bootstrap() {
     return fatal(`${e.message}\n\n日志: ${path.join(dataDir, 'launcher.log')}`)
   }
 
+  await createMainWindow(port)
+}
+
+// createMainWindow 创建主窗口并加载后端页面。抽成独立函数：macOS 下窗口被
+// 关闭后由 activate 事件复用 currentPort 重建，无需重启后端。
+async function createMainWindow(port) {
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 800,
@@ -234,8 +259,8 @@ ipcMain.handle('reload-backend', async () => {
   }
   try {
     killBackend()
-    // killBackend 有 3s SIGKILL 兜底，等待端口彻底释放后再重新 spawn
-    await sleep(3500)
+    // killBackend 有 3s SIGKILL 兜底；轮询等旧进程退出、端口释放后再重新 spawn。
+    await waitPortReleased(currentPort)
     backendCrashed = false // 重置崩溃标记，允许 waitReady 重新轮询
     startBackend(currentPort)
     await waitReady(currentPort)
@@ -249,18 +274,8 @@ ipcMain.handle('reload-backend', async () => {
 })
 
 // ---- 生命周期 ----
-app.whenReady().then(bootstrap).catch((e) => fatal(e && e.message ? e.message : String(e)))
-
-app.on('window-all-closed', () => {
-  // 非单实例场景直接退出;macOS 由用户从 Dock 退出
-  killBackend()
-  if (process.platform !== 'darwin') app.quit()
-})
-
-app.on('before-quit', () => killBackend())
-app.on('will-quit', () => killBackend())
-
-// 防止多实例导致后端冲突(可选,提升体验)
+// 先抢单实例锁：第二个实例直接退出，避免它抢先探测端口 / 拉起第二个后端。
+// 必须在 whenReady().then(bootstrap) 之前完成，否则第二实例可能已开始 bootstrap。
 const gotLock = app.requestSingleInstanceLock()
 if (!gotLock) {
   app.quit()
@@ -271,4 +286,27 @@ if (!gotLock) {
       mainWindow.focus()
     }
   })
+  app.whenReady().then(bootstrap).catch((e) => fatal(e && e.message ? e.message : String(e)))
 }
+
+app.on('window-all-closed', () => {
+  // macOS：保留后端存活，点 Dock 由 activate 复用现有后端重建窗口（符合平台习惯）；
+  // 其他平台：关窗即退出，will-quit 会回收后端。
+  if (process.platform !== 'darwin') app.quit()
+})
+
+app.on('activate', () => {
+  // macOS 点 Dock 图标：已有窗口则聚焦；无窗口时若后端仍存活就复用
+  // currentPort 重建窗口，否则后端已退出，整体重新 bootstrap。
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.focus()
+    return
+  }
+  const restart = (backend && currentPort)
+    ? createMainWindow(currentPort)
+    : bootstrap()
+  restart.catch((e) => fatal(e && e.message ? e.message : String(e)))
+})
+
+app.on('before-quit', () => killBackend())
+app.on('will-quit', () => killBackend())

@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- Electron/V8 需要 JIT 与可写可执行内存 -->
+  <key>com.apple.security.cs.allow-jit</key>
+  <true/>
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+  <true/>
+  <!-- 允许通过环境变量传参（main.cjs 用 SERVER_PORT/WEB_DIST 拉起 Go 后端） -->
+  <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+  <true/>
+  <!-- 内置的 Go 后端二进制作为资源随包分发，放宽库校验以允许其加载 -->
+  <key>com.apple.security.cs.disable-library-validation</key>
+  <true/>
+  <!-- 子进程（Go 后端）继承沙箱/授权 -->
+  <key>com.apple.security.inherit</key>
+  <true/>
+  <!-- 本地 HTTP 服务端 + 客户端访问 -->
+  <key>com.apple.security.network.client</key>
+  <true/>
+  <key>com.apple.security.network.server</key>
+  <true/>
+</dict>
+</plist>

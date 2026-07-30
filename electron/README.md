@@ -79,3 +79,32 @@ npm run dist     # 打包到 electron/dist/
 ```
 
 打包前需确保根目录已 `make build`(产出 `opennexus` 二进制与 `web/dist`)。
+
+> 注意：`extraResources` 会把根目录当前的 `opennexus` 二进制原样打进包，因此本地手动打包只能产出**与当前机器同架构/同系统**的应用。跨平台/跨架构分发请走下方 CI。
+
+## 平台覆盖与代码签名
+
+### CI 产物（`.github/workflows/release.yml` 的 `electron` job）
+
+每个目标在对应系统的 runner 上**各自编译匹配架构的 Go 后端**再打包，因此不会打错架构二进制：
+
+| 目标 | Runner | 后端构建 | 产物 |
+|------|--------|---------|------|
+| macos-arm64 | macos-latest | `darwin/arm64` CGO 原生 | `.dmg` |
+| macos-x64 | macos-latest | `darwin/amd64` CGO 交叉编译 | `.dmg` |
+| linux-x64 | ubuntu-latest | `linux/amd64` CGO 原生 | `.AppImage` |
+| windows-x64 | windows-latest | `windows/amd64` 纯 Go SQLite | `.exe` |
+
+### macOS 签名与公证（可选，需配置 Secrets）
+
+默认**不签名/不公证**，产出的 `.dmg` 首次打开需在「系统设置 → 隐私与安全性」放行。配置以下 GitHub Secrets 后自动启用签名 + 公证（缺任一项即静默跳过对应步骤，构建仍成功）：
+
+| Secret | 用途 |
+|--------|------|
+| `MAC_CSC_LINK` | base64 的 `.p12` 证书 |
+| `MAC_CSC_KEY_PASSWORD` | 证书密码 |
+| `APPLE_ID` | Apple 开发者账号邮箱 |
+| `APPLE_APP_SPECIFIC_PASSWORD` | App 专用密码 |
+| `APPLE_TEAM_ID` | 团队 ID |
+
+签名相关配置：硬化运行时（`hardenedRuntime`）+ `entitlements.mac.plist` 授权（JIT、环境变量、库校验放宽以允许加载内置 Go 后端），公证由 `notarize.cjs`（`afterSign` 钩子，依赖 `@electron/notarize`）在检测到上述 Apple 环境变量时执行。

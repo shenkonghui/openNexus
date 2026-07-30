@@ -131,6 +131,16 @@ jobs:
         include:
           - target: macos-arm64
             runner: macos-latest
+            goarch: arm64
+            ebArch: arm64
+          - target: macos-x64
+            runner: macos-latest
+            goarch: amd64
+            ebArch: x64
+          - target: linux-x64
+            runner: ubuntu-latest
+            goarch: amd64
+            ebArch: x64
           - target: windows-x64
             runner: windows-latest
 
@@ -164,11 +174,19 @@ jobs:
           npm ci
           npm run build
 
-      # Go 后端：macOS 用 CGO+真 SQLite；Windows 用纯 Go SQLite（无 gcc 依赖）
+      # Go 后端：macOS 用 CGO+真 SQLite（arm64 原生 / amd64 交叉编译）；
+      # Linux 原生 CGO SQLite；Windows 用纯 Go SQLite（无 gcc 依赖）
       - name: Build Backend (macOS)
-        if: matrix.target == 'macos-arm64'
+        if: startsWith(matrix.target, 'macos-')
         run: |
-          GOOS=darwin GOARCH=arm64 CGO_ENABLED=1 go build \
+          GOOS=darwin GOARCH=${{ matrix.goarch }} CGO_ENABLED=1 go build \
+            -ldflags="-s -w -X main.version=${{ github.ref_name }}" \
+            -o opennexus ./cmd/server
+
+      - name: Build Backend (Linux)
+        if: matrix.target == 'linux-x64'
+        run: |
+          GOOS=linux GOARCH=amd64 CGO_ENABLED=1 go build \
             -ldflags="-s -w -X main.version=${{ github.ref_name }}" \
             -o opennexus ./cmd/server
 
@@ -193,11 +211,25 @@ jobs:
           cat electron/package.json
 
       - name: Install & Build (macOS)
-        if: matrix.target == 'macos-arm64'
+        if: startsWith(matrix.target, 'macos-')
+        working-directory: electron
+        env:
+          # 均为可选：未配置 secrets 时为空，electron-builder 跳过签名、notarize.cjs 跳过公证
+          CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          npm install --no-audit --no-fund
+          npx electron-builder --mac --${{ matrix.ebArch }}
+
+      - name: Install & Build (Linux)
+        if: matrix.target == 'linux-x64'
         working-directory: electron
         run: |
           npm install --no-audit --no-fund
-          npx electron-builder --mac --arm64
+          npx electron-builder --linux --x64
 
       - name: Install & Build (Windows)
         if: matrix.target == 'windows-x64'
@@ -214,6 +246,7 @@ jobs:
           path: |
             electron/dist/*.dmg
             electron/dist/*.exe
+            electron/dist/*.AppImage
             electron/dist/*.yml
           if-no-files-found: error
 
@@ -312,5 +345,6 @@ jobs:
             artifacts/**/*.zip
             artifacts/**/*.dmg
             artifacts/**/*.exe
+            artifacts/**/*.AppImage
           draft: false
           prerelease: false
