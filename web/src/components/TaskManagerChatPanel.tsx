@@ -28,6 +28,8 @@ interface Props {
   restoreSessionId?: number
   /** 当前任务列表：用于 @task:<id> 引用把消息直发到对应任务会话 */
   tasks?: TaskManagerTask[]
+  /** 多任务模式下鼠标焦点所在的任务：变化时自动把输入框的 @task 引用切到该任务 */
+  focusTaskId?: string | null
   /** Agent 改动 tasks.json 后触发（通常刷新编排页任务列表） */
   onTaskChanged: () => void
 }
@@ -35,6 +37,9 @@ interface Props {
 // @task:<id> 任务引用（输入框 @ 菜单选任务插入）：可出现在消息任意位置，
 // 发送时剔除引用标记、将剩余内容直发到该任务会话；多个引用则逐个直发。
 const TASK_MENTION_RE = /@task:([^\s(]+)(?:\([^)]*\))?/g
+
+// 输入框开头的 @task 引用（含连续多个）：鼠标焦点切换任务窗口时仅替换这部分，保留用户正文
+const LEADING_TASK_MENTION_RE = /^\s*(?:@task:[^\s(]+(?:\([^)]*\))?\s*)+/
 
 // @archive-task:<id> 归档引用（@ 菜单「归档任务」分类插入）：id 为 * 表示归档全部任务
 const ARCHIVE_MENTION_RE = /@archive-task:([^\s(]+)(?:\([^)]*\))?/g
@@ -85,13 +90,15 @@ function buildSystemPrelude(): string {
  * 直接复用任务页的 ChatPanel（含配置栏/状态条/权限弹窗），构造最小 PanelCtx。
  */
 export default function TaskManagerChatPanel({
-  agents, workspaceId, cwd, defaultAgentType, restoreSessionId, tasks, onTaskChanged,
+  agents, workspaceId, cwd, defaultAgentType, restoreSessionId, tasks, focusTaskId, onTaskChanged,
 }: Props) {
   const { t } = useTranslation()
 
   // 会话与消息
   const [session, setSession] = useState<Session | null>(null)
   const [messages, setMessages] = useState<Message[]>([])
+  // 输入框受控值：多任务模式点击任务窗口时自动注入/切换 @task 引用
+  const [inputText, setInputText] = useState('')
   // 历史消息分页：hasMore 表示还有更早的消息可加载
   const [hasMore, setHasMore] = useState(false)
   const [loadingMore, setLoadingMore] = useState(false)
@@ -415,6 +422,8 @@ export default function TaskManagerChatPanel({
 
   // @task 引用候选：列出全部任务（含未启动），desc 附状态便于辨认；
   // 直发到未启动（无会话）的任务时由 handleSendToTask 报错提示。
+  // @task 引用候选：列出全部任务（含未启动），desc 附状态便于辨认；
+  // 直发到未启动（无会话）的任务时由 handleSendToTask 报错提示。
   const taskMentions = useMemo(
     () => (tasks || []).map((tk) => ({
       id: tk.id,
@@ -423,6 +432,28 @@ export default function TaskManagerChatPanel({
     })),
     [tasks, t],
   )
+
+  // 多任务模式焦点联动：
+  // - focusTaskId 有值（点击了任务窗口）：把输入框开头的 @task 引用切到该任务
+  // - focusTaskId 从有值变 null（点击了助手区域）：移除开头 @task 引用，恢复与助手对话
+  // 保留用户已输入的正文。任务列表通过 ref 读取，避免轮询刷新 tasks 时重复注入。
+  const tasksRef = useRef(tasks)
+  tasksRef.current = tasks
+  const prevFocusRef = useRef<string | null | undefined>(undefined)
+  useEffect(() => {
+    const hadFocus = !!prevFocusRef.current
+    prevFocusRef.current = focusTaskId
+    if (focusTaskId) {
+      const task = (tasksRef.current || []).find((tk) => tk.id === focusTaskId)
+      if (!task) return
+      const note = taskTitleNote(task.title)
+      const mention = `@task:${task.id}${note ? `(${note})` : ''} `
+      setInputText((prev) => mention + prev.replace(LEADING_TASK_MENTION_RE, ''))
+    } else if (hadFocus) {
+      // 从任务窗口焦点切回助手：移除开头 @task 引用
+      setInputText((prev) => prev.replace(LEADING_TASK_MENTION_RE, ''))
+    }
+  }, [focusTaskId])
 
   // 追加一条仅本地展示的消息（负 id、sequence=0，不入库，刷新后消失）
   function appendLocalMessage(role: 'user' | 'assistant', kind: string, content: string) {
@@ -508,6 +539,7 @@ export default function TaskManagerChatPanel({
     // @archive-task 归档引用：逐个归档选中任务（* = 全部），不进入助手会话
     const archiveIds = [...text.matchAll(ARCHIVE_MENTION_RE)].map((m) => m[1])
     if (archiveIds.length > 0) {
+      setInputText('')
       appendLocalMessage('user', 'user_message_chunk', text)
       const ids = archiveIds.includes('*') ? ['*'] : [...new Set(archiveIds)]
       for (const id of ids) void handleArchiveTask(id)
@@ -516,12 +548,15 @@ export default function TaskManagerChatPanel({
     // @task 引用：剔除引用标记后把剩余内容直发到引用的任务会话（多个引用则逐个直发）
     const mentionIds = [...text.matchAll(TASK_MENTION_RE)].map((m) => m[1])
     if (mentionIds.length > 0) {
+      setInputText('')
       const body = text.replace(TASK_MENTION_RE, '').trim()
       for (const id of new Set(mentionIds)) void handleSendToTask(id, body)
       return
     }
     if (conv !== 'idle' || !selectedAgent) return
     setError('')
+    // 受控输入框：真正进入发送后才清空（PromptInput 受控模式不自行清空）
+    setInputText('')
 
     // 首条消息：保证“一个工作区只有一个任务助手管理会话”。
     // 先通过 /sessions/latest 查询该 workspace 是否已有会话：
@@ -626,6 +661,9 @@ export default function TaskManagerChatPanel({
     sending: conv !== 'idle',
     onSend: handleSend,
     onCancel: handleCancel,
+    // 输入框受控：支持多任务模式鼠标焦点自动注入 @task 引用
+    restoreInput: inputText,
+    onRestoreInputChange: setInputText,
     commands,
     // @ 菜单「任务」分类：选中任务插入 @task 引用，发送时直发到该任务会话
     taskMentions,

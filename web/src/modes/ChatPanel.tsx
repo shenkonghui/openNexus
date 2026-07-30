@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import MessageList from '../components/MessageList'
 import PromptInput from '../components/PromptInput'
@@ -10,7 +10,8 @@ import AgentModelSelector from '../components/AgentModelSelector'
 import SessionModeSelector from '../components/SessionModeSelector'
 import ContextStats from '../components/ContextStats'
 import WorktreePicker, { AUTO_WORKTREE } from '../components/WorktreePicker'
-import { BookOpenText, Code2, FolderGit2, Sparkles } from 'lucide-react'
+import { AgentTerminalsProvider } from '../context/AgentTerminalsContext'
+import { BookOpenText, Code2, FolderGit2, ListPlus, Sparkles, X } from 'lucide-react'
 import type { PanelCtx, ConfigBarKind } from './types'
 import styles from './ChatPanel.module.css'
 
@@ -52,8 +53,38 @@ export default function ChatPanel({
   // 新建任务页的工作目录选择器弹窗开关
   const [showDirPicker, setShowDirPicker] = useState(false)
 
+  // ===== 发送队列：任务运行中提交的消息先入队，回到 idle 后按序自动续发 =====
+  // 仅已有会话时启用（新建任务页发送后会导航重建面板，队列会丢失）
+  const queueEnabled = ctx.session != null
+  const [queue, setQueue] = useState<string[]>([])
+  const onSendRef = useRef(ctx.onSend)
+  onSendRef.current = ctx.onSend
+
+  const sendOrQueue = (prompt: string) => {
+    if (queueEnabled && conv !== 'idle') {
+      setQueue((q) => [...q, prompt])
+      // 受控输入框入队后也需清空（PromptInput 仅在非受控模式自行清空）
+      if (ctx.restoreInput !== undefined) ctx.onRestoreInputChange?.('')
+    } else {
+      ctx.onSend(prompt)
+    }
+  }
+
+  // 当前轮结束（含取消/出错）后自动发送队首；onSend 同步把 conv 推到 connecting，
+  // 下一条等待再次 idle，天然逐条串行。
+  // backendBusy（后端有活跃 prompt 或生效中的 goal）时挂起队列，
+  // 直到 backendBusy 变 false（goal 达成/终止或 prompt 结束）才续发。
+  const backendBusy = ctx.backendBusy ?? false
+  useEffect(() => {
+    if (conv !== 'idle' || queue.length === 0) return
+    if (backendBusy) return
+    const [next, ...rest] = queue
+    setQueue(rest)
+    onSendRef.current(next)
+  }, [conv, queue, backendBusy])
+
   const placeholder = conv !== 'idle'
-    ? t(`session.conv_${conv}`)
+    ? (queueEnabled ? t('session.queuePlaceholder') : t(`session.conv_${conv}`))
     : placeholderKey
       ? t(placeholderKey)
       : t('session.promptPlaceholder')
@@ -158,6 +189,7 @@ export default function ChatPanel({
   })() : null
 
   return (
+    <AgentTerminalsProvider sessionId={ctx.sessionId ?? undefined}>
     <div className={styles.chat}>
       {showDirPicker && ctx.onSelectCwd && (
         <WorktreePicker
@@ -194,6 +226,25 @@ export default function ChatPanel({
       )}
 
       <div className={styles.bottomArea}>
+        {/* 发送队列：排队中的消息可单条移除，任务结束后按序自动发送 */}
+        {queue.length > 0 && (
+          <div className={styles.sendQueue}>
+            {queue.map((item, i) => (
+              <div key={`${i}-${item.slice(0, 24)}`} className={styles.queueItem}>
+                <ListPlus size={12} className={styles.queueIcon} />
+                <span className={styles.queueText} title={item}>{item}</span>
+                <button
+                  type="button"
+                  className={styles.queueRemove}
+                  onClick={() => setQueue((q) => q.filter((_, idx) => idx !== i))}
+                  title={t('prompt.queueRemove')}
+                >
+                  <X size={12} />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
         <ConvStatusBar state={conv} reconnect={ctx.reconnect}>
           {ctx.pendingPermission && (
             <PermissionDialog
@@ -210,9 +261,10 @@ export default function ChatPanel({
           // 统一 composer：输入框 + 配置栏合并为一个圆角卡片（参考 Cursor 输入区）
           <div className={styles.composer}>
             <PromptInput
-              onSend={ctx.onSend}
+              onSend={sendOrQueue}
               onCancel={ctx.onCancel}
               sending={conv !== 'idle'}
+              queueEnabled={queueEnabled}
               value={ctx.restoreInput}
               onValueChange={ctx.onRestoreInputChange}
               commands={ctx.commands}
@@ -228,5 +280,6 @@ export default function ChatPanel({
         )}
       </div>
     </div>
+    </AgentTerminalsProvider>
   )
 }

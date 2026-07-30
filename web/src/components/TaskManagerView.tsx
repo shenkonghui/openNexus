@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import {
@@ -51,6 +51,8 @@ export default function TaskManagerView({ workspaceId, cwd, agents, restoreSessi
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set())
   // 「多任务模式」网格视图：所有任务窗口平铺，实时展示各自会话输出
   const [gridMode, setGridMode] = useState(() => localStorage.getItem('opennexus.taskmanager.grid') === '1')
+  // 多任务模式下鼠标焦点所在的任务窗口：助手输入框的 @task 引用自动切到该任务
+  const [focusedTaskId, setFocusedTaskId] = useState<string | null>(null)
   // git 仓库状态：null=未知/加载中；true=是仓库；false=需初始化
   const [gitRepo, setGitRepo] = useState<boolean | null>(null)
   const [gitInitializing, setGitInitializing] = useState(false)
@@ -310,13 +312,25 @@ export default function TaskManagerView({ workspaceId, cwd, agents, restoreSessi
   }
 
   // 切换「多任务模式」网格视图并持久化（刷新后保持所选视图）
-  function toggleGridMode() {
+  const toggleGridMode = useCallback(() => {
     setGridMode((v) => {
       const next = !v
       try { localStorage.setItem('opennexus.taskmanager.grid', next ? '1' : '0') } catch { /* ignore */ }
       return next
     })
-  }
+  }, [])
+
+  // 全局快捷键 Cmd/Ctrl+Shift+L 切换多任务网格视图
+  useEffect(() => {
+    function handleKey(e: KeyboardEvent) {
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === 'l') {
+        e.preventDefault()
+        toggleGridMode()
+      }
+    }
+    document.addEventListener('keydown', handleKey)
+    return () => document.removeEventListener('keydown', handleKey)
+  }, [toggleGridMode])
 
   if (loading) return <LoadingSpinner />
 
@@ -364,7 +378,7 @@ export default function TaskManagerView({ workspaceId, cwd, agents, restoreSessi
                 type="button"
                 className={styles.toolbarBtn}
                 onClick={toggleGridMode}
-                title={t('taskmanager.collapseGrid')}
+                title={t('taskmanager.collapseGrid') + ' (⌘⇧L)'}
               >
                 <List size={14} /> {t('taskmanager.collapseGrid')}
               </button>
@@ -376,13 +390,19 @@ export default function TaskManagerView({ workspaceId, cwd, agents, restoreSessi
             ) : (
               <div className={styles.grid}>
                 {def.tasks.map((task) => (
-                  <TaskLiveWindow key={task.id} task={task} onOpen={openTask} />
+                  <TaskLiveWindow
+                    key={task.id}
+                    task={task}
+                    onOpen={openTask}
+                    focused={task.id === focusedTaskId}
+                    onFocus={(tk) => setFocusedTaskId(tk.id)}
+                  />
                 ))}
               </div>
             )}
           </div>
         </div>
-        <div className={styles.gridChatCol}>
+        <div className={styles.gridChatCol} onMouseDown={() => setFocusedTaskId(null)}>
           {!workspaceId ? (
             <div className={styles.empty}>{t('taskmanager.empty')}</div>
           ) : (
@@ -393,6 +413,7 @@ export default function TaskManagerView({ workspaceId, cwd, agents, restoreSessi
                 cwd={cwd}
                 restoreSessionId={restoreSessionId}
                 tasks={def.tasks}
+                focusTaskId={focusedTaskId}
                 onTaskChanged={reloadStatus}
               />
             </div>
@@ -439,7 +460,7 @@ export default function TaskManagerView({ workspaceId, cwd, agents, restoreSessi
                   className={styles.toolbarBtn}
                   onClick={toggleGridMode}
                   disabled={busy}
-                  title={t('taskmanager.expandAllHint')}
+                  title={t('taskmanager.expandAllHint') + ' (⌘⇧L)'}
                 >
                   <LayoutGrid size={14} /> {t('taskmanager.expandAll')}
                 </button>

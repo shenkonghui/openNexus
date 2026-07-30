@@ -846,14 +846,28 @@ func (s *TaskManagerService) RegisterSessionTask(cwd string, sess *models.Sessio
 	}
 	for i := range def.Tasks {
 		if existing := def.Tasks[i].DBSessionID; existing != nil && *existing == sess.ID {
-			// 已登记：不新增条目，但本次又发起了新 prompt，非运行态时刷新回 running
-			//（编排器/SendPrompt 自管的运行中任务不动），结束后由 PromptFinished 收尾。
+			// 已登记：不新增条目，但补充缺失字段并刷新运行态。
+			// 创建时登记的条目可能 detail/title 为空（req.Prompt 缺省），
+			// 首次发送 prompt 时回填。
+			changed := false
+			if prompt != "" && strings.TrimSpace(def.Tasks[i].Detail) == "" {
+				def.Tasks[i].Detail = prompt
+				changed = true
+			}
+			title := strings.TrimSpace(sess.Title)
+			if title != "" && strings.TrimSpace(def.Tasks[i].Title) == "" {
+				def.Tasks[i].Title = title
+				changed = true
+			}
 			if !models.IsTaskRunning(def.Tasks[i].Status) {
 				now := time.Now()
 				def.Tasks[i].Status = models.TaskStatusRunning
 				def.Tasks[i].StartedAt = &now
 				def.Tasks[i].FinishedAt = nil
 				def.Tasks[i].Error = ""
+				changed = true
+			}
+			if changed {
 				return store.Save(def)
 			}
 			return nil

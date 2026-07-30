@@ -5,6 +5,7 @@ import { subscribeStream } from '../api/sse'
 import type { Message } from '../types'
 import type { TaskManagerTask } from '../api/taskmanager'
 import MessageList from './MessageList'
+import { AgentTerminalsProvider } from '../context/AgentTerminalsContext'
 import { GitBranch, ExternalLink, Target } from 'lucide-react'
 import styles from './TaskLiveWindow.module.css'
 
@@ -19,6 +20,10 @@ interface Props {
   task: TaskManagerTask
   /** 点击标题/打开按钮：跳转任务会话页（未运行任务由父组件决定行为） */
   onOpen: (task: TaskManagerTask) => void
+  /** 鼠标焦点是否落在本窗口（高亮边框，输入框 @task 引用已指向本任务） */
+  focused?: boolean
+  /** 鼠标按下窗口任意位置时上报焦点：父组件据此把助手输入框的 @task 引用切到本任务 */
+  onFocus?: (task: TaskManagerTask) => void
 }
 
 /**
@@ -27,7 +32,7 @@ interface Props {
  * 流结束（无活跃 prompt）后延时重订阅，保证任意来源（编排器启动、/task 直发、
  * 会话页操作）触发的新输出都能实时出现，无需用户手动刷新。
  */
-export default function TaskLiveWindow({ task, onOpen }: Props) {
+export default function TaskLiveWindow({ task, onOpen, focused, onFocus }: Props) {
   const { t } = useTranslation()
   const [messages, setMessages] = useState<Message[]>([])
   const [loaded, setLoaded] = useState(false)
@@ -121,7 +126,10 @@ export default function TaskLiveWindow({ task, onOpen }: Props) {
   const isActive = ACTIVE_STATUSES.has(task.status)
 
   return (
-    <div className={styles.window}>
+    <div
+      className={`${styles.window} ${focused ? styles.windowFocused : ''}`}
+      onMouseDown={() => onFocus?.(task)}
+    >
       <div className={styles.header}>
         <span
           className={styles.title}
@@ -178,12 +186,15 @@ export default function TaskLiveWindow({ task, onOpen }: Props) {
         ) : messages.length === 0 ? (
           <div className={styles.placeholder}>{t('taskmanager.liveEmpty')}</div>
         ) : (
-          <MessageList
-            messages={messages}
-            loading={isActive}
-            sessionId={task.db_session_id}
-            cwd={task.worktree_path}
-          />
+          // 包裹终端 provider：多任务窗口中也能在输出位置查看实时终端（纯展示，无收起/移动按钮）
+          <AgentTerminalsProvider sessionId={task.db_session_id} plain>
+            <MessageList
+              messages={messages}
+              loading={isActive}
+              sessionId={task.db_session_id}
+              cwd={task.worktree_path}
+            />
+          </AgentTerminalsProvider>
         )}
       </div>
     </div>

@@ -1,6 +1,6 @@
 import { useState, useMemo, useRef, useEffect, useCallback, type FormEvent, type KeyboardEvent, type DragEvent } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Send, Square } from 'lucide-react'
+import { Send, Square, ListPlus } from 'lucide-react'
 import type { AgentCommand, SessionMode, AgentSkill, Note } from '../types'
 import { listFiles, type FileEntry, uploadFilesToWorkspace } from '../api/filesystem'
 import { listNotes, listNoteTags } from '../api/notes'
@@ -11,6 +11,8 @@ interface PromptInputProps {
   onCancel?: () => void
   disabled?: boolean
   sending?: boolean
+  // 发送队列：sending 期间不锁输入框，提交由调用方（ChatPanel）入队，任务结束后自动续发
+  queueEnabled?: boolean
   placeholder?: string
   embedded?: boolean
   value?: string
@@ -59,6 +61,8 @@ interface ItemRow {
   isDir?: boolean
   filePath?: string
   navigate?: NavigateAction
+  /** agent 类型命令：排序时优先于普通命令 */
+  isAgent?: boolean
 }
 
 type MenuRow = CategoryRow | ItemRow
@@ -106,7 +110,8 @@ function buildSlashItems(
 
   for (const cmd of commands) {
     const path = cmd.path || cmd.name
-    const kindLabel = cmd.kind === 'agent' ? t('prompt.slashKindAgent') : t('prompt.slashKindCommand')
+    const isAgent = cmd.kind === 'agent'
+    const kindLabel = isAgent ? t('prompt.slashKindAgent') : t('prompt.slashKindCommand')
     if (!matchesQuery([cmd.name, path, cmd.description, kindLabel], query)) continue
     items.push({
       kind: 'item',
@@ -116,6 +121,7 @@ function buildSlashItems(
       desc: cmd.description,
       insertText: `/${cmd.name} `,
       kindLabel,
+      isAgent,
     })
   }
 
@@ -148,6 +154,9 @@ function buildSlashItems(
   }
 
   items.sort((a, b) => {
+    // agent 命令优先于一切
+    const agentDiff = Number(b.isAgent ?? false) - Number(a.isAgent ?? false)
+    if (agentDiff !== 0) return agentDiff
     const kindOrder = { command: 0, skill: 1, mode: 2, file: 3, note: 4, tag: 5, task: 6, archive: 7 }
     const ka = kindOrder[a.type] - kindOrder[b.type]
     if (ka !== 0) return ka
@@ -161,6 +170,7 @@ export default function PromptInput({
   onCancel,
   disabled = false,
   sending = false,
+  queueEnabled = false,
   placeholder = '输入 prompt...',
   embedded = false,
   value: controlledValue,
@@ -173,6 +183,8 @@ export default function PromptInput({
   workspaceId,
   tasks,
 }: PromptInputProps) {
+  // 队列模式下 sending 不锁定输入：用户可继续输入并提交入队
+  const locked = sending && !queueEnabled
   const { t } = useTranslation()
   const [internalText, setInternalText] = useState('')
   const isControlled = controlledValue !== undefined
@@ -607,14 +619,14 @@ export default function PromptInput({
 
   // 拖拽进入/经过:必须 preventDefault 才能触发 drop,且可阻止 Electron 默认把文件当导航跳走。
   function handleDragOver(e: DragEvent<HTMLDivElement>) {
-    if (disabled || sending || uploading) return
+    if (disabled || locked || uploading) return
     if (!e.dataTransfer?.types?.includes('Files')) return
     e.preventDefault()
     e.dataTransfer.dropEffect = 'copy'
   }
 
   function handleDragEnter(e: DragEvent<HTMLDivElement>) {
-    if (disabled || sending || uploading) return
+    if (disabled || locked || uploading) return
     if (!e.dataTransfer?.types?.includes('Files')) return
     e.preventDefault()
     dragDepthRef.current += 1
@@ -622,14 +634,14 @@ export default function PromptInput({
   }
 
   function handleDragLeave() {
-    if (disabled || sending || uploading) return
+    if (disabled || locked || uploading) return
     // 用计数法判断是否真正离开 container(避免子元素 enter/leave 抖动)
     dragDepthRef.current = Math.max(0, dragDepthRef.current - 1)
     if (dragDepthRef.current === 0) setDragOver(false)
   }
 
   async function handleDrop(e: DragEvent<HTMLDivElement>) {
-    if (disabled || sending || uploading) return
+    if (disabled || locked || uploading) return
     const files = e.dataTransfer?.files
     if (!files || files.length === 0) return
     e.preventDefault()
@@ -669,7 +681,7 @@ export default function PromptInput({
   function handleSubmit(e: FormEvent) {
     e.preventDefault()
     const trimmed = text.trim()
-    if (!trimmed || disabled || sending) return
+    if (!trimmed || disabled || locked) return
     onSend(trimmed)
     if (!isControlled) {
       setInternalText('')
@@ -764,7 +776,7 @@ export default function PromptInput({
             onSelect={handleSelect}
             onClick={handleSelect}
             placeholder={placeholder}
-            disabled={disabled || sending}
+            disabled={disabled || locked}
             rows={rows}
           />
           {showMenu && (
@@ -800,15 +812,28 @@ export default function PromptInput({
           )}
         </div>
         {!embedded && (sending && onCancel ? (
-          <button
-            className={styles.cancelBtn}
-            type="button"
-            onClick={onCancel}
-            title={t('session.cancelPrompt')}
-            aria-label={t('session.cancelPrompt')}
-          >
-            <Square size={18} fill="currentColor" strokeWidth={0} />
-          </button>
+          <>
+            {queueEnabled && (
+              <button
+                className={styles.sendBtn}
+                type="submit"
+                disabled={disabled || !text.trim()}
+                title={t('prompt.queueSend')}
+                aria-label={t('prompt.queueSend')}
+              >
+                <ListPlus size={18} />
+              </button>
+            )}
+            <button
+              className={styles.cancelBtn}
+              type="button"
+              onClick={onCancel}
+              title={t('session.cancelPrompt')}
+              aria-label={t('session.cancelPrompt')}
+            >
+              <Square size={18} fill="currentColor" strokeWidth={0} />
+            </button>
+          </>
         ) : (
           <button
             className={styles.sendBtn}

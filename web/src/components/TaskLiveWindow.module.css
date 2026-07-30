@@ -11,6 +11,12 @@
   overflow: hidden;
 }
 
+/* 鼠标焦点窗口：高亮边框提示输入框 @task 引用已指向该任务 */
+.windowFocused {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
 /* ===== 头部：任务名 + 分支 + 状态 + 打开会话 ===== */
 .header {
   display: flex;

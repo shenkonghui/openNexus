@@ -69,6 +69,8 @@ type SessionStore interface {
 	SubscribeSession(sessionID string, lastSeq int) ([]models.Message, <-chan models.Message, error)
 	// HasActivePrompt 判断会话是否有进行中的 prompt。
 	HasActivePrompt(sessionID string) bool
+	// GoalActive 判断会话是否有生效中的 goal（评估中或等待续轮）。
+	GoalActive(sessionID string) bool
 	// ConnectionStatusForSession 返回会话所属 ACP 连接的状态与重连倒计时（毫秒）。
 	ConnectionStatusForSession(sessionID string) (state string, retryInMs int64, attempt int)
 	// ListInterruptedTasks 返回指定会话下因服务重启而中断的任务。
@@ -171,6 +173,8 @@ func writeSessionError(c *gin.Context, err error) {
 	switch {
 	case errors.Is(err, agent.ErrAgentNotFound):
 		Fail(c, http.StatusBadRequest, "AGENT_NOT_FOUND", "未知的 agent 类型")
+	case errors.Is(err, acplocal.ErrSessionBusy):
+		Fail(c, http.StatusConflict, "SESSION_BUSY", err.Error())
 	default:
 		Fail(c, http.StatusInternalServerError, "INTERNAL", err.Error())
 	}
@@ -299,6 +303,9 @@ func (h *SessionHandler) Create(c *gin.Context) {
 			sess = updated
 		}
 	}
+	// 创建后立即登记到 tasks.json（不等首次 prompt），保证所有创建路径（手动新建、
+	// 自动 worktree、auto_worktree）都出现在任务列表中。首次 prompt 时回填 detail。
+	h.registerToTasks(c, sess, req.Prompt)
 	Success(c, http.StatusCreated, sess)
 }
 
@@ -412,9 +419,11 @@ func (h *SessionHandler) Connection(c *gin.Context) {
 	}
 	state, retryInMs, attempt := h.store.ConnectionStatusForSession(sess.SessionID)
 	Success(c, http.StatusOK, gin.H{
-		"state":            state,
-		"next_retry_in_ms": retryInMs,
-		"attempt":          attempt,
+		"state":             state,
+		"next_retry_in_ms":  retryInMs,
+		"attempt":           attempt,
+		"has_active_prompt": h.store.HasActivePrompt(sess.SessionID),
+		"goal_active":       h.store.GoalActive(sess.SessionID),
 	})
 }
 
