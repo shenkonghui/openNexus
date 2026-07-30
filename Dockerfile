@@ -20,9 +20,12 @@ WORKDIR /app
 
 # golang:1.25（Debian bookworm）已内置 gcc 等编译工具链，无需额外安装 musl-dev
 
-# 复制 vendor 目录，使用本地依赖
-COPY go.mod go.sum vendor/ ./
-ENV GOFLAGS=-mod=vendor
+# 先复制依赖清单并下载模块（module 模式，vendor/ 已 gitignore 不入库，
+# 因此不能 COPY vendor/ / 不能依赖 -mod=vendor，否则干净检出构建会失败）。
+# 使用国内 goproxy 加速（与 base 镜像/npm 镜像一致）。
+ENV GOPROXY=https://goproxy.cn,direct
+COPY go.mod go.sum ./
+RUN go mod download
 
 # 复制源码并编译（CGO_ENABLED=1 以支持 SQLite）
 COPY . .

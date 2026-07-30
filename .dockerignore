@@ -1,3 +1,7 @@
 # 运行时数据目录：数据库、会话、ACP 二进制缓存、调试目录等，
 # 不应打入镜像（容器内走默认 ~/.openNexus，宿主机通过挂载卷持久化）。
 data/
+
+# 本地 go mod vendor 产物：镜像内走 module 模式（go mod download），
+# 若 COPY . . 带入本地 vendor/ 会让 go 自动切回 vendor 模式，破坏一致性。
+vendor/
