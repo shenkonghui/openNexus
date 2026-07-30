@@ -2,6 +2,8 @@ name: Release
 
 on:
   push:
+    branches:
+      - main
     tags:
       - 'v*'
 
@@ -172,8 +174,13 @@ jobs:
       - name: Set app version
         shell: bash
         run: |
-          TAG="${{ github.ref_name }}"
-          VERSION="${TAG#v}"
+          # tag 推送：用 tag 去掉 v 前缀作为正式版本；main 等分支推送：
+          # 回退为 0.0.0-dev.<short-sha>（合法 semver 预发版），避免 electron-builder 报错。
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          else
+            VERSION="0.0.0-dev.${GITHUB_SHA::7}"
+          fi
           node -e "const fs=require('fs');const p=require('./electron/package.json');p.version='$VERSION';fs.writeFileSync('./electron/package.json',JSON.stringify(p,null,2))"
           cat electron/package.json
 
@@ -254,13 +261,16 @@ jobs:
           context: .
           file: ./Dockerfile
           platforms: linux/amd64
-          push: true
+          # 仅 tag 推送时推送镜像；main 分支仅构建验证不发布
+          push: ${{ startsWith(github.ref, 'refs/tags/') }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
 
   release:
     name: Create Release
     needs: [build, electron]
+    # 仅 tag 推送才创建正式 Release；main 分支推送只跑构建验证
+    if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     steps:
       - name: Download Artifacts
