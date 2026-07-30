@@ -8,7 +8,7 @@ export function createWorkspace(name: string, cwd: string, directories?: string[
   })
 }
 
-export function listWorkspaces(): Promise<{ data: { workspaces: (Workspace & { session_count: number })[] } }> {
+export function listWorkspaces(): Promise<{ data: { workspaces: (Workspace & { task_count: number })[] } }> {
   return apiFetch('/workspaces')
 }
 

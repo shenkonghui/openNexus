@@ -43,8 +43,8 @@
   --info-bg: rgba(96, 165, 250, 0.15);
 
   /* 消息气泡 */
-  --bubble-user-bg: #f3ce49;
-  --bubble-user-text: #1a1a1a;
+  --bubble-user-bg: var(--bg-hover);
+  --bubble-user-text: var(--text-secondary);
   --bubble-assistant-bg: #1f2228;
   --bubble-assistant-text: #c4cbda;
   --bubble-assistant-border: #3c3c4a;
@@ -108,8 +108,8 @@
   --info: #2563eb;
   --info-bg: rgba(37, 99, 235, 0.12);
 
-  --bubble-user-bg: #d4a718;
-  --bubble-user-text: #ffffff;
+  --bubble-user-bg: var(--bg-hover);
+  --bubble-user-text: var(--text-secondary);
   --bubble-assistant-bg: #ffffff;
   --bubble-assistant-text: #1a1d23;
   --bubble-assistant-border: #e0e0e6;

@@ -5,7 +5,7 @@ import type { Workspace, Session } from '../types'
 export const WORKSPACE_STORAGE_KEY = 'opennexus.current.workspace'
 
 export function resolveWorkspaceId(
-  workspaces: (Workspace & { session_count?: number })[],
+  workspaces: (Workspace & { task_count?: number })[],
   stored: string | null,
 ): number {
   if (stored) {
@@ -17,7 +17,7 @@ export function resolveWorkspaceId(
 }
 
 export function useCurrentWorkspace(enabled = true) {
-  const [workspaces, setWorkspaces] = useState<(Workspace & { session_count?: number })[]>([])
+  const [workspaces, setWorkspaces] = useState<(Workspace & { task_count?: number })[]>([])
   const [workspaceId, setWorkspaceIdState] = useState(0)
   const [sessions, setSessions] = useState<Session[]>([])
   // sessions 当前归属的 workspace id。切换工作区时新会话为异步加载，

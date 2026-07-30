@@ -11,7 +11,7 @@ import { getAgentPrefs, patchAgentPrefs } from '../api/agentPrefs'
 import { WORKSPACE_STORAGE_KEY, useCurrentWorkspace } from '../hooks/useCurrentWorkspace'
 import { applyPrefsToConfigs, configsFromProbe, takeLegacyLocalAgentPrefs } from '../utils/agentPrefs'
 import { streamPrompt, subscribeStream, streamResumeTask, isTimeoutError, isSessionInactiveError } from '../api/sse'
-import { tasksUrl, newTaskUrl, sessionUrl, isNewTaskPath, isTaskManagerPath } from '../utils/routes'
+import { tasksUrl, newTaskUrl, sessionUrl, taskManagerUrl, isNewTaskPath, isTaskManagerPath } from '../utils/routes'
 import type { Session, Message, AgentCommand, ConfigOption, ConfigOptionValue, SessionMode, AgentSkill, Execution, Agent, PermissionRequestPayload, RunningTask, AgentPrefs } from '../types'
 import { parsePermissionRequest } from '../utils/permission'
 import AppLayout, { SidebarToggleButton } from '../components/AppLayout'
@@ -422,13 +422,9 @@ export default function ChatPage() {
   function handleWorkspaceChange(id: number) {
     // 切换工作区时重置自定义工作目录，回退到新工作区的默认 cwd。
     setTaskCwd('')
-    if (hasSession) {
-      localStorage.setItem(WORKSPACE_STORAGE_KEY, String(id))
-      navigate(tasksUrl(id))
-      return
-    }
-    // 无会话模式：同步更新 URL，使刷新/书签/后退按钮都能定位到正确工作区
-    navigate(isCreateMode ? newTaskUrl(id) : tasksUrl(id))
+    localStorage.setItem(WORKSPACE_STORAGE_KEY, String(id))
+    // 切换工作区默认进入任务助手页面
+    navigate(taskManagerUrl(id))
   }
 
   function handleWorkspaceRefresh() {

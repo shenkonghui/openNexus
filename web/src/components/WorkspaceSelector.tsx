@@ -1,10 +1,130 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { listWorkspaces, createWorkspace, deleteWorkspace, updateWorkspace, saveWorkspace } from '../api/workspaces'
+import { getTaskManager, startTaskManager, type TaskManagerTask } from '../api/taskmanager'
 import type { Workspace } from '../types'
 import CreateWorkspaceDialog from './CreateWorkspaceDialog'
-import { ChevronUp, ChevronDown, Folder, Building2, Clock, Plus, MoreHorizontal } from 'lucide-react'
+import { ChevronUp, ChevronDown, Folder, Building2, Clock, Plus, MoreHorizontal, Play, Loader2, CheckSquare, Square } from 'lucide-react'
 import styles from './WorkspaceSelector.module.css'
+
+// 可启动的任务状态（排阶 running 与 queued）
+const RUNNABLE_STATUS = new Set(['pending', 'done', 'failed', 'canceled', 'interrupt'])
+
+function TaskRunDialog({ workspaceId, workspaceName, onClose }: {
+  workspaceId: number; workspaceName: string; onClose: () => void
+}) {
+  const { t } = useTranslation()
+  const [tasks, setTasks] = useState<TaskManagerTask[]>([])
+  const [loading, setLoading] = useState(true)
+  const [running, setRunning] = useState(false)
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [error, setError] = useState('')
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    setError('')
+    try {
+      const resp = await getTaskManager(workspaceId)
+      setTasks(resp.data.tasks || [])
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setLoading(false)
+    }
+  }, [workspaceId])
+
+  useEffect(() => { load() }, [load])
+
+  const runnable = tasks.filter((t) => RUNNABLE_STATUS.has(t.status))
+
+  function toggle(id: string) {
+    setSelected((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  function toggleAll() {
+    if (selected.size === runnable.length) {
+      setSelected(new Set())
+    } else {
+      setSelected(new Set(runnable.map((t) => t.id)))
+    }
+  }
+
+  async function handleRun(taskIds?: string[]) {
+    setRunning(true)
+    setError('')
+    try {
+      const ids = taskIds || [...selected]
+      for (const id of ids) {
+        await startTaskManager(workspaceId, id)
+      }
+      onClose()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setRunning(false)
+    }
+  }
+
+  const allChecked = runnable.length > 0 && selected.size === runnable.length
+
+  return (
+    <div className={styles.overlay} onClick={onClose}>
+      <div className={styles.dialog} onClick={(e) => e.stopPropagation()}>
+        <div className={styles.dialogHeader}>
+          <span className={styles.dialogTitle}>{t('workspace.taskRun')} · {workspaceName}</span>
+          <button type="button" className={styles.dialogClose} onClick={onClose}>×</button>
+        </div>
+        {loading ? (
+          <div className={styles.dialogBody}><Loader2 size={20} className={styles.spin} /></div>
+        ) : tasks.length === 0 ? (
+          <div className={styles.dialogBody}><p className={styles.dialogEmpty}>{t('workspace.taskRunEmpty')}</p></div>
+        ) : (
+          <>
+            <div className={styles.dialogList}>
+              {tasks.map((task) => {
+    const canRun = RUNNABLE_STATUS.has(task.status)
+    const checked = selected.has(task.id)
+    return (
+                  <div key={task.id}
+    className={`${styles.taskRow} ${!canRun ? styles.taskRowDisabled : ''}`}
+    onClick={() => canRun && toggle(task.id)}
+  >
+                    <span className={styles.taskCheck}>
+                      {canRun ? (checked ? <CheckSquare size={15} /> : <Square size={15} />) : null}
+                    </span>
+                    <span className={styles.taskTitle}>{task.title}</span>
+                    <span className={`${styles.taskStatusBadge} ${styles[`status_${task.status}`] || ''}`}>
+                      {t(`taskmanager.status_${task.status}`)}
+                    </span>
+                  </div>
+                )
+              })}
+            </div>
+            <div className={styles.dialogFooter}>
+              <button type="button" className={styles.dialogBtn} onClick={toggleAll}
+    disabled={runnable.length === 0}>
+                {allChecked ? t('workspace.taskRunDeselectAll') : t('workspace.taskRunSelectAll')}
+              </button>
+              <div className={styles.dialogActions}>
+                {error && <span className={styles.dialogError}>{error}</span>}
+                <button type="button" className={styles.dialogBtnPrimary} onClick={() => handleRun()}
+    disabled={running || selected.size === 0}>
+                  {running ? <Loader2 size={14} className={styles.spin} /> : <Play size={14} />}
+                  {t('workspace.taskRunSelected', { count: selected.size })}
+                </button>
+              </div>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
 
 interface Props {
   value: number
@@ -21,10 +141,11 @@ interface Props {
 
 export default function WorkspaceSelector({ value, onChange, onRefresh, onError, variant = 'header', menuUp }: Props) {
   const { t } = useTranslation()
-  const [workspaces, setWorkspaces] = useState<(Workspace & { session_count?: number })[]>([])
+  const [workspaces, setWorkspaces] = useState<(Workspace & { task_count?: number })[]>([])
   const [open, setOpen] = useState(false)
   const [showCreate, setShowCreate] = useState(false)
   const [editTarget, setEditTarget] = useState<Workspace | null>(null)
+  const [taskRunTarget, setTaskRunTarget] = useState<Workspace | null>(null)
   const [contextMenu, setContextMenu] = useState<{ id: number; x: number; y: number } | null>(null)
   const [renaming, setRenaming] = useState<number | null>(null)
   const [renameValue, setRenameValue] = useState('')
@@ -159,7 +280,7 @@ export default function WorkspaceSelector({ value, onChange, onRefresh, onError,
               {ws.directories && ws.directories.length > 0 && (
                 <span className={styles.itemBadge} title={`${ws.directories.length} 个附加目录`}>+{ws.directories.length}</span>
               )}
-              {ws.session_count !== undefined && <span className={styles.itemCount}>{ws.session_count}</span>}
+              {ws.task_count !== undefined && ws.task_count > 0 && <span className={styles.itemCount}>{ws.task_count}</span>}
               <button type="button" className={styles.menuBtn}
                 onClick={(e) => { e.stopPropagation(); setContextMenu({ id: ws.id, x: e.clientX, y: e.clientY }) }}
               ><MoreHorizontal size={14} /></button>
@@ -183,6 +304,11 @@ export default function WorkspaceSelector({ value, onChange, onRefresh, onError,
             if (ws) { setRenaming(ws.id); setRenameValue(ws.name) }
             setContextMenu(null)
           }}>{t('workspace.rename')}</div>
+          <div className={styles.menuItem} onClick={() => {
+            const ws = workspaces.find((w) => w.id === contextMenu.id)
+            if (ws) { setTaskRunTarget(ws) }
+            setContextMenu(null)
+          }}>{t('workspace.taskRun')}</div>
           <div className={styles.menuItem} onClick={() => {
             const ws = workspaces.find((w) => w.id === contextMenu.id)
             if (ws) { setEditTarget(ws) }
@@ -213,6 +339,14 @@ export default function WorkspaceSelector({ value, onChange, onRefresh, onError,
           initialName={editTarget.name}
           initialCwd={editTarget.cwd}
           initialDirectories={editTarget.directories || []}
+        />
+      )}
+
+      {taskRunTarget && (
+        <TaskRunDialog
+          workspaceId={taskRunTarget.id}
+          workspaceName={taskRunTarget.name}
+          onClose={() => { setTaskRunTarget(null); loadWorkspaces() }}
         />
       )}
     </div>

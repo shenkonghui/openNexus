@@ -10,7 +10,7 @@
 }
 
 .containerUser {
-  justify-content: flex-end;
+  justify-content: flex-start;
 }
 
 /* OpenHands 风格：用户消息右对齐气泡，agent 消息全宽透明背景 */
@@ -21,11 +21,14 @@
   position: relative;
 }
 
+/* 用户消息：左对齐，灰色低调样式，整行背景 */
 .userBubble {
   background: var(--bubble-user-bg);
   color: var(--bubble-user-text);
-  max-width: 70%;
+  width: 100%;
+  max-width: 100%;
   padding: 5px 12px;
+  border-radius: 12px;
 }
 
 .assistantBubble {

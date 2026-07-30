@@ -11,7 +11,7 @@ import { streamPrompt, isTimeoutError } from '../api/sse'
 import { parsePermissionRequest } from '../utils/permission'
 import { Eraser } from 'lucide-react'
 import type { Agent, Message, Session, AgentCommand, ConfigOption, ConfigOptionValue, SessionMode, AgentSkill, PermissionRequestPayload } from '../types'
-import { upsertTask, deleteTask, archiveTask, startTaskManager, genTaskId, type TaskManagerTask } from '../api/taskmanager'
+import { archiveTask, type TaskManagerTask } from '../api/taskmanager'
 import type { ConvState } from './ConvStatusBar'
 import type { PanelCtx } from '../modes/types'
 import ChatPanel from '../modes/ChatPanel'
@@ -26,15 +26,11 @@ interface Props {
   /** 指定需恢复的编排管理会话 DB 主键（从侧边栏点击编排记录进入时传入）；
    *  缺省时回退到 tasks.json 登记的 parent_session_id。 */
   restoreSessionId?: number
-  /** 当前任务列表：用于 /task:<id> 命令把消息直发到对应任务会话 */
+  /** 当前任务列表：用于 @task:<id> 引用把消息直发到对应任务会话 */
   tasks?: TaskManagerTask[]
   /** Agent 改动 tasks.json 后触发（通常刷新编排页任务列表） */
   onTaskChanged: () => void
 }
-
-// /task:<id> 直发命令：跳过任务助手会话，把内容直接发送到对应任务的已有会话。
-// id 后可跟「(标题)」注释（菜单插入时自动带上，便于辨认目标任务），解析时忽略。
-const TASK_CMD_RE = /^\/task:([^\s(]+)(?:\([^)]*\))?\s*([\s\S]*)$/
 
 // @task:<id> 任务引用（输入框 @ 菜单选任务插入）：可出现在消息任意位置，
 // 发送时剔除引用标记、将剩余内容直发到该任务会话；多个引用则逐个直发。
@@ -42,12 +38,6 @@ const TASK_MENTION_RE = /@task:([^\s(]+)(?:\([^)]*\))?/g
 
 // @archive-task:<id> 归档引用（@ 菜单「归档任务」分类插入）：id 为 * 表示归档全部任务
 const ARCHIVE_MENTION_RE = /@archive-task:([^\s(]+)(?:\([^)]*\))?/g
-
-// /create-task 直建命令：内容即任务 prompt，默认开启 goal 循环 + worktree 隔离
-const CREATE_TASK_CMD_RE = /^\/create-task(?:\s+([\s\S]*))?$/
-
-// /del-task:<id> 直删命令：id 后同样可跟「(标题)」注释，命令后多余文本忽略
-const DEL_TASK_CMD_RE = /^\/del-task:([^\s(]+)(?:\([^)]*\))?\s*[\s\S]*$/
 
 // 生成命令名里的标题注释：去掉空白与括号（避免破坏 \S+ 命令解析），过长截断
 function taskTitleNote(title: string): string {
@@ -423,39 +413,6 @@ export default function TaskManagerChatPanel({
     await discardSession()
   }
 
-  // ===== /task 直发：把消息发送到指定任务的已有会话（不经过助手会话） =====
-  // 注入到输入框斜杠菜单的合成命令：/create-task 直建任务、/task:<id> 直发消息、
-  // /del-task:<id> 直删任务。输入 /task 或标题关键字即可筛选。
-  // kind=agent：与 /goal、/yolo-* 等内置命令一致展示为 AGENT 标签（客户端拦截处理，非 agent 原生 command）。
-  const taskCommands = useMemo<AgentCommand[]>(() => {
-    const cmds: AgentCommand[] = [{
-      name: 'create-task',
-      description: t('taskmanager.createTaskCmd'),
-      has_input: true,
-      kind: 'agent',
-    }]
-    for (const tk of tasks || []) {
-      const note = taskTitleNote(tk.title)
-      const suffix = note ? `(${note})` : ''
-      // 命令名带标题注释，插入输入框后可直接辨认目标任务，如 /task:a1b2(修复登录)
-      if (tk.db_session_id) {
-        cmds.push({
-          name: `task:${tk.id}${suffix}`,
-          description: t('taskmanager.sendToTask', { title: tk.title }),
-          has_input: true,
-          kind: 'agent',
-        })
-      }
-      cmds.push({
-        name: `del-task:${tk.id}${suffix}`,
-        description: t('taskmanager.delTaskCmd', { title: tk.title }),
-        has_input: false,
-        kind: 'agent',
-      })
-    }
-    return cmds
-  }, [tasks, t])
-
   // @task 引用候选：列出全部任务（含未启动），desc 附状态便于辨认；
   // 直发到未启动（无会话）的任务时由 handleSendToTask 报错提示。
   const taskMentions = useMemo(
@@ -522,47 +479,6 @@ export default function TaskManagerChatPanel({
     )
   }
 
-  // /create-task 直建任务：goal_condition 使任务启动即自动开启 goal 循环（完成条件即任务内容），
-  // 创建后立即启动——启动时后端自动创建 worktree（AI 命名分支）隔离执行。
-  async function handleCreateTask(content: string) {
-    setError('')
-    if (!content) { setError(t('taskmanager.createTaskEmpty')); return }
-    const title = content.split('\n')[0].slice(0, 40)
-    const agentType = (selectedAgent || agents[0]?.type || '').trim()
-    const id = genTaskId()
-    appendLocalMessage('user', 'user_message_chunk', `/create-task ${content}`)
-    try {
-      await upsertTask(workspaceId, {
-        id, title,
-        detail: content,
-        goal_condition: content,
-        agent_type: agentType,
-        model_value: selectedModel || undefined,
-      })
-      await startTaskManager(workspaceId, id)
-      appendLocalMessage('assistant', 'agent_message_chunk', t('taskmanager.taskCreated', { title }))
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
-    }
-    onTaskChanged()
-  }
-
-  // /del-task 直删任务：后端连带取消运行、清理 worktree 与关联会话
-  async function handleDeleteTask(taskId: string) {
-    setError('')
-    const task = (tasks || []).find((tk) => tk.id === taskId)
-    if (!task) { setError(t('taskmanager.taskCmdNotFound', { id: taskId })); return }
-    const note = taskTitleNote(task.title)
-    appendLocalMessage('user', 'user_message_chunk', `/del-task:${task.id}${note ? `(${note})` : ''}`)
-    try {
-      await deleteTask(workspaceId, taskId)
-      appendLocalMessage('assistant', 'agent_message_chunk', t('taskmanager.taskDeleted', { title: task.title }))
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
-    }
-    onTaskChanged()
-  }
-
   // @archive-task 归档任务到回收站（taskId 为 '*' 表示全部），可在回收站恢复
   async function handleArchiveTask(taskId: string) {
     setError('')
@@ -589,12 +505,6 @@ export default function TaskManagerChatPanel({
   async function handleSend(prompt: string) {
     const text = prompt.trim()
     if (!text) return
-    // 任务直操命令：不依赖助手会话与 agent 选择，也不受 conv 状态限制
-    const taskMatch = text.match(TASK_CMD_RE)
-    if (taskMatch) {
-      void handleSendToTask(taskMatch[1], taskMatch[2].trim())
-      return
-    }
     // @archive-task 归档引用：逐个归档选中任务（* = 全部），不进入助手会话
     const archiveIds = [...text.matchAll(ARCHIVE_MENTION_RE)].map((m) => m[1])
     if (archiveIds.length > 0) {
@@ -608,16 +518,6 @@ export default function TaskManagerChatPanel({
     if (mentionIds.length > 0) {
       const body = text.replace(TASK_MENTION_RE, '').trim()
       for (const id of new Set(mentionIds)) void handleSendToTask(id, body)
-      return
-    }
-    const createMatch = text.match(CREATE_TASK_CMD_RE)
-    if (createMatch) {
-      void handleCreateTask((createMatch[1] || '').trim())
-      return
-    }
-    const delMatch = text.match(DEL_TASK_CMD_RE)
-    if (delMatch) {
-      void handleDeleteTask(delMatch[1])
       return
     }
     if (conv !== 'idle' || !selectedAgent) return
@@ -726,8 +626,7 @@ export default function TaskManagerChatPanel({
     sending: conv !== 'idle',
     onSend: handleSend,
     onCancel: handleCancel,
-    // 合并 /task 直发命令与 agent 自身的 slash commands（菜单内按名称排序展示）
-    commands: [...taskCommands, ...commands],
+    commands,
     // @ 菜单「任务」分类：选中任务插入 @task 引用，发送时直发到该任务会话
     taskMentions,
     modes,

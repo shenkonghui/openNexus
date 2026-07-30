@@ -129,7 +129,7 @@ export interface Workspace {
   directories: string[];
   mode: 'persistent' | 'temporary';
   temp_dir?: string;
-  session_count?: number;
+  task_count?: number;
   created_at: string;
   updated_at: string;
 }

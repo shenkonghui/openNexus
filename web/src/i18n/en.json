@@ -695,7 +695,12 @@
     "deleteConfirm": "Are you sure you want to delete this workspace? All sessions in it will be deleted too. This action cannot be undone.",
     "rename": "Rename",
     "default": "Default Workspace",
-    "empty": "No workspaces"
+    "empty": "No workspaces",
+    "taskRun": "Run Tasks",
+    "taskRunEmpty": "No tasks in this workspace",
+    "taskRunSelectAll": "Select All",
+    "taskRunDeselectAll": "Deselect All",
+    "taskRunSelected": "Run {{count}} task(s)"
   },
   "notes": {
     "title": "Notes",
@@ -912,7 +917,7 @@
     "maxParallelHint": "Default concurrency: max number of tasks running at once (1 = serial)",
     "aiTitle": "Task Assistant",
     "aiPlaceholder": "Describe your need, e.g.: add a task to refactor the login module; set concurrency to 5",
-    "aiHint": "Describe your needs in natural language; the agent manages tasks via task tools (create/update/delete/start/stop/set concurrency). /create-task creates a task instantly (goal + worktree by default), /task or @task picks a task and sends the message to its session, /del-task deletes a task",
+    "aiHint": "Describe your needs in natural language; the agent manages tasks via task tools (create/update/delete/start/stop/set concurrency). @task picks a task and sends the message to its session",
     "clear": "Clear",
     "clearHint": "Clear the current conversation and start a new session",
     "clearConfirm": "Clear the current conversation and start a new session? The old session will be deleted.",
@@ -955,17 +960,11 @@
     "expandAllHint": "Tile all task windows and watch each task's live output",
     "collapseGrid": "Exit Multi-task",
     "liveEmpty": "No output yet",
-    "sendToTask": "Send to task: {{title}}",
     "taskPromptSent": "Sent to task \"{{title}}\". Watch live output in its window or session page.",
     "taskCmdNotFound": "Task {{id}} not found",
     "taskCmdNoSession": "Task \"{{title}}\" has not run yet, no session to send to",
-    "taskCmdEmpty": "Type your message after /task:<task-id>",
+    "taskCmdEmpty": "Type your message after the @task reference",
     "taskCmdBusy": "Task \"{{title}}\" is still processing the previous message",
-    "createTaskCmd": "Create and start a task (goal loop + worktree enabled by default)",
-    "createTaskEmpty": "Type the task content after /create-task",
-    "taskCreated": "Task \"{{title}}\" created and started: goal loop enabled, a worktree will be created automatically on start.",
-    "delTaskCmd": "Delete task: {{title}}",
-    "taskDeleted": "Task \"{{title}}\" deleted (its session and worktree were cleaned up).",
     "taskArchived": "Task \"{{title}}\" archived — view or restore it in Trash.",
     "taskArchivedAll": "Archived all {{count}} tasks — view or restore them in Trash."
   }

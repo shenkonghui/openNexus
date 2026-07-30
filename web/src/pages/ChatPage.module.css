@@ -375,23 +375,23 @@
 }
 
 .conv_connecting {
-  background: var(--warning-bg, rgba(234, 179, 8, 0.15));
-  color: var(--warning, #ca8a04);
+  background: var(--bg-muted);
+  color: var(--text-muted, #999);
 }
 
 .conv_streaming {
-  background: rgba(59, 130, 246, 0.12);
-  color: var(--accent, #3b82f6);
+  background: var(--bg-muted);
+  color: var(--text-muted, #999);
 }
 
 .conv_reconnecting {
-  background: var(--warning-bg, rgba(234, 179, 8, 0.15));
-  color: var(--warning, #ca8a04);
+  background: var(--bg-muted);
+  color: var(--text-muted, #999);
 }
 
 .conv_waiting_permission {
-  background: var(--warning-bg, rgba(234, 179, 8, 0.15));
-  color: var(--warning, #ca8a04);
+  background: var(--bg-muted);
+  color: var(--text-muted, #999);
 }
 
 @keyframes convPulse {

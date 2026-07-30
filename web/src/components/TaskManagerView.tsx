@@ -340,7 +340,7 @@ export default function TaskManagerView({ workspaceId, cwd, agents, restoreSessi
   )
 
   // 「多任务模式」网格视图：上方任务窗口按浏览器宽度自适应平铺（每格实时订阅其会话输出），
-  // 下方保留任务助手对话（可输入 /task:<id> 把消息直发到某个任务会话）。
+  // 下方保留任务助手对话（可用 @task:<id> 引用把消息直发到某个任务会话）。
   if (gridMode && gitRepo !== false) {
     return (
       <SplitPane dir="col" storageKey="taskmanager-grid" defaultFlexes={[3, 2]}>

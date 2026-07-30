@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"math/rand"
@@ -103,6 +104,27 @@ func (h *WorkspaceHandler) Create(c *gin.Context) {
 	Success(c, http.StatusCreated, ws)
 }
 
+// countTasksFromJSON 读取工作区管理数据目录下的 tasks.json，返回其中的任务数量。
+// 文件不存在或解析失败时返回 0（不阻断列表请求）。
+func countTasksFromJSON(workspaceID uint, store WorkspaceStore) int {
+	cwd, err := store.GetWorkspaceCwd(workspaceID)
+	if err != nil || cwd == "" {
+		return 0
+	}
+	path := filepath.Join(workspacemeta.DirFor(cwd), "tasks.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0
+	}
+	var def struct {
+		Tasks []json.RawMessage `json:"tasks"`
+	}
+	if err := json.Unmarshal(data, &def); err != nil {
+		return 0
+	}
+	return len(def.Tasks)
+}
+
 // List GET /api/v1/workspaces
 func (h *WorkspaceHandler) List(c *gin.Context) {
 	uid, ok := currentUserID(c)
@@ -120,12 +142,14 @@ func (h *WorkspaceHandler) List(c *gin.Context) {
 	}
 	type wsWithCount struct {
 		models.Workspace
-		SessionCount int64 `json:"session_count"`
+		TaskCount int `json:"task_count"`
 	}
 	result := make([]wsWithCount, 0, len(workspaces))
 	for _, ws := range workspaces {
-		count, _ := h.store.WorkspaceSessionCount(ws.ID)
-		result = append(result, wsWithCount{Workspace: ws, SessionCount: count})
+		result = append(result, wsWithCount{
+			Workspace: ws,
+			TaskCount:  countTasksFromJSON(ws.ID, h.store),
+		})
 	}
 	Success(c, http.StatusOK, gin.H{"workspaces": result})
 }

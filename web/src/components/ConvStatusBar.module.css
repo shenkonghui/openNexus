@@ -2,6 +2,7 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
+  justify-content: flex-start;
   gap: 6px;
   padding: 4px 16px;
   font-size: 12px;
@@ -11,15 +12,15 @@
 
 .bar_connecting,
 .bar_reconnecting {
-  color: var(--warning, #ca8a04);
+  color: var(--text-muted, #999);
 }
 
 .bar_streaming {
-  color: var(--accent, #3b82f6);
+  color: var(--text-muted, #999);
 }
 
 .bar_waiting_permission {
-  color: var(--warning, #ca8a04);
+  color: var(--text-muted, #999);
 }
 
 .spinner {

@@ -695,7 +695,12 @@
     "deleteConfirm": "确定删除此工作区吗？将同时删除其下所有会话，不可恢复。",
     "rename": "重命名",
     "default": "默认工作区",
-    "empty": "暂无工作区"
+    "empty": "暂无工作区",
+    "taskRun": "运行任务",
+    "taskRunEmpty": "该工作区暂无任务",
+    "taskRunSelectAll": "全选",
+    "taskRunDeselectAll": "取消全选",
+    "taskRunSelected": "运行 {{count}} 个任务"
   },
   "notes": {
     "title": "笔记",
@@ -912,7 +917,7 @@
     "maxParallelHint": "默认并发数量：同时执行的任务上限（1=串行）",
     "aiTitle": "任务助手",
     "aiPlaceholder": "描述你的需求，例如：新增一个重构登录模块的任务；把并发改成 5",
-    "aiHint": "用自然语言描述需求，Agent 会通过任务工具增删改任务、启停、调整并发；/create-task 直建任务（默认 goal+worktree），/task 或 @task 选任务直发消息到任务会话，/del-task 直删任务",
+    "aiHint": "用自然语言描述需求，Agent 会通过任务工具增删改任务、启停、调整并发；@task 选任务直发消息到任务会话",
     "clear": "清空",
     "clearHint": "清空当前对话并开启新会话",
     "clearConfirm": "确定清空当前对话并开启新会话？原会话将被删除。",
@@ -955,17 +960,11 @@
     "expandAllHint": "平铺展开所有任务窗口，实时查看每个任务的输出",
     "collapseGrid": "退出多任务",
     "liveEmpty": "暂无输出",
-    "sendToTask": "发送到任务：{{title}}",
     "taskPromptSent": "已发送到任务「{{title}}」，实时输出见任务窗口或其会话页。",
     "taskCmdNotFound": "未找到任务 {{id}}",
     "taskCmdNoSession": "任务「{{title}}」尚未执行，暂无会话可发送",
-    "taskCmdEmpty": "请在 /task:<任务ID> 后输入要发送的内容",
+    "taskCmdEmpty": "请在 @task 引用后输入要发送的内容",
     "taskCmdBusy": "任务「{{title}}」正在处理上一条直发消息，请稍候",
-    "createTaskCmd": "新建任务并启动（默认开启 goal 循环 + worktree 隔离）",
-    "createTaskEmpty": "请在 /create-task 后输入任务内容",
-    "taskCreated": "已创建并启动任务「{{title}}」：goal 循环已开启，worktree 将在启动时自动创建。",
-    "delTaskCmd": "删除任务：{{title}}",
-    "taskDeleted": "已删除任务「{{title}}」（关联会话与 worktree 已清理）。",
     "taskArchived": "已归档任务「{{title}}」，可在回收站查看或恢复。",
     "taskArchivedAll": "已归档全部 {{count}} 个任务，可在回收站查看或恢复。"
   }
