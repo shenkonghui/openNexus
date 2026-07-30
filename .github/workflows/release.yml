@@ -286,6 +286,9 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: artifacts
+          # 仅下载发布所需产物，排除 docker/build-push-action 自动上传的
+          # `*.dockerbuild`（名字含 ~，会干扰下载全部 artifact）
+          pattern: opennexus-*
 
       - name: Generate Release Notes
         run: |
