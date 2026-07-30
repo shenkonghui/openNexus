@@ -32,6 +32,8 @@ config.yaml.bak
 # build artifacts (binaries)
 # 锚定到根目录：否则 server 会匹配 cmd/server/、registry.json 会匹配 internal/acp/registry.json
 /opennexus
+/opennexus.log
+/opennexus.pid
 /server
 /registry.json
 /gateway
