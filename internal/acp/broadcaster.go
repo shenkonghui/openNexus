@@ -10,9 +10,12 @@ import (
 // msgBroadcaster 将一个进行中的 prompt 产生的消息分发给多个订阅者。
 // 主要用途：支持断点续传——原发起 prompt 的客户端断开后，重连的客户端可订阅同一广播器继续接收。
 type msgBroadcaster struct {
-	mu          sync.RWMutex
-	subs        []chan models.Message
-	currentSeq  int // 当前已广播的最新 sequence
+	mu         sync.RWMutex
+	subs       []chan models.Message
+	currentSeq int // 当前已广播的最新 sequence
+	// persister 是本 prompt 的落盘 writer（注册广播器前设置，之后只读）。
+	// 断点续传订阅时先经 barrier 排空落盘队列，再从仓库补齐遗漏消息。
+	persister *promptPersister
 }
 
 // newMsgBroadcaster 创建广播器，记录起始 sequence（用于订阅时计算需要从 DB 补齐的缺口）。

@@ -75,22 +75,6 @@ func (s *Service) recordToolCallStart(session *models.Session, sessionCwd string
 	}
 }
 
-// applyToolCallMeta 把攒批合并的增量落到记录上（flushToolUpdates 时调用）。
-func (s *Service) applyToolCallMeta(dbSessionID uint, toolCallID string, meta *toolCallMeta) {
-	if s.toolCallRecords == nil || meta == nil {
-		return
-	}
-	err := s.toolCallRecords.ApplyUpdate(dbSessionID, toolCallID, repository.ToolCallUpdateFields{
-		Status:   meta.status,
-		ExitCode: meta.exitCode,
-		Title:    meta.title,
-		Command:  meta.command,
-	})
-	if err != nil {
-		slog.Warn("更新工具调用记录失败", "tool_call", toolCallID, "err", err)
-	}
-}
-
 // linkToolCallTerminal 在 tool_call_update 内嵌 terminal content 时立即写关联
 // （一个终端只发生一次，实时写库使终端退出回调能按 terminal_id 命中记录）。
 func (s *Service) linkToolCallTerminal(dbSessionID uint, tu *acp.SessionToolCallUpdate) {

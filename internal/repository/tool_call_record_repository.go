@@ -34,6 +34,35 @@ type ToolCallUpdateFields struct {
 
 // ApplyUpdate 按 (dbSessionID, toolCallID) 更新记录；终态时写 FinishedAt。
 func (r *ToolCallRecordRepository) ApplyUpdate(dbSessionID uint, toolCallID string, f ToolCallUpdateFields) error {
+	return applyUpdateTx(r.db, dbSessionID, toolCallID, f)
+}
+
+// ToolCallBatchUpdate 是批量更新的单条条目。
+type ToolCallBatchUpdate struct {
+	ToolCallID string
+	Fields     ToolCallUpdateFields
+}
+
+// ApplyUpdatesBatch 在单个事务中批量应用多条增量（flush 攒批时调用），
+// 把「每 toolCallId 一次 sqlite 写事务」合并为一次，降低热路径落库开销。
+func (r *ToolCallRecordRepository) ApplyUpdatesBatch(dbSessionID uint, updates []ToolCallBatchUpdate) error {
+	if len(updates) == 0 {
+		return nil
+	}
+	if len(updates) == 1 {
+		return applyUpdateTx(r.db, dbSessionID, updates[0].ToolCallID, updates[0].Fields)
+	}
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		for _, u := range updates {
+			if err := applyUpdateTx(tx, dbSessionID, u.ToolCallID, u.Fields); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+func applyUpdateTx(tx *gorm.DB, dbSessionID uint, toolCallID string, f ToolCallUpdateFields) error {
 	updates := map[string]any{}
 	if f.Status != "" {
 		updates["status"] = f.Status
@@ -57,7 +86,7 @@ func (r *ToolCallRecordRepository) ApplyUpdate(dbSessionID uint, toolCallID stri
 	if len(updates) == 0 {
 		return nil
 	}
-	return r.db.Model(&models.ToolCallRecord{}).
+	return tx.Model(&models.ToolCallRecord{}).
 		Where("db_session_id = ? AND tool_call_id = ?", dbSessionID, toolCallID).
 		Updates(updates).Error
 }

@@ -44,8 +44,9 @@ const bridgeLineQueueSize = 256
 // BridgePIDFile 返回 bridge 守护进程的 PID 文件路径（与 socket 同目录）。
 func BridgePIDFile(socketPath string) string { return socketPath + ".pid" }
 
-// BridgeLogFile 返回 bridge 守护进程的日志文件路径（含 agent stderr，供握手失败诊断）。
-func BridgeLogFile(socketPath string) string { return socketPath + ".log" }
+// BridgeLogFile 返回所有 bridge 守护进程共享的日志文件路径（含 agent stderr，供握手失败诊断）。
+// 所有 bridge 实例追加写入同一文件，通过日志前缀中的 socket 路径区分实例。
+func BridgeLogFile(socketPath string) string { return filepath.Join(filepath.Dir(socketPath), "bridge.log") }
 
 // RunBridgeDaemon 是 acp-bridge 子命令入口，阻塞运行直到 agent 退出或收到退出信号。
 func RunBridgeDaemon(argv []string) error {
@@ -67,7 +68,7 @@ func RunBridgeDaemon(argv []string) error {
 	if err := os.MkdirAll(filepath.Dir(*socketPath), 0o700); err != nil {
 		return fmt.Errorf("acp-bridge: 创建 socket 目录: %w", err)
 	}
-	logFile, err := os.OpenFile(BridgeLogFile(*socketPath), os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	logFile, err := os.OpenFile(BridgeLogFile(*socketPath), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
 		return fmt.Errorf("acp-bridge: 打开日志文件: %w", err)
 	}

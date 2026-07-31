@@ -185,10 +185,11 @@ func TestService_ListMessages(t *testing.T) {
 
 	skills, commands, rules, subAgents := testDiscoveryConfig(t)
 	msgDir := t.TempDir()
-	msgRepo := repository.NewMessageRepository(msgDir)
+	svc := NewService(db, msgDir, config.WorkspaceConfig{DefaultMode: "external"}, skills, commands, rules, subAgents)
+	// 消息仓库带写缓冲与读缓存，必须复用 service 的实例（同目录双实例会读到未 flush 的半截文件）
+	msgRepo := svc.MessageRepo()
 	_ = msgRepo.Create(&models.Message{SessionID: "msg-list-1", DBSessionID: sess.ID, Role: models.MessageRoleUser, Kind: models.MessageKindUserMessageChunk, Content: "问题", RawJSON: "{}", Sequence: 1})
 	_ = msgRepo.Create(&models.Message{SessionID: "msg-list-1", DBSessionID: sess.ID, Role: models.MessageRoleAssistant, Kind: models.MessageKindAgentMessageChunk, Content: "回答", RawJSON: "{}", Sequence: 2})
-	svc := NewService(db, msgDir, config.WorkspaceConfig{DefaultMode: "external"}, skills, commands, rules, subAgents)
 	msgs, err := svc.ListMessages("msg-list-1")
 	if err != nil {
 		t.Fatalf("ListMessages 返回错误: %v", err)
@@ -215,7 +216,8 @@ func TestService_ListMessages_ReturnsLastN(t *testing.T) {
 	_ = repo.Create(sess)
 	skills, commands, rules, subAgents := testDiscoveryConfig(t)
 	msgDir := t.TempDir()
-	msgRepo := repository.NewMessageRepository(msgDir)
+	svc := NewService(db, msgDir, config.WorkspaceConfig{DefaultMode: "external"}, skills, commands, rules, subAgents)
+	msgRepo := svc.MessageRepo()
 	n := defaultMessagePageSize + 50
 	for i := 1; i <= n; i++ {
 		_ = msgRepo.Create(&models.Message{
@@ -224,7 +226,6 @@ func TestService_ListMessages_ReturnsLastN(t *testing.T) {
 			Content: fmt.Sprintf("m%d", i), RawJSON: "{}", Sequence: i,
 		})
 	}
-	svc := NewService(db, msgDir, config.WorkspaceConfig{DefaultMode: "external"}, skills, commands, rules, subAgents)
 	msgs, err := svc.ListMessages("msg-last-n")
 	if err != nil {
 		t.Fatalf("ListMessages 返回错误: %v", err)
@@ -250,7 +251,8 @@ func TestService_ListMessagesRecent(t *testing.T) {
 	_ = repo.Create(sess)
 	skills, commands, rules, subAgents := testDiscoveryConfig(t)
 	msgDir := t.TempDir()
-	msgRepo := repository.NewMessageRepository(msgDir)
+	svc := NewService(db, msgDir, config.WorkspaceConfig{DefaultMode: "external"}, skills, commands, rules, subAgents)
+	msgRepo := svc.MessageRepo()
 	// 写 10 条消息，sequence 1..10
 	for i := 1; i <= 10; i++ {
 		_ = msgRepo.Create(&models.Message{
@@ -259,7 +261,6 @@ func TestService_ListMessagesRecent(t *testing.T) {
 			Content: fmt.Sprintf("m%d", i), RawJSON: "{}", Sequence: i,
 		})
 	}
-	svc := NewService(db, msgDir, config.WorkspaceConfig{DefaultMode: "external"}, skills, commands, rules, subAgents)
 
 	// 默认（before=0, limit=0→默认页大小 500）：返回全部 10 条，hasMore=false
 	msgs, hasMore, err := svc.ListMessagesRecent("msg-recent-1", 0, 0)
@@ -424,7 +425,10 @@ func TestService_DeleteSession_RemovesSessionAndMessages(t *testing.T) {
 	db := setupACPTestDB(t)
 	repo := repository.NewSessionRepository(db)
 	msgDir := t.TempDir()
-	msgRepo := repository.NewMessageRepository(msgDir)
+	skills, commands, rules, subAgents := testDiscoveryConfig(t)
+	svc := NewService(db, msgDir, config.WorkspaceConfig{DefaultMode: "external"}, skills, commands, rules, subAgents)
+	// 消息仓库带写缓冲与读缓存，必须复用 service 的实例（同目录双实例会读到未 flush 的半截文件）
+	msgRepo := svc.MessageRepo()
 	wsRepo := repository.NewWorkspaceRepository(db)
 	tempDir := filepath.Join(t.TempDir(), "keep-after-delete")
 	if err := os.MkdirAll(tempDir, 0o755); err != nil {
@@ -452,8 +456,6 @@ func TestService_DeleteSession_RemovesSessionAndMessages(t *testing.T) {
 		t.Fatalf("创建消息失败: %v", err)
 	}
 
-	skills, commands, rules, subAgents := testDiscoveryConfig(t)
-	svc := NewService(db, msgDir, config.WorkspaceConfig{DefaultMode: "external"}, skills, commands, rules, subAgents)
 	if err := svc.DeleteSession(context.Background(), "delete-1"); err != nil {
 		t.Fatalf("DeleteSession 错误: %v", err)
 	}

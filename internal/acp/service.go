@@ -876,10 +876,15 @@ func (s *Service) buildConnection(ctx context.Context, agentType, cwd string) (*
 	// 若后端需要预处理（如 BinaryBackend 下载二进制），在启动进程前执行。
 	// 失败时透传错误，让用户看到真正的失败原因（如下载失败）而非误导性的 PATH 错误。
 	if p, ok := backend.(Preparable); ok {
+		prepareStartedAt := time.Now()
 		if err := p.Prepare(); err != nil {
 			slog.Error("建立 agent 连接失败：准备后端失败",
 				"agent", agentType, "err", err)
 			return nil, fmt.Errorf("准备 agent 后端: %w", err)
+		}
+		if cost := time.Since(prepareStartedAt); cost > time.Second {
+			slog.Info("agent 后端准备耗时较长（可能在下载/校验二进制）",
+				"agent", agentType, "prepare_cost", cost.Round(time.Millisecond).String())
 		}
 	}
 	slog.Info("开始建立 agent 连接",
@@ -915,11 +920,17 @@ func (s *Service) buildConnection(ctx context.Context, agentType, cwd string) (*
 	return newConn, nil
 }
 
+// reusedHandshakeTimeout 是复用常驻 agent 时 ACP 握手（initialize + 认证）的最大等待时间。
+// 存活的 agent 对重复 initialize 的响应应为毫秒级，超时即视为卡死，
+// 快速失败让 buildConnection 尽早进入 forceNew 销毁重建，避免干等调用方 ctx（分钟级）到期。
+const reusedHandshakeTimeout = 10 * time.Second
+
 // startAndHandshake 建立底层连接（bridge 模式优先拨号复用，forceNew 强制重建）并完成
 // ACP 握手与认证。失败时已销毁连接，返回 reused 供调用方决策是否重建全新进程重试。
 func (s *Service) startAndHandshake(ctx context.Context, backend Backend, agentType, cwd string, forceNew bool) (*Connection, acp.InitializeResponse, bool, error) {
 	var newConn *Connection
 	var err error
+	startedAt := time.Now()
 	if s.bridgeEnabled {
 		newConn, err = NewBridgeConnection(backend, cwd, s.dbg, s.terminalEnabled, s.bridgeSocketPath(agentType, cwd), forceNew)
 	} else {
@@ -934,10 +945,20 @@ func (s *Service) startAndHandshake(ctx context.Context, backend Backend, agentT
 			"err", err)
 		return nil, acp.InitializeResponse{}, false, fmt.Errorf("建立共享连接: %w", err)
 	}
+	transportCost := time.Since(startedAt)
 	reused := newConn.Reused()
+	// 复用路径握手加短超时：存活 agent 响应应为毫秒级，卡死时快速失败进入销毁重建；
+	// 冷启动路径维持调用方 ctx（agent 首次启动/下载依赖可能耗时较长，不能收紧）。
+	handshakeCtx := ctx
+	if reused {
+		var cancel context.CancelFunc
+		handshakeCtx, cancel = context.WithTimeout(ctx, reusedHandshakeTimeout)
+		defer cancel()
+	}
 	// 注入 terminal 桥接器：握手声明能力后 agent 的 terminal/* 请求由 bridge 代执行
 	newConn.Client().SetTerminalBridge(s.terminalBridge)
-	initResp, err := newConn.Initialize(ctx)
+	initStartedAt := time.Now()
+	initResp, err := newConn.Initialize(handshakeCtx)
 	if err != nil {
 		// 握手失败时先诊断进程状态（必须在 Close 之前），给出可操作的失败原因。
 		diag := newConn.InspectFailure()
@@ -951,13 +972,24 @@ func (s *Service) startAndHandshake(ctx context.Context, backend Backend, agentT
 			"err", err)
 		return nil, acp.InitializeResponse{}, reused, fmt.Errorf("ACP 握手失败: %w（诊断: %s）", err, diag)
 	}
-	if err := newConn.AuthenticateIfRequired(ctx, initResp); err != nil {
+	initCost := time.Since(initStartedAt)
+	authStartedAt := time.Now()
+	if err := newConn.AuthenticateIfRequired(handshakeCtx, initResp); err != nil {
 		diag := newConn.InspectFailure()
 		_ = newConn.Close()
 		slog.Error("建立 agent 连接失败：ACP 认证失败",
 			"agent", agentType, "diagnosis", diag, "err", err)
 		return nil, acp.InitializeResponse{}, reused, fmt.Errorf("ACP 认证失败: %w（诊断: %s）", err, diag)
 	}
+	slog.Info("agent 连接握手完成",
+		"agent", agentType,
+		"cwd", cwd,
+		"reused", reused,
+		"total_cost", time.Since(startedAt).Round(time.Millisecond).String(),
+		"transport_cost", transportCost.Round(time.Millisecond).String(),
+		"initialize_cost", initCost.Round(time.Millisecond).String(),
+		"authenticate_cost", time.Since(authStartedAt).Round(time.Millisecond).String(),
+	)
 	return newConn, initResp, reused, nil
 }
 
@@ -1203,6 +1235,9 @@ func (s *Service) StopHealthCheck() {
 		case <-time.After(2 * time.Second):
 			slog.Warn("健康检查 goroutine 退出超时，继续关闭")
 		}
+
+		// 消息仓库写入经 bufio 缓冲，退出前落盘残留缓冲避免丢尾部消息
+		s.messages.Close()
 	})
 }
 
@@ -1721,6 +1756,10 @@ func (s *Service) PromptWithExecution(ctx context.Context, sessionID, prompt str
 	snapshotCwd := sessionCwd(session, s.workspaces)
 	snapshotBefore := takeSnapshot(snapshotCwd)
 	out := make(chan models.Message, 256)
+	// 落盘 writer：持久化操作移出消费循环（消费循环只做 map + broadcast），
+	// 攒批 flush 由时间/条数/锚点触发。挂到广播器供断点续传订阅前 barrier 排空。
+	pw := s.newPromptPersister(session, snapshotCwd)
+	bc.persister = pw
 	go func() {
 		seq := startSeq
 		// finalStatus 控制 defer 收尾：正常完成=done，进程崩溃且不可恢复=interrupted
@@ -1733,6 +1772,8 @@ func (s *Service) PromptWithExecution(ctx context.Context, sessionID, prompt str
 				slog.Warn("prompt 超时，标记为 interrupted", "session", sessionID, "timeout", s.effectivePromptMaxDuration())
 				finalStatus = models.RunningTaskStatusInterrupted
 			}
+			// 先排空落盘队列并 flush 攒批：保证终态落库与 goal 评估读到完整历史
+			pw.close()
 			// prompt 结束后快照对比，生成文件改动摘要消息
 			snapshotAfter := takeSnapshot(snapshotCwd)
 			diffs := compareSnapshots(snapshotBefore, snapshotAfter)
@@ -1745,10 +1786,12 @@ func (s *Service) PromptWithExecution(ctx context.Context, sessionID, prompt str
 				} else {
 					bc.broadcast(fileMsg)
 					out <- fileMsg
-					if task.ID != 0 {
-						_ = s.runningTasks.UpdateLastSeq(task.ID, fileMsg.Sequence)
-					}
 				}
+			}
+			// LastSeq 仅在收尾写一次（生产代码不读它，逐条更新是纯白写，
+			// 每条消息一次 sqlite 写事务会拖垮热路径）。
+			if task.ID != 0 {
+				_ = s.runningTasks.UpdateLastSeq(task.ID, seq)
 			}
 			// 先落库终态、再关闭 channel：保证消费方（SendPrompt/RunSessionTask）看到
 			// 流关闭时可靠地通过 LastRunStatus 查到本轮的真实终态（done/interrupted），
@@ -1771,16 +1814,14 @@ func (s *Service) PromptWithExecution(ctx context.Context, sessionID, prompt str
 			promptCancel()
 		}()
 
-		// persistMsg 持久化消息并广播，同步更新 running_task 的 LastSeq。
+		// persistMsg 把消息交给落盘 writer 并广播（低频消息路径）。
+		// 不再逐条写 running_task.LastSeq（收尾统一写一次）。
 		persistMsg := func(msg models.Message) {
-			if err := s.messages.Create(&msg); err != nil {
-				slog.Error("持久化消息失败", "session", sessionID, "sequence", msg.Sequence, "err", err)
-			}
+			// 先入落盘队列再广播：断点续传订阅经 barrier 排空队列后，
+			// 广播过的消息必然已可从仓库读到，补齐无缺口。
+			pw.enqueue(persistOp{msg: msg})
 			bc.broadcast(msg)
 			out <- msg
-			if task.ID != 0 {
-				_ = s.runningTasks.UpdateLastSeq(task.ID, msg.Sequence)
-			}
 		}
 
 		// 若本次发送触发了会话重连（非活跃/连接丢失），先推送一条临时状态帧
@@ -1817,6 +1858,9 @@ func (s *Service) PromptWithExecution(ctx context.Context, sessionID, prompt str
 
 		// consumeStream 消费单次 prompt 的 update 流与权限/文件事件，直到流关闭。
 		// 返回 true 表示 agent 进程在该轮运行中崩溃（conn.Done() 已关闭），调用方据此决定是否重连。
+		// 落盘全部经 pw（独立 writer goroutine）：本循环只做 map + broadcast，
+		// thought 攒批合并 / tool_call_update 覆盖去重 / 工具记录落库均在 writer 内完成，
+		// flush 由时间（200ms）/ 条数（50）/ terminal 锚点触发，交替流下攒批不再失效。
 		consumeStream := func(conn *Connection, acpSID string, updates <-chan acp.SessionUpdate) bool {
 			sid := acp.SessionId(acpSID)
 			permCh := conn.Client().RegisterPermissionWaiter(sid)
@@ -1824,79 +1868,11 @@ func (s *Service) PromptWithExecution(ctx context.Context, sessionID, prompt str
 			fileCh := conn.Client().RegisterFileWaiter(sid)
 			defer conn.Client().UnregisterFileWaiter(sid)
 
-			// thought_chunk 攒批降频：agent 思考过程是高频 token delta，
-			// 逐条同步落库会拖慢消费循环导致订阅者 buffer 满丢消息。
-			// 思考片段照常实时广播/流出（保证 token-by-token 流式 UX），
-			// 仅 DB 写入合并为一行：拼接相邻 delta 文本，RawJSON 用 \n 连接
-			// （与前端 groupMessages 合并格式一致）。前端本就合并相邻 thought，
-			// 故落库粒度变粗对展示零影响；也无任何代码按 thought 单条回查。
-			var thoughtBatch []models.Message
-			flushThoughts := func() {
-				if len(thoughtBatch) == 0 {
-					return
-				}
-				// 取批末尾作为合并记录：断线续传（sequence > lastSeq）即便落在批次中间，
-				// 也能取回这批的完整合并文本（重复优于缺口，thought 可折叠且重复无副作用）。
-				merged := thoughtBatch[len(thoughtBatch)-1]
-				var sb strings.Builder
-				raws := make([]string, 0, len(thoughtBatch))
-				for _, m := range thoughtBatch {
-					sb.WriteString(m.Content)
-					if m.RawJSON != "" {
-						raws = append(raws, m.RawJSON)
-					}
-				}
-				merged.Content = sb.String()
-				merged.RawJSON = strings.Join(raws, "\n")
-				// 仅落库（广播/流出已在收到时实时完成，这里不重复）
-				if err := s.messages.Create(&merged); err != nil {
-					slog.Error("持久化合并 thought 失败", "session", sessionID, "sequence", merged.Sequence, "err", err)
-				}
-				if task.ID != 0 {
-					_ = s.runningTasks.UpdateLastSeq(task.ID, merged.Sequence)
-				}
-				thoughtBatch = nil
-			}
-
-			// tool_call_update 同样高频（shell/read 输出流式），逐条 Create 会拖死
-			// ACP 订阅 buffer。实时推前端；按 toolCallId 只保留最新一条延迟落库
-			//（前端 parseToolCalls 本就按 id 合并，历史只需终态）。
-			// 例外：内嵌 terminal 锚点的 update 每个终端仅出现一次，覆盖去重会把它
-			// 冲掉，导致历史回放（多任务实时窗口、断线续传）渲染不出内嵌终端——
-			// 覆盖时保留锚点行（NDJSON），且锚点 update 到达时立即 flush 落库。
-			pendingToolUpdates := map[string]models.Message{}
-			var toolUpdateOrder []string
-			// pendingToolMeta 同窗口攒批工具调用记录的增量（状态/退出码等），随 flush 一并落库
-			pendingToolMeta := map[string]*toolCallMeta{}
-			flushToolUpdates := func() {
-				if len(toolUpdateOrder) == 0 {
-					return
-				}
-				for _, id := range toolUpdateOrder {
-					m := pendingToolUpdates[id]
-					if err := s.messages.Create(&m); err != nil {
-						slog.Error("持久化 tool_call_update 失败", "session", sessionID, "sequence", m.Sequence, "err", err)
-					}
-					if task.ID != 0 {
-						_ = s.runningTasks.UpdateLastSeq(task.ID, m.Sequence)
-					}
-					s.applyToolCallMeta(session.ID, id, pendingToolMeta[id])
-				}
-				pendingToolUpdates = map[string]models.Message{}
-				toolUpdateOrder = nil
-				pendingToolMeta = map[string]*toolCallMeta{}
-			}
-			flushPending := func() {
-				flushThoughts()
-				flushToolUpdates()
-			}
-
 			for {
 				select {
 				case u, ok := <-updates:
 					if !ok {
-						// 流关闭：先 flush 攒批，再判断是正常结束还是进程崩溃
-						flushPending()
+						// 流关闭：判断是正常结束还是进程崩溃（攒批由 pw.close() 兜底 flush）
 						select {
 						case <-conn.Done():
 							return true // 进程崩溃
@@ -1909,70 +1885,41 @@ func (s *Service) PromptWithExecution(ctx context.Context, sessionID, prompt str
 					msg := MapUpdate(sessionID, session.ID, seq, u)
 					msg.ExecutionID = executionID
 					if msg.Kind == models.MessageKindAgentThoughtChunk {
-						// 实时流式（内存，快），攒批延迟落库（降频）
-						flushToolUpdates()
-						bc.broadcast(msg)
-						out <- msg
-						thoughtBatch = append(thoughtBatch, msg)
-					} else if msg.Kind == models.MessageKindToolCallUpdate {
-						flushThoughts()
+						// 思考片段实时流式推送；out 满时丢弃（非阻塞，与 usage/tool_update
+						// 一致），杜绝单个慢 SSE 客户端卡死消费循环导致 ACP 订阅 buffer
+						// 满而丢弃 agent_message_chunk。落库由 writer 攒批合并。
+						pw.enqueue(persistOp{msg: msg})
 						bc.broadcast(msg)
 						select {
 						case out <- msg:
 						default:
 						}
-						id := ""
-						if u.ToolCallUpdate != nil {
-							id = string(u.ToolCallUpdate.ToolCallId)
-						}
-						if id == "" {
-							id = fmt.Sprintf("seq-%d", msg.Sequence)
-						}
-						if prev, exists := pendingToolUpdates[id]; !exists {
-							toolUpdateOrder = append(toolUpdateOrder, id)
-						} else {
-							// 覆盖前保留旧 raw 中的 terminal 锚点行（前端按多行合并 raw_json）
-							msg.RawJSON = keepTerminalAnchorRaw(prev.RawJSON, msg.RawJSON)
-						}
-						pendingToolUpdates[id] = msg
-						if u.ToolCallUpdate != nil && s.toolCallRecords != nil {
-							// 合并本条增量到记录攒批；内嵌 terminal content 时立即写关联，
-							// 保证终端退出回调能按 terminal_id 命中记录（每终端仅一次，低频）
-							if pendingToolMeta[id] == nil {
-								pendingToolMeta[id] = &toolCallMeta{}
-							}
-							mergeToolCallDelta(pendingToolMeta[id], u.ToolCallUpdate)
-							s.linkToolCallTerminal(session.ID, u.ToolCallUpdate)
-						}
-						if hasTerminalContent(u.ToolCallUpdate) {
-							// 锚点 update 立即落库（每终端一次，低频）：中途订阅的
-							// 多任务窗口 / 断线续传按 DB 回放时才能拿到终端锚点
-							flushToolUpdates()
+					} else if msg.Kind == models.MessageKindToolCallUpdate {
+						// 实时推前端；writer 按 toolCallId 覆盖去重延迟落库
+						pw.enqueue(persistOp{msg: msg, tu: u.ToolCallUpdate})
+						bc.broadcast(msg)
+						select {
+						case out <- msg:
+						default:
 						}
 					} else if msg.Kind == models.MessageKindUsageUpdate || msg.Kind == models.MessageKindSessionInfoUpdate {
 						// 用量/会话信息是高频心跳：只推前端，不落库、不阻塞 out。
-						// 逐条 Create + 阻塞 out 会拖慢本循环，导致 ACP 订阅 buffer 满并丢弃
-						// agent_message_chunk（用户看到输出到一半突然没了）。
 						bc.broadcast(msg)
 						select {
 						case out <- msg:
 						default:
 						}
 					} else {
-						// 非高频类型：先 flush 攒批，再同步落库本条
-						flushPending()
-						persistMsg(msg)
-						if u.ToolCall != nil {
-							// 工具调用历史：创建记录（shell 类解析 rawInput 命令/目录）
-							s.recordToolCallStart(session, snapshotCwd, u.ToolCall)
-						}
+						// 低频消息：经落盘队列持久化（tool_call 附带创建工具调用记录）
+						pw.enqueue(persistOp{msg: msg, tc: u.ToolCall})
+						bc.broadcast(msg)
+						out <- msg
 					}
 				case pn, ok := <-permCh:
 					if !ok {
 						continue
 					}
 					slog.Debug("agent 权限请求", "session", sessionID, "request_id", pn.RequestID)
-					flushPending()
 					seq++
 					msg := MapPermissionRequest(sessionID, session.ID, seq, pn)
 					msg.ExecutionID = executionID
@@ -1981,7 +1928,6 @@ func (s *Service) PromptWithExecution(ctx context.Context, sessionID, prompt str
 					if !ok {
 						continue
 					}
-					flushPending()
 					seq++
 					fileMsg := MapFileWrite(sessionID, session.ID, seq, fw)
 					fileMsg.ExecutionID = executionID
@@ -2104,24 +2050,33 @@ func (s *Service) SubscribeSession(sessionID string, lastSeq int) (missed []mode
 		return nil, nil, err
 	}
 
-	// 先从文件补齐 lastSeq 之后的遗漏消息
-	missed, dbErr := s.messages.FindBySessionIDAfter(session.SessionID, lastSeq)
-	if dbErr != nil {
-		return nil, nil, dbErr
-	}
-
 	// 检查是否有活跃 prompt 广播器
 	s.mu.RLock()
 	bc, ok := s.activePrompts[sessionID]
 	s.mu.RUnlock()
 
 	if !ok || bc == nil {
-		// 无活跃 prompt：仅返回 DB 补齐的消息，channel 为 nil
+		// 无活跃 prompt：仅返回仓库补齐的消息，channel 为 nil
+		missed, dbErr := s.messages.FindBySessionIDAfter(session.SessionID, lastSeq)
+		if dbErr != nil {
+			return nil, nil, dbErr
+		}
 		return missed, nil, nil
 	}
 
 	// 订阅广播器，获取订阅时刻的 currentSeq
 	subCh, curSeq := bc.subscribe(256)
+
+	// 先订阅、再 barrier 排空落盘队列、最后读仓库补缺：消费循环对每条消息
+	// 先入落盘队列后广播，故 barrier 后 curSeq 之前的消息必然已可读到，
+	// 补齐无缺口（落盘异步化后若先读仓库再订阅，会漏掉队列中未落盘的消息）。
+	if bc.persister != nil {
+		bc.persister.barrier()
+	}
+	missed, dbErr := s.messages.FindBySessionIDAfter(session.SessionID, lastSeq)
+	if dbErr != nil {
+		return nil, nil, dbErr
+	}
 
 	// 从订阅时刻的 currentSeq 之后去重 missed，避免与广播器即将推送的消息重复
 	// （广播器 currentSeq 之后的实时消息会经 channel 推送，missed 只取到 currentSeq）

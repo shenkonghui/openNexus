@@ -1,7 +1,7 @@
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 LDFLAGS := -ldflags="-s -w -X main.version=$(VERSION)"
 
-.PHONY: dev backend frontend build run run-bg stop test clean release release-dry docker-build docker-up docker-down docker-logs electron-dev electron-dist electron-install electron-uninstall
+.PHONY: dev backend frontend build run run-bg stop logs test clean release release-dry docker-build docker-up docker-down docker-logs electron-dev electron-dist electron-install electron-uninstall
 
 # 一键启动前后端开发服务器
 # 用法: make dev
@@ -98,10 +98,23 @@ run-desktop: build
 	@SERVER_MODE=release ./opennexus --open
 
 # 单端口运行：先构建前端，再以 release 模式启动后端（前端 + API 同端口）
-# 用法: make run
+# 用法: make run          前台运行
+# 用法: make run BG=1     后台运行（日志: opennexus.log, 停止: make stop）
 run: build
+ifeq ($(BG),1)
+	@-lsof -ti:8080 | xargs kill -9 2>/dev/null || true
+	@echo "==> 后台启动 http://localhost:8080 (日志: opennexus.log)"
+	@SERVER_MODE=release nohup ./opennexus > opennexus.log 2>&1 & echo $$! > opennexus.pid
+	@sleep 1
+	@if kill -0 $$(cat opennexus.pid) 2>/dev/null; then \
+		echo "✅ 已后台启动 (PID: $$(cat opennexus.pid))"; \
+	else \
+		echo "❌ 启动失败，日志如下:"; tail -20 opennexus.log; rm -f opennexus.pid; exit 1; \
+	fi
+else
 	@echo "==> 单端口启动 http://localhost:8080"
 	@SERVER_MODE=release ./opennexus
+endif
 
 # 单端口后台运行：构建后以 release 模式后台启动，日志写入 opennexus.log
 # 用法: make run-bg   停止: make stop
@@ -124,6 +137,16 @@ stop:
 		rm -f opennexus.pid; \
 	else \
 		lsof -ti:8080 | xargs kill 2>/dev/null && echo "✅ 已停止 8080 端口进程" || echo "ℹ️  无运行中的服务"; \
+	fi
+
+# 查看后台进程日志（实时跟踪）
+# 用法: make logs
+logs:
+	@if [ -f opennexus.log ]; then \
+		echo "==> 实时日志 (Ctrl+C 退出):"; \
+		tail -f opennexus.log; \
+	else \
+		echo "ℹ️  未找到 opennexus.log，请先 make run BG=1 或 make run-bg"; \
 	fi
 
 # 生产环境发布构建：跨平台编译

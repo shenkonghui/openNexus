@@ -352,14 +352,16 @@ func main() {
 	// MCP 聚合网关：把全局 mcp.json 里的 http/sse 上游汇聚成单一 endpoint。
 	// 很多 ACP agent 不实现 session/new 的 mcpServers 参数，只能在其原生配置里手工配置；
 	// 有了网关，这种手工配置只需做一次，之后增删 MCP server 不必再改 agent 配置。
-	// 默认不主动启用（启用会改变所有会话的 MCP 注入方式），由设置页显式开启；
-	// 这里只做启动自愈：条目已存在时刷新其 url 与 token。
+	// 默认主动启用：启动时自动把网关条目写入 mcp.json，此后所有会话的 MCP 注入走网关。
+	// 尚无 MCP Token 时 EnableEntry 返回错误，跳过（不影响主服务启动）。
 	mcpGateway, err := gatewaymcp.New(cfg.Agents.MCP.ConfigPath, gatewaymcp.NewDBAuthenticator(noteSettingsRepo), "")
 	if err != nil {
 		log.Fatalf("创建 MCP 网关失败: %v", err)
 	}
 	mcpGateway.SetPublicBaseURL(publicBase)
-	mcpGateway.SyncEntry()
+	if err := mcpGateway.EnableEntry(); err != nil {
+		log.Printf("MCP 网关默认启用失败（不影响主服务）: %v", err)
+	}
 	defer mcpGateway.Close()
 
 	// 默认启用网关：把网关 endpoint + 共享 token 注入 acpSvc，

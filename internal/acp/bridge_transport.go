@@ -59,7 +59,7 @@ func bridgeSocketName(poolKey string) string {
 // bridgeTransport 通过 UDS 连接常驻 acp-bridge 守护进程（agent 挂在 bridge 下）。
 type bridgeTransport struct {
 	conn       net.Conn
-	pid        int    // bridge 守护进程 PID（同时是进程组 PGID）
+	pid        int // bridge 守护进程 PID（同时是进程组 PGID）
 	socketPath string
 	reused     bool // true=拨号复用已存在的 bridge（主 server 重启场景）
 	agentName  string
@@ -224,13 +224,27 @@ func (t *bridgeTransport) InspectFailure() string {
 }
 
 // bridgeLogTail 读取 bridge 日志尾部（最多 bridgeLogTailLimit 字节）。
+// 共享日志文件可能较大，用 Seek 避免全量读取。
 func bridgeLogTail(socketPath string) string {
-	data, err := os.ReadFile(BridgeLogFile(socketPath))
+	f, err := os.Open(BridgeLogFile(socketPath))
 	if err != nil {
 		return ""
 	}
-	if len(data) > bridgeLogTailLimit {
-		data = data[len(data)-bridgeLogTailLimit:]
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		return ""
+	}
+	size := fi.Size()
+	skip := size - int64(bridgeLogTailLimit)
+	if skip > 0 {
+		if _, err := f.Seek(skip, io.SeekStart); err != nil {
+			return ""
+		}
+	}
+	data, err := io.ReadAll(f)
+	if err != nil {
+		return ""
 	}
 	return strings.TrimSpace(string(data))
 }

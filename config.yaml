@@ -90,7 +90,7 @@ agents:
     # 设为 false 回退为 agent 内部执行（仅聊天流展示摘要）。
     terminal_enabled: true
 permissions:
-    mode: yolo
+    mode: normal
     allow: []
     ask: []
     deny: []
