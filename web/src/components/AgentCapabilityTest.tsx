@@ -1,8 +1,8 @@
 import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
-import { CheckCircle2, XCircle, AlertTriangle, MinusCircle, CircleDashed, FlaskConical, Zap, ChevronDown, ChevronRight } from 'lucide-react'
-import { runCapabilityTest, getLastCapabilityTest } from '../api/agents'
-import type { Agent, CapabilityTestReport, CapabilityTestItem } from '../types'
+import { CheckCircle2, XCircle, AlertTriangle, MinusCircle, CircleDashed, FlaskConical, Zap, ChevronDown, ChevronRight, Layers } from 'lucide-react'
+import { runCapabilityTest, getLastCapabilityTest, runCapabilityTestAll } from '../api/agents'
+import type { Agent, CapabilityTestReport, CapabilityTestItem, CapabilityTestBatchResult } from '../types'
 import LoadingSpinner from './LoadingSpinner'
 import styles from './AgentCapabilityTest.module.css'
 
@@ -30,10 +30,34 @@ function StatusBadge({ status }: { status: string }) {
   )
 }
 
+/** 紧凑状态圆点（表格单元格用，仅图标 + title） */
+function StatusDot({ status }: { status: string }) {
+  const { t } = useTranslation()
+  const map: Record<string, string> = {
+    passed: styles.stPassed,
+    failed: styles.stFailed,
+    partial: styles.stPartial,
+    injected: styles.stInjected,
+    skipped: styles.stSkipped,
+    error: styles.stFailed,
+  }
+  const cls = map[status] || styles.stFailed
+  return (
+    <span className={`${styles.dot} ${cls}`} title={t(`capTest.status.${status}`, status)}>
+      {status === 'passed' && <CheckCircle2 size={16} />}
+      {(status === 'failed' || status === 'error') && <XCircle size={16} />}
+      {status === 'partial' && <AlertTriangle size={16} />}
+      {status === 'injected' && <CircleDashed size={16} />}
+      {status === 'skipped' && <MinusCircle size={16} />}
+    </span>
+  )
+}
+
 /**
  * Agent 能力接入测试：验证指定 agent（acp-server）能否识别 openNexus 注入的
  * rule（Meta.systemPrompt）、skill（AdditionalDirectories）与 MCP server。
  * 两级验证：静态检查（秒级）与端到端行为测试（临时会话 + 验证 prompt，真实消耗一次调用）。
+ * 支持一键并行测试全部已接入 agent。
  */
 export default function AgentCapabilityTest({ agents }: Props) {
   const { t } = useTranslation()
@@ -42,6 +66,8 @@ export default function AgentCapabilityTest({ agents }: Props) {
   const [running, setRunning] = useState<'static' | 'e2e' | null>(null)
   const [error, setError] = useState('')
   const [showRaw, setShowRaw] = useState(false)
+  const [batchResult, setBatchResult] = useState<CapabilityTestBatchResult | null>(null)
+  const [runningAll, setRunningAll] = useState(false)
 
   useEffect(() => {
     if (!agentType && agents.length > 0) setAgentType(agents[0].type)
@@ -62,7 +88,7 @@ export default function AgentCapabilityTest({ agents }: Props) {
   }, [agentType])
 
   async function run(e2e: boolean) {
-    if (!agentType || running) return
+    if (!agentType || running || runningAll) return
     if (e2e && !window.confirm(t('capTest.e2eConfirm'))) return
     setRunning(e2e ? 'e2e' : 'static')
     setError('')
@@ -76,43 +102,125 @@ export default function AgentCapabilityTest({ agents }: Props) {
     }
   }
 
+  async function runAll(e2e: boolean) {
+    if (running || runningAll) return
+    if (e2e && !window.confirm(t('capTest.e2eAllConfirm'))) return
+    setRunningAll(true)
+    setError('')
+    try {
+      const resp = await runCapabilityTestAll(e2e)
+      setBatchResult(resp.data)
+      // 当前选中的 agent 若在结果中，同步更新详情面板
+      const mine = resp.data.reports.find((r) => r.agent_type === agentType)
+      if (mine) setReport(mine)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setRunningAll(false)
+    }
+  }
+
   const itemLabel = (item: CapabilityTestItem) => t(`capTest.item.${item.id}`, item.id)
+  const itemStatus = (rep: CapabilityTestReport, id: string) =>
+    rep.items?.find((it) => it.id === id)?.status || 'error'
+  const agentName = (type: string) => agents.find((a) => a.type === type)?.display_name || type
+
+  const busy = !!running || runningAll
 
   return (
     <div className={styles.wrap}>
+      {/* 单 agent 测试工具栏 */}
       <div className={styles.toolbar}>
         <select
           className={styles.agentSelect}
           value={agentType}
           onChange={(e) => setAgentType(e.target.value)}
-          disabled={!!running}
+          disabled={busy}
         >
           {agents.map((a) => (
             <option key={a.type} value={a.type}>{a.display_name || a.type}</option>
           ))}
         </select>
-        <button type="button" className={styles.btn} onClick={() => void run(false)} disabled={!agentType || !!running}>
+        <button type="button" className={styles.btn} onClick={() => void run(false)} disabled={!agentType || busy}>
           <Zap size={13} />
           {running === 'static' ? t('capTest.running') : t('capTest.runStatic')}
         </button>
-        <button type="button" className={`${styles.btn} ${styles.btnPrimary}`} onClick={() => void run(true)} disabled={!agentType || !!running}>
+        <button type="button" className={`${styles.btn} ${styles.btnPrimary}`} onClick={() => void run(true)} disabled={!agentType || busy}>
           <FlaskConical size={13} />
           {running === 'e2e' ? t('capTest.running') : t('capTest.runE2E')}
         </button>
       </div>
 
-      {running && (
+      {/* 一键测试全部 */}
+      <div className={styles.batchBar}>
+        <button
+          type="button"
+          className={`${styles.btn} ${styles.btnBatch}`}
+          onClick={() => void runAll(true)}
+          disabled={busy || agents.length === 0}
+        >
+          <Layers size={14} />
+          {runningAll ? t('capTest.runningAll') : t('capTest.runAllE2E')}
+        </button>
+        {agents.length > 0 && (
+          <span className={styles.batchHint}>
+            {t('capTest.runAllHint', { count: agents.length })}
+          </span>
+        )}
+      </div>
+
+      {busy && (
         <div className={styles.progress}>
           <LoadingSpinner />
-          <span>{running === 'e2e' ? t('capTest.e2eProgress') : t('capTest.staticProgress')}</span>
+          <span>{runningAll ? t('capTest.allProgress') : (running === 'e2e' ? t('capTest.e2eProgress') : t('capTest.staticProgress'))}</span>
         </div>
       )}
       {error && <div className={styles.error}>{error}</div>}
 
-      {report && !running && (
+      {/* 批量对比表格 */}
+      {batchResult && !runningAll && (
+        <div className={styles.batchResult}>
+          <div className={styles.reportMeta}>
+            <span className={styles.modeBadge}>{batchResult.e2e ? t('capTest.modeE2E') : t('capTest.modeStatic')}</span>
+            <span>{new Date(batchResult.tested_at).toLocaleString()}</span>
+            <span>{(batchResult.duration_ms / 1000).toFixed(1)}s</span>
+            <span>{batchResult.total} agents</span>
+          </div>
+          <table className={styles.batchTable}>
+            <thead>
+              <tr>
+                <th>{t('capTest.colAgent')}</th>
+                <th>RULE</th>
+                <th>SKILL</th>
+                <th>MCP</th>
+                <th>{t('capTest.colDuration')}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {batchResult.reports.map((rep) => (
+                <tr
+                  key={rep.agent_type}
+                  className={rep.agent_type === agentType ? styles.rowActive : styles.rowClickable}
+                  onClick={() => setAgentType(rep.agent_type)}
+                >
+                  <td className={styles.colAgent}>{agentName(rep.agent_type)}</td>
+                  <td className={styles.colDot}><StatusDot status={itemStatus(rep, 'rule')} /></td>
+                  <td className={styles.colDot}><StatusDot status={itemStatus(rep, 'skill')} /></td>
+                  <td className={styles.colDot}><StatusDot status={itemStatus(rep, 'mcp')} /></td>
+                  <td className={styles.colDur}>{(rep.duration_ms / 1000).toFixed(1)}s</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* 单 agent 详情 */}
+      {report && !busy && (
         <div className={styles.report}>
           <div className={styles.reportMeta}>
             <span className={styles.modeBadge}>{report.mode === 'e2e' ? t('capTest.modeE2E') : t('capTest.modeStatic')}</span>
+            <span>{agentName(report.agent_type)}</span>
             <span>{new Date(report.tested_at).toLocaleString()}</span>
             <span>{(report.duration_ms / 1000).toFixed(1)}s</span>
           </div>
@@ -140,7 +248,7 @@ export default function AgentCapabilityTest({ agents }: Props) {
         </div>
       )}
 
-      {!report && !running && !error && (
+      {!report && !busy && !error && !batchResult && (
         <div className={styles.empty}>{t('capTest.empty')}</div>
       )}
     </div>

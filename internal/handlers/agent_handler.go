@@ -41,6 +41,7 @@ type AgentConfigProber interface {
 // AgentCapabilityTester 对指定 agent 类型执行 rule/skill/mcp 能力接入测试。
 type AgentCapabilityTester interface {
 	TestAgentCapabilities(ctx context.Context, agentType string, userID uint, e2e bool) (acplocal.CapabilityTestReport, error)
+	TestAllAgentCapabilities(ctx context.Context, userID uint, e2e bool) (acplocal.CapabilityTestBatchResult, error)
 	LastCapabilityTest(agentType string) (acplocal.CapabilityTestReport, bool)
 }
 
@@ -516,4 +517,28 @@ func (h *AgentHandler) LastCapabilityTest(c *gin.Context) {
 		return
 	}
 	Success(c, http.StatusOK, gin.H{"agent_type": agentType, "available": true, "report": report})
+}
+
+// CapabilityTestAll POST /api/v1/agents/capability-test-all — 对所有已接入 agent 并行执行能力接入测试。
+// body: {"e2e": true|false}；e2e=true 时每个 agent 创建临时会话并发送验证 prompt（并行，真实消耗）。
+func (h *AgentHandler) CapabilityTestAll(c *gin.Context) {
+	if h.capTester == nil {
+		Fail(c, http.StatusServiceUnavailable, "CAPTEST_UNAVAILABLE", "当前服务不支持能力测试")
+		return
+	}
+	uid, ok := currentUserID(c)
+	if !ok {
+		Fail(c, http.StatusUnauthorized, "UNAUTHORIZED", "未认证")
+		return
+	}
+	var req struct {
+		E2E bool `json:"e2e"`
+	}
+	_ = c.ShouldBindJSON(&req) // body 可省略，默认静态检查
+	result, err := h.capTester.TestAllAgentCapabilities(c.Request.Context(), uid, req.E2E)
+	if err != nil {
+		Fail(c, http.StatusInternalServerError, "CAPTEST_FAILED", err.Error())
+		return
+	}
+	Success(c, http.StatusOK, result)
 }

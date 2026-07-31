@@ -172,6 +172,14 @@ func (r *Router) LastCapabilityTest(agentType string) (acp.CapabilityTestReport,
 	return r.service.LastCapabilityTest(agentType)
 }
 
+// TestAllAgentCapabilities 对所有已接入 agent 并行执行能力接入测试，委托 service。
+func (r *Router) TestAllAgentCapabilities(ctx context.Context, userID uint, e2e bool) (acp.CapabilityTestBatchResult, error) {
+	if r.service == nil {
+		return acp.CapabilityTestBatchResult{}, errors.New("service 未配置")
+	}
+	return r.service.TestAllAgentCapabilities(ctx, userID, e2e)
+}
+
 // PreconnectAgent 异步预连接指定 agent 与工作目录，委托 service。
 func (r *Router) PreconnectAgent(agentType, cwd string) error {
 	if _, err := r.registry.Get(agentType); err != nil {

@@ -32,6 +32,15 @@ export interface CapabilityTestReport {
   error?: string;
 }
 
+// 批量能力测试结果（全部 agent 并行）
+export interface CapabilityTestBatchResult {
+  reports: CapabilityTestReport[];
+  total: number;
+  e2e: boolean;
+  tested_at: string;
+  duration_ms: number;
+}
+
 // Agent 连接状态（侧边栏展示用）
 export interface AgentStatus {
   agent_type: string;

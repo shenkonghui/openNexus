@@ -99,7 +99,8 @@ type Service struct {
 	probeLock        sync.Mutex // 缓存未命中时串行探测，避免并发重复建临时 session
 	// capTestReports 按 agentType 缓存最近一次能力接入测试报告（内存，重启失效）。
 	capTestReports map[string]CapabilityTestReport
-	capTestLock    sync.Mutex // 能力测试串行执行（临时会话 + 真实 prompt 开销大）
+	capTestLocks   map[string]*sync.Mutex // 按 agentType 串行，允许不同 agent 并行测试
+	capTestLocksMu sync.Mutex             // 保护 capTestLocks map 本身
 	mu               sync.RWMutex
 	wsConfig         config.WorkspaceConfig
 	skillUserDirs    []string
@@ -250,6 +251,7 @@ func NewService(db *gorm.DB, messagesDir string, wsConfig config.WorkspaceConfig
 		modes:                   make(map[string][]acp.SessionMode),
 		probeCache:              make(map[string][]acp.SessionConfigOption),
 		capTestReports:          make(map[string]CapabilityTestReport),
+		capTestLocks:            make(map[string]*sync.Mutex),
 		agentInitInfo:           make(map[string]acp.InitializeResponse),
 		agentCommands:           make(map[string][]acp.AvailableCommand),
 		agentModes:              make(map[string][]acp.SessionMode),

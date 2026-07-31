@@ -65,6 +65,8 @@ func Setup(authSvc *services.AuthService, jwtSvc *services.JWTService, agentRout
 			// rule/skill/mcp 能力接入测试（静态 + 端到端）与最近一次报告
 			protected.POST("/agents/:type/capability-test", agentH.CapabilityTest)
 			protected.GET("/agents/:type/capability-test", agentH.LastCapabilityTest)
+			// 一键并行测试全部已接入 agent
+			protected.POST("/agents/capability-test-all", agentH.CapabilityTestAll)
 
 			agentCfg := protected.Group("/agent-configs")
 			{

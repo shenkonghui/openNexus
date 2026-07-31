@@ -8,7 +8,9 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/coder/acp-go-sdk"
@@ -156,9 +158,10 @@ func (s *Service) TestAgentCapabilities(ctx context.Context, agentType string, u
 	if _, err := s.GetBackend(agentType); err != nil {
 		return CapabilityTestReport{}, err
 	}
-	// 串行执行：临时会话 + 真实 prompt 开销大，避免并发重复测试同一 agent。
-	s.capTestLock.Lock()
-	defer s.capTestLock.Unlock()
+	// 按 agentType 串行：避免并发重复测试同一 agent，但允许不同 agent 并行测试。
+	mu := s.lockForCapTest(agentType)
+	mu.Lock()
+	defer mu.Unlock()
 
 	start := time.Now()
 	report := CapabilityTestReport{AgentType: agentType, Mode: "static", TestedAt: start}
@@ -322,4 +325,80 @@ func (s *Service) LastCapabilityTest(agentType string) (CapabilityTestReport, bo
 	defer s.mu.RUnlock()
 	rep, ok := s.capTestReports[agentType]
 	return rep, ok
+}
+
+// lockForCapTest 获取（或懒创建）指定 agentType 的串行锁，允许不同 agent 并行测试。
+func (s *Service) lockForCapTest(agentType string) *sync.Mutex {
+	s.capTestLocksMu.Lock()
+	defer s.capTestLocksMu.Unlock()
+	mu, ok := s.capTestLocks[agentType]
+	if !ok {
+		mu = &sync.Mutex{}
+		s.capTestLocks[agentType] = mu
+	}
+	return mu
+}
+
+// CapabilityTestBatchResult 是一次批量能力测试（全部 agent）的聚合报告。
+type CapabilityTestBatchResult struct {
+	Reports    []CapabilityTestReport `json:"reports"`
+	Total      int                    `json:"total"`
+	E2E        bool                   `json:"e2e"`
+	TestedAt   time.Time              `json:"tested_at"`
+	DurationMs int64                  `json:"duration_ms"`
+}
+
+// TestAllAgentCapabilities 对所有已接入的 agent 并行执行能力接入测试。
+// 每个 agent 独立并行（per-agentType 锁），单个失败不影响其余。
+// 结果同时写入各 agent 的内存缓存。
+func (s *Service) TestAllAgentCapabilities(ctx context.Context, userID uint, e2e bool) (CapabilityTestBatchResult, error) {
+	// 收集全部已注册 agentType（排序保证顺序稳定）。
+	s.mu.RLock()
+	names := make([]string, 0, len(s.backends))
+	for name := range s.backends {
+		names = append(names, name)
+	}
+	s.mu.RUnlock()
+	sort.Strings(names)
+
+	start := time.Now()
+	reports := make([]CapabilityTestReport, len(names))
+	var wg sync.WaitGroup
+	for i, name := range names {
+		wg.Add(1)
+		go func(idx int, agentType string) {
+			defer wg.Done()
+			// TestAgentCapabilities 内部对 error 已封装为 report（fail 函数返回 nil error），
+			// 仅 agentType 不存在才返回非 nil error——批量场景 names 来自 backends，不会触发。
+			rep, err := s.TestAgentCapabilities(ctx, agentType, userID, e2e)
+			if err != nil {
+				rep = CapabilityTestReport{AgentType: agentType, Mode: modeStr(e2e), TestedAt: time.Now(),
+					Error: err.Error(),
+					Items: []CapabilityTestItem{
+						{ID: "rule", Status: CapTestError, Detail: err.Error()},
+						{ID: "skill", Status: CapTestError, Detail: err.Error()},
+						{ID: "mcp", Status: CapTestError, Detail: err.Error()},
+					}}
+			}
+			reports[idx] = rep
+		}(i, name)
+	}
+	wg.Wait()
+
+	slog.Info("批量能力测试完成", "count", len(names), "e2e", e2e, "elapsed", time.Since(start).String())
+	return CapabilityTestBatchResult{
+		Reports:    reports,
+		Total:      len(names),
+		E2E:        e2e,
+		TestedAt:   start,
+		DurationMs: time.Since(start).Milliseconds(),
+	}, nil
+}
+
+// modeStr 返回测试模式字符串。
+func modeStr(e2e bool) string {
+	if e2e {
+		return "e2e"
+	}
+	return "static"
 }
