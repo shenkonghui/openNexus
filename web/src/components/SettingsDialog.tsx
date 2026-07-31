@@ -125,6 +125,9 @@ export default function SettingsDialog({ initialTab = 'language', onClose }: Pro
   const [permAllow, setPermAllow] = useState('')
   const [permAsk, setPermAsk] = useState('')
   const [permDeny, setPermDeny] = useState('')
+  // 全局沙箱开关（config.yaml sandbox 段，随权限规则一起保存）
+  const [sandboxEnabled, setSandboxEnabled] = useState(false)
+  const [sandboxMode, setSandboxMode] = useState<'auto' | 'enforce'>('auto')
   const [permSaving, setPermSaving] = useState(false)
   const [permSaved, setPermSaved] = useState(false)
   // agent+模型 合并下拉的显示过滤正则（config.yaml agents.selector.filters，每行一条）
@@ -273,6 +276,8 @@ export default function SettingsDialog({ initialTab = 'language', onClose }: Pro
       setPermAllow((ps.allow || []).join('\n'))
       setPermAsk((ps.ask || []).join('\n'))
       setPermDeny((ps.deny || []).join('\n'))
+      setSandboxEnabled(!!ps.sandbox?.enabled)
+      setSandboxMode(ps.sandbox?.mode === 'enforce' ? 'enforce' : 'auto')
     } catch (err) {
       setError(err instanceof Error ? err.message : t('settings.loadFailed'))
     } finally { setLoading(false) }
@@ -599,12 +604,15 @@ export default function SettingsDialog({ initialTab = 'language', onClose }: Pro
         allow: linesToList(permAllow),
         ask: linesToList(permAsk),
         deny: linesToList(permDeny),
+        sandbox: { enabled: sandboxEnabled, mode: sandboxMode },
       }
       const resp = await updatePermissionSettings(payload)
       setPermMode(resp.data.mode === 'yolo' ? 'yolo' : 'normal')
       setPermAllow((resp.data.allow || []).join('\n'))
       setPermAsk((resp.data.ask || []).join('\n'))
       setPermDeny((resp.data.deny || []).join('\n'))
+      setSandboxEnabled(!!resp.data.sandbox?.enabled)
+      setSandboxMode(resp.data.sandbox?.mode === 'enforce' ? 'enforce' : 'auto')
       setPermSaved(true)
     } catch (err) {
       setError(err instanceof Error ? err.message : t('common.failed'))
@@ -1382,6 +1390,33 @@ export default function SettingsDialog({ initialTab = 'language', onClose }: Pro
               {tab === 'permission' && (
                 <>
                   <p className={styles.hint}>{t('settings.permissionHint')}</p>
+
+                  <div className={styles.defaultSection}>
+                    <label className={styles.label}>
+                      <input
+                        type="checkbox"
+                        checked={sandboxEnabled}
+                        onChange={(e) => setSandboxEnabled(e.target.checked)}
+                        style={{ marginRight: 8, verticalAlign: 'middle' }}
+                      />
+                      {t('settings.sandboxEnabled')}
+                    </label>
+                    <p className={styles.sectionHint}>{t('settings.sandboxEnabledHint')}</p>
+                    {sandboxEnabled && (
+                      <div style={{ marginTop: 8 }}>
+                        <label className={styles.label}>{t('settings.sandboxMode')}</label>
+                        <select
+                          className={styles.input}
+                          value={sandboxMode}
+                          onChange={(e) => setSandboxMode(e.target.value === 'enforce' ? 'enforce' : 'auto')}
+                        >
+                          <option value="auto">{t('settings.sandboxModeAuto')}</option>
+                          <option value="enforce">{t('settings.sandboxModeEnforce')}</option>
+                        </select>
+                        <p className={styles.sectionHint}>{t('settings.sandboxModeHint')}</p>
+                      </div>
+                    )}
+                  </div>
 
                   <div className={styles.defaultSection}>
                     <label className={styles.label}>{t('settings.permissionAllow')}</label>

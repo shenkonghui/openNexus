@@ -322,6 +322,15 @@ export interface PermissionSettings {
   allow: string[];
   ask: string[];
   deny: string[];
+  // 全局沙箱开关（config.yaml sandbox 段）；PUT 缺省时后端保留现值
+  sandbox?: SandboxSettings;
+}
+
+// 全局沙箱：agent 进程 OS 级隔离（文件系统只读 + 写白名单 + 凭证剥离）。
+// mode=auto 平台不支持时降级直通；enforce 不支持则拒绝启动 agent。
+export interface SandboxSettings {
+  enabled: boolean;
+  mode: 'auto' | 'enforce';
 }
 
 // ===== 日志查看器 =====

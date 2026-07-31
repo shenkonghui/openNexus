@@ -18,22 +18,81 @@ const (
 	DecisionDeny
 )
 
-// DefaultDenyRules 是内置默认黑名单：外发不可逆操作（代码推送/镜像推送/远端改写）。
+// DefaultDenyRules 是内置默认黑名单：外发不可逆操作与系统级破坏，命中即自动拒绝。
 // 与用户配置的 deny 合并生效；用户可在配置中写 "!规则原文" 显式移除某条默认规则。
+// 规则为大小写不敏感的 `*` 子串通配，按 agent 上报的工具调用标题匹配。
 var DefaultDenyRules = []string{
+	// —— 远端推送 / 发布（外发不可逆）——
 	"*git push*",
+	"*git remote set-url*",
 	"*docker push*",
 	"*docker login*",
 	"*crane push*",
 	"*skopeo copy*",
 	"*helm push*",
-	"*git remote set-url*",
+	"*npm publish*",
+	// —— 本地 Git 历史/工作区不可逆改写（丢失已提交或未提交内容）——
+	"*git reset --hard*",
+	"*git clean -f*",
+	"*git checkout -f*",
+	"*git checkout --force*",
+	"*git branch -D*",
+	"*git filter-branch*",
+	// —— 系统级破坏 / 重启关机 ——
+	"*reboot*",
+	"*shutdown*",
+	"*poweroff*",
+	"*halt*",
+	"*init 0*",
+	"*init 6*",
+	"*mkfs*",
+	"*fdisk*",
+	"*dd if=*",
+	// —— 灾难性删除（针对根/家目录的强制递归删除；相对路径删除见 Ask 名单）——
+	"*rm -rf /*",
+	"*rm -fr /*",
+	"*rm -rf ~*",
+	"*rm -rf --no-preserve-root*",
 }
 
-// DefaultAskRules 是内置默认询问名单：本地可逆但需留痕的操作。
+// DefaultAskRules 是内置默认询问名单：本地可逆但需留痕/确认的操作。
 // 沙箱开启时由调用方跳过（环境已兜底，避免打断全自动流程）。
 var DefaultAskRules = []string{
+	// —— Git 需留痕的写操作 ——
 	"*git commit*",
+	"*git merge*",
+	"*git rebase*",
+	"*git tag*",
+	"*git stash*",
+	// —— 提权 / 远端访问 ——
+	"*sudo *",
+	"*ssh *",
+	"*scp *",
+	"*sftp *",
+	// —— 强制递归删除（非根目录）/ 批量改权限 ——
+	"*rm -rf*",
+	"*rm -fr*",
+	"*chmod -R*",
+	"*chown -R*",
+	// —— 集群变更 ——
+	"*kubectl delete*",
+	"*kubectl apply*",
+}
+
+// DefaultAllowRules 是内置默认白名单：只读/无副作用的常用命令，命中即自动放行（免打断）。
+// 与用户配置的 allow 合并生效；由于 deny 优先级最高，含破坏性子命令（如 "git branch -D"）
+// 仍会被 deny 拦截，白名单的宽松通配（如 "*git branch*"）不会放开它们。
+var DefaultAllowRules = []string{
+	"*git status*",
+	"*git diff*",
+	"*git log*",
+	"*git show*",
+	"*git branch*",
+	"*git fetch*",
+	"*git remote -v*",
+	"*ls *",
+	"*pwd*",
+	"*cat *",
 }
 
 // MergeRuleDefaults 合并内置默认名单与用户规则：

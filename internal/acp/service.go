@@ -555,7 +555,7 @@ func (s *Service) applyRulesToAllConnections() {
 // ApplyPermissions 用给定的权限规则更新生效规则并下发到所有连接的 broker。
 // 规则来自 config.yaml 的 permissions 段：启动时下发一次（须在预连接前，使新连接建连即拿到规则），
 // 设置页保存后再次调用热更新。mode 为空/非法时兜底 normal。
-// 生效规则 = 内置默认名单（DefaultDenyRules/DefaultAskRules）与用户规则合并；
+// 生效规则 = 内置默认名单（DefaultAllowRules/DefaultAskRules/DefaultDenyRules）与用户规则合并；
 // 用户可用 "!规则原文" 移除某条默认规则；沙箱开启时跳过默认 Ask 名单。
 func (s *Service) ApplyPermissions(mode string, allow, ask, deny []string) {
 	if mode != config.PermissionModeNormal && mode != config.PermissionModeYolo {
@@ -573,7 +573,7 @@ func (s *Service) ApplyPermissions(mode string, allow, ask, deny []string) {
 	}
 	s.activePermRules.Store(&PermissionRules{
 		Mode:  mode,
-		Allow: cleanRules(allow),
+		Allow: MergeRuleDefaults(DefaultAllowRules, allow),
 		Ask:   MergeRuleDefaults(defaultAsk, ask),
 		Deny:  MergeRuleDefaults(DefaultDenyRules, deny),
 	})

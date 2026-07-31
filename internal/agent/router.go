@@ -531,6 +531,15 @@ func (r *Router) ApplyPermissions(mode string, allow, ask, deny []string) {
 	r.service.ApplyPermissions(mode, allow, ask, deny)
 }
 
+// ApplySandbox 热更新全局沙箱开关：更新 spawn 点包裹设置与权限层默认名单合并策略。
+// 仅对之后新 spawn 的 agent 进程生效，存量进程需重建连接。
+func (r *Router) ApplySandbox(enabled bool, mode string) {
+	acp.SetSandboxSettings(acp.SandboxSettings{Enabled: enabled, Mode: mode})
+	if r.service != nil {
+		r.service.SetSandboxActive(enabled)
+	}
+}
+
 // CurrentPermissions 返回当前生效的权限规则（供设置页读取）。
 func (r *Router) CurrentPermissions() (mode string, allow, ask, deny []string) {
 	if r.service == nil {
