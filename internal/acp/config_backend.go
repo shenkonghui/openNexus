@@ -83,6 +83,37 @@ func (b *ConfigBackend) Env() []string {
 	return envs
 }
 
+// ConfigDirs 实现 ConfigDirsProvider：返回沙箱模式下 agent 自身需要读写的
+// 配置/登录态目录。优先取 AgentConfig.ConfigDirs（JSON []string，支持 ~ 前缀），
+// 未配置时回退按类型名推导的默认目录。
+func (b *ConfigBackend) ConfigDirs() []string {
+	if b.cfg.ConfigDirs != "" {
+		var dirs []string
+		if err := json.Unmarshal([]byte(b.cfg.ConfigDirs), &dirs); err == nil && len(dirs) > 0 {
+			return expandHomeDirs(dirs)
+		}
+	}
+	return defaultAgentConfigDirs(b.cfg.Type)
+}
+
+// expandHomeDirs 展开路径中的 ~/ 前缀为用户主目录。
+func expandHomeDirs(dirs []string) []string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return dirs
+	}
+	out := make([]string, 0, len(dirs))
+	for _, d := range dirs {
+		if d == "~" {
+			d = home
+		} else if strings.HasPrefix(d, "~/") {
+			d = filepath.Join(home, d[2:])
+		}
+		out = append(out, d)
+	}
+	return out
+}
+
 func (b *ConfigBackend) Timeout() time.Duration {
 	if b.cfg.Timeout == "" {
 		return 300 * time.Second

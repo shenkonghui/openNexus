@@ -102,6 +102,8 @@ var orphanACPKeywords = []string{
 
 // isOrphanACPCommandLine 判断命令行是否匹配 acp 孤儿特征（带 --acp 的 agent，
 // 或 acp-bridge 守护进程——杀其进程组可一并回收挂在其下的 agent）。
+// 沙箱模式下 wrapper（sandbox-exec/bwrap）的命令行包含完整内层 argv，
+// 子串匹配不依赖 argv[0]，天然覆盖沙箱前缀场景。
 func isOrphanACPCommandLine(cmdline string) bool {
 	if strings.Contains(cmdline, "acp-bridge") && strings.Contains(cmdline, "--socket") {
 		return true

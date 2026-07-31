@@ -80,11 +80,34 @@ func NewProcess(backend Backend, workDir string) (*Process, error) {
 	}
 	command = resolved
 
-	cmd := exec.Command(command, args...)
+	// 沙箱包裹：与 agent 类型无关，stdio 原样透传（ACP 协议无感知）。
+	// enforce 模式下沙箱不可用则拒绝启动；auto 模式降级直通并告警。
+	argv := append([]string{command}, args...)
+	sandboxed := false
+	if sb := CurrentSandboxSettings(); sb.Enabled {
+		wrapped, degraded := SandboxWrap(argv, BuildSandboxProfile(backend, workDir))
+		switch {
+		case !degraded:
+			argv = wrapped
+			sandboxed = true
+		case sb.Mode == SandboxModeEnforce:
+			return nil, fmt.Errorf("启动 agent 进程 %s：沙箱模式为 enforce 但当前平台沙箱不可用（缺少 sandbox-exec/bwrap）", backend.Name())
+		default:
+			logSandboxDegraded(backend.Name())
+		}
+	}
+
+	cmd := exec.Command(argv[0], argv[1:]...)
 	if workDir != "" {
 		cmd.Dir = workDir
 	}
-	cmd.Env = append(cmd.Environ(), backend.Env()...)
+	// 沙箱开启时剥离凭证类环境变量（DOCKER_/AWS_/KUBECONFIG 等），
+	// backend.Env() 声明的 API Key 等在净化后追加，显式透传。
+	baseEnv := cmd.Environ()
+	if sandboxed {
+		baseEnv = SanitizeEnvForSandbox(baseEnv)
+	}
+	cmd.Env = append(baseEnv, backend.Env()...)
 	// 设置独立进程组，便于 Stop() 时按 PGID 一并终止孙进程
 	// （npm exec / cursor-agent / codebuddy 等会派生子进程，否则会变成孤儿）。
 	setProcessGroup(cmd)

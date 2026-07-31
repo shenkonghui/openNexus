@@ -18,6 +18,58 @@ const (
 	DecisionDeny
 )
 
+// DefaultDenyRules 是内置默认黑名单：外发不可逆操作（代码推送/镜像推送/远端改写）。
+// 与用户配置的 deny 合并生效；用户可在配置中写 "!规则原文" 显式移除某条默认规则。
+var DefaultDenyRules = []string{
+	"*git push*",
+	"*docker push*",
+	"*docker login*",
+	"*crane push*",
+	"*skopeo copy*",
+	"*helm push*",
+	"*git remote set-url*",
+}
+
+// DefaultAskRules 是内置默认询问名单：本地可逆但需留痕的操作。
+// 沙箱开启时由调用方跳过（环境已兜底，避免打断全自动流程）。
+var DefaultAskRules = []string{
+	"*git commit*",
+}
+
+// MergeRuleDefaults 合并内置默认名单与用户规则：
+//   - 用户规则中以 `!` 开头的条目表示移除同文默认规则（大小写不敏感），本身不进入结果；
+//   - 其余用户规则追加在默认规则之后，重复项（大小写不敏感）去重。
+func MergeRuleDefaults(defaults, user []string) []string {
+	removed := make(map[string]bool)
+	for _, r := range user {
+		r = strings.TrimSpace(r)
+		if strings.HasPrefix(r, "!") {
+			removed[strings.ToLower(strings.TrimSpace(r[1:]))] = true
+		}
+	}
+	seen := make(map[string]bool)
+	out := make([]string, 0, len(defaults)+len(user))
+	appendRule := func(r string) {
+		r = strings.TrimSpace(r)
+		key := strings.ToLower(r)
+		if r == "" || strings.HasPrefix(r, "!") || removed[key] || seen[key] {
+			return
+		}
+		seen[key] = true
+		out = append(out, r)
+	}
+	for _, r := range defaults {
+		appendRule(r)
+	}
+	for _, r := range user {
+		appendRule(r)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
 // PermissionRules 是生效中的全局权限规则（从 config.PermissionsConfig 构造）。
 // 规则按 agent 上报的 ToolCall.Title 匹配，支持 `*` 通配符，大小写不敏感。
 // 白/询问/黑名单全局生效；YOLO = 全局 Mode=yolo 或会话级开关。
@@ -85,6 +137,17 @@ func anyMatch(rules []string, title string) bool {
 		}
 	}
 	return false
+}
+
+// MatchDeny 返回 title 命中的第一条 deny 规则原文；未命中返回空串。
+// 供 TerminalBridge 等执行层在 spawn 前做确定性拒绝（并把规则原文回显给 agent）。
+func (r PermissionRules) MatchDeny(title string) string {
+	for _, rule := range r.Deny {
+		if matchGlob(rule, title) {
+			return rule
+		}
+	}
+	return ""
 }
 
 // Decide 根据工具调用标题与 YOLO（全局 Mode 或会话开关）返回裁决。

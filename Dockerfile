@@ -43,10 +43,10 @@ RUN sed -i 's#deb.debian.org#mirrors.aliyun.com#g' /etc/apt/sources.list.d/debia
     sed -i 's#deb.debian.org#mirrors.aliyun.com#g' /etc/apt/sources.list 2>/dev/null || true
 
 # 安装运行时依赖：bash（部分 agent / 脚本依赖 bash）、sqlite、ca-cert、git、
-# wget（HEALTHCHECK 使用）、tzdata（时区）
+# wget（HEALTHCHECK 使用）、tzdata（时区）、bubblewrap（agent OS 沙箱，sandbox.enabled 时使用）
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-        bash ca-certificates libsqlite3-0 git wget tzdata \
+        bash ca-certificates libsqlite3-0 git wget tzdata bubblewrap \
     && ln -sf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime \
     && echo "Asia/Shanghai" > /etc/timezone \
     && rm -rf /var/lib/apt/lists/*

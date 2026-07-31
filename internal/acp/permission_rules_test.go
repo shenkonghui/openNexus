@@ -145,3 +145,31 @@ func TestPermissionModeConstants(t *testing.T) {
 		t.Errorf("权限模式常量取值异常: normal=%q yolo=%q", config.PermissionModeNormal, config.PermissionModeYolo)
 	}
 }
+
+func TestMergeRuleDefaults_AppendRemoveDedup(t *testing.T) {
+	defaults := []string{"*git push*", "*docker push*"}
+	user := []string{"!*docker push*", "*helm push*", "*GIT PUSH*", ""}
+	got := MergeRuleDefaults(defaults, user)
+	want := []string{"*git push*", "*helm push*"}
+	if len(got) != len(want) {
+		t.Fatalf("合并结果不符: got=%v want=%v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("合并结果不符: got=%v want=%v", got, want)
+		}
+	}
+	if MergeRuleDefaults(nil, []string{"!x", " "}) != nil {
+		t.Fatalf("全部移除/空白时应返回 nil")
+	}
+}
+
+func TestMatchDeny_ReturnsRuleText(t *testing.T) {
+	r := PermissionRules{Deny: []string{"*docker push*", "*git push*"}}
+	if got := r.MatchDeny("git push origin main"); got != "*git push*" {
+		t.Fatalf("应返回命中的规则原文, got=%q", got)
+	}
+	if got := r.MatchDeny("git status"); got != "" {
+		t.Fatalf("未命中应返回空串, got=%q", got)
+	}
+}

@@ -14,6 +14,7 @@ type AgentConfig struct {
 	Env         string    `gorm:"type:text" json:"env"`   // JSON 编码的 map[string]string，启动 agent 进程时注入（如 HTTPS_PROXY 等代理变量）
 	APIKeyEnv   string    `gorm:"size:64" json:"api_key_env"`
 	Timeout     string    `gorm:"size:32" json:"timeout"` // time.Duration 字符串，如 "300s"
+	ConfigDirs  string    `gorm:"type:text" json:"config_dirs"` // JSON 编码的 []string，沙箱模式下 agent 配置/登录态可写目录（支持 ~ 前缀）
 	Enabled     *bool     `gorm:"not null;default:false" json:"enabled"`
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`

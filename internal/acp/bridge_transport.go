@@ -125,8 +125,28 @@ func spawnBridgeDaemon(backend Backend, workDir, socketPath string) (int, error)
 
 	args := []string{"acp-bridge", "--socket", socketPath, "--cwd", workDir, "--", resolved}
 	args = append(args, backend.Args()...)
-	cmd := exec.Command(exe, args...)
-	cmd.Env = append(cmd.Environ(), backend.Env()...)
+	argv := append([]string{exe}, args...)
+	// 沙箱包裹整条 bridge argv（bridge+agent 同沙箱）；socket 目录须可写
+	sandboxed := false
+	if sb := CurrentSandboxSettings(); sb.Enabled {
+		profile := BuildSandboxProfile(backend, workDir, filepath.Dir(socketPath))
+		wrapped, degraded := SandboxWrap(argv, profile)
+		switch {
+		case !degraded:
+			argv = wrapped
+			sandboxed = true
+		case sb.Mode == SandboxModeEnforce:
+			return 0, fmt.Errorf("沙箱模式为 enforce 但当前平台沙箱不可用，拒绝启动 agent %s", backend.Name())
+		default:
+			logSandboxDegraded(backend.Name())
+		}
+	}
+	cmd := exec.Command(argv[0], argv[1:]...)
+	baseEnv := cmd.Environ()
+	if sandboxed {
+		baseEnv = SanitizeEnvForSandbox(baseEnv)
+	}
+	cmd.Env = append(baseEnv, backend.Env()...)
 	setProcessGroup(cmd) // Setsid：独立会话，脱离主 server 与控制终端
 	if devNull, derr := os.OpenFile(os.DevNull, os.O_RDWR, 0); derr == nil {
 		cmd.Stdin = devNull

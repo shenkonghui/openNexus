@@ -23,6 +23,7 @@ type Config struct {
 	Agents      AgentsConfig      `yaml:"agents"`
 	Debug       DebugConfig       `yaml:"debug"`
 	Permissions PermissionsConfig `yaml:"permissions"`
+	Sandbox     SandboxConfig     `yaml:"sandbox"`
 }
 
 // 全局权限模式常量。
@@ -49,6 +50,29 @@ func (p *PermissionsConfig) normalize() {
 		mode = PermissionModeNormal
 	}
 	p.Mode = mode
+}
+
+// 沙箱降级模式常量。
+const (
+	SandboxModeAuto    = "auto"    // 平台沙箱不可用时降级直通（记告警）
+	SandboxModeEnforce = "enforce" // 平台沙箱不可用时拒绝启动 agent
+)
+
+// SandboxConfig 控制 agent 进程 OS 级沙箱（macOS sandbox-exec / Linux bwrap）：
+// 文件系统整体只读、仅工作区等白名单目录可写、剥离凭证类环境变量。
+// 开启后 agent 无需人工确认即可安全全自动运行。
+type SandboxConfig struct {
+	Enabled bool   `yaml:"enabled"`
+	Mode    string `yaml:"mode"` // auto（默认）| enforce
+}
+
+// normalize 校正沙箱模式（空或非法值兜底为 auto）。
+func (s *SandboxConfig) normalize() {
+	mode := strings.TrimSpace(s.Mode)
+	if mode != SandboxModeAuto && mode != SandboxModeEnforce {
+		mode = SandboxModeAuto
+	}
+	s.Mode = mode
 }
 
 // DebugConfig 控制调试能力（如 ACP 协议报文捕获）。
@@ -388,6 +412,7 @@ func (c *Config) Validate() error {
 		return err
 	}
 	c.Permissions.normalize()
+	c.Sandbox.normalize()
 	return nil
 }
 

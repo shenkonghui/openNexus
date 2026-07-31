@@ -89,7 +89,70 @@ func CreateWorktree(repoPath, branch, destPath, base string) error {
 	// （主列表看不到任务、状态不一致）。这里在创建后无条件移除，保证 worktree 干净。
 	// 删除失败不阻断 worktree 创建（缺失这些文件不影响任务执行）。
 	removeTaskManagerRuntimeFiles(destPath)
+	// 安全加固：禁用 push、拦截 pre-push、注入兜底 git 身份。
+	// 仅作用于本 worktree（--worktree 作用域），不影响用户主仓库；失败仅告警不阻断。
+	hardenWorktree(destPath)
 	return nil
+}
+
+// disabledPushURL 是注入到 worktree 的伪 push 地址：协议不存在，push 必然失败，
+// fetch/pull 不受影响（fetch url 保持原样）。
+const disabledPushURL = "DISABLED://push-blocked-by-opennexus"
+
+// hardenWorktree 对新建 worktree 做安全加固（全自动 agent 执行的兜底防线）：
+//  1. 开启 extensions.worktreeConfig，使后续 git config --worktree 只落在
+//     worktree 私有配置（.git/worktrees/<name>/config.worktree），不污染共享仓库配置；
+//  2. 所有 remote 设置 pushurl=DISABLED://...，git push 必然失败；
+//  3. core.hooksPath 指向 worktree 私有 git dir 下的 hooks 目录，注入无条件失败的 pre-push
+//     （即使 pushurl 被 agent 改回也拦得住；--no-verify 不作用于 pre-push 之外的传输层）；
+//  4. 全局无 git 身份时注入兜底身份，保证容器/沙箱内 agent commit 不报错。
+//
+// 所有步骤 best-effort：失败仅记日志，不阻断 worktree 创建（老版本 git 或裸环境下降级）。
+func hardenWorktree(worktreeDir string) {
+	// extensions.worktreeConfig 必须写在共享配置（对仓库无行为影响，仅启用 worktree 级配置文件）
+	if err := runGit(worktreeDir, "config", "extensions.worktreeConfig", "true"); err != nil {
+		logWorktreeHarden("启用 worktreeConfig", err)
+		return
+	}
+	// 禁用所有 remote 的 push（worktree 级配置）
+	if out, err := exec.Command("git", "-C", worktreeDir, "remote").Output(); err == nil {
+		for _, remote := range strings.Fields(string(out)) {
+			if err := runGit(worktreeDir, "config", "--worktree", "remote."+remote+".pushurl", disabledPushURL); err != nil {
+				logWorktreeHarden("禁用 remote "+remote+" push", err)
+			}
+		}
+	}
+	// pre-push hook：写入 worktree 私有 git dir，避免污染工作区文件
+	if gitDir, err := exec.Command("git", "-C", worktreeDir, "rev-parse", "--absolute-git-dir").Output(); err == nil {
+		hooksDir := filepath.Join(strings.TrimSpace(string(gitDir)), "opennexus-hooks")
+		if err := writePrePushHook(hooksDir); err != nil {
+			logWorktreeHarden("写入 pre-push hook", err)
+		} else if err := runGit(worktreeDir, "config", "--worktree", "core.hooksPath", hooksDir); err != nil {
+			logWorktreeHarden("设置 core.hooksPath", err)
+		}
+	}
+	// 兜底 git 身份：仅在完全无身份时注入（不覆盖用户配置）
+	if exec.Command("git", "-C", worktreeDir, "config", "user.email").Run() != nil {
+		_ = runGit(worktreeDir, "config", "--worktree", "user.name", "opennexus-agent")
+		_ = runGit(worktreeDir, "config", "--worktree", "user.email", "agent@opennexus.local")
+	}
+}
+
+// writePrePushHook 在 hooksDir 下写入无条件失败的 pre-push 脚本。
+func writePrePushHook(hooksDir string) error {
+	if err := os.MkdirAll(hooksDir, 0o755); err != nil {
+		return err
+	}
+	script := "#!/bin/sh\n" +
+		"echo 'push 已被 openNexus 安全策略禁止：任务 worktree 内不允许推送远端，' >&2\n" +
+		"echo '请在任务完成并通过 review 后由主工作区推送。' >&2\n" +
+		"exit 1\n"
+	return os.WriteFile(filepath.Join(hooksDir, "pre-push"), []byte(script), 0o755)
+}
+
+// logWorktreeHarden 记录加固步骤失败（降级告警，不阻断）。
+func logWorktreeHarden(step string, err error) {
+	fmt.Fprintf(os.Stderr, "[worktree-harden] %s 失败（降级为无加固）: %v\n", step, err)
 }
 
 // removeTaskManagerRuntimeFiles 删除 worktree 目录内编排引擎的运行时状态文件。

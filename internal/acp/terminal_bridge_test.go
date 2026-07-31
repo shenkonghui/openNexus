@@ -247,3 +247,61 @@ func TestTerminalBridgeReleaseSession(t *testing.T) {
 		t.Fatalf("ReleaseSession 后不应有快照: %d", len(snapshots))
 	}
 }
+
+func TestTerminalBridgeCreateDenied(t *testing.T) {
+	b := newTestBridge()
+	b.SetDenyCheck(func(command string) string {
+		if strings.Contains(command, "git push") {
+			return "*git push*"
+		}
+		return ""
+	})
+	_, events, cancel := b.Subscribe(1)
+	defer cancel()
+
+	resp, err := b.Create(context.Background(), acp.CreateTerminalRequest{
+		SessionId: "sess-deny",
+		Command:   "git push origin main",
+	})
+	if err != nil {
+		t.Fatalf("deny 命中不应返回协议错误: %v", err)
+	}
+
+	created := waitEvent(t, events, TerminalEventCreated)
+	if created.TerminalID != resp.TerminalId {
+		t.Fatalf("created 事件不符: %+v", created)
+	}
+	outEv := waitEvent(t, events, TerminalEventOutput)
+	if !strings.Contains(string(outEv.Data), "*git push*") {
+		t.Fatalf("输出应包含命中规则: %q", outEv.Data)
+	}
+	exitEv := waitEvent(t, events, TerminalEventExit)
+	if exitEv.ExitCode == nil || *exitEv.ExitCode != 1 {
+		t.Fatalf("合成终端应以 exit 1 结束: %+v", exitEv)
+	}
+
+	// wait_for_exit 立即返回、output 带拒绝原因
+	ctx, ctxCancel := context.WithTimeout(context.Background(), time.Second)
+	defer ctxCancel()
+	exit, err := b.WaitForExit(ctx, acp.WaitForTerminalExitRequest{SessionId: "sess-deny", TerminalId: resp.TerminalId})
+	if err != nil || exit.ExitCode == nil || *exit.ExitCode != 1 {
+		t.Fatalf("WaitForExit 应立即返回 exit 1: %+v err=%v", exit, err)
+	}
+	out, err := b.Output(acp.TerminalOutputRequest{SessionId: "sess-deny", TerminalId: resp.TerminalId})
+	if err != nil || !strings.Contains(out.Output, "安全策略拒绝") {
+		t.Fatalf("Output 应含拒绝原因: %+v err=%v", out, err)
+	}
+
+	// 放行的命令不受影响
+	resp2, err := b.Create(context.Background(), acp.CreateTerminalRequest{
+		SessionId: "sess-deny",
+		Command:   "echo allowed",
+	})
+	if err != nil {
+		t.Fatalf("放行命令 Create 失败: %v", err)
+	}
+	exit2, err := b.WaitForExit(ctx, acp.WaitForTerminalExitRequest{SessionId: "sess-deny", TerminalId: resp2.TerminalId})
+	if err != nil || exit2.ExitCode == nil || *exit2.ExitCode != 0 {
+		t.Fatalf("放行命令应正常退出: %+v err=%v", exit2, err)
+	}
+}

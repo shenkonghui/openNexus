@@ -124,8 +124,20 @@ type TerminalBridge struct {
 	// resolve 把 ACP SessionId 映射为 DB session ID（0 表示未知，事件不路由）。
 	resolve func(acp.SessionId) uint
 
+	// denyCheck 可选：执行前的安全策略裁决（返回命中的 deny 规则原文；空串=放行）。
+	// SetDenyCheck 注入；nil 则不裁决。命中时不启动进程，返回合成失败终端，
+	// agent 通过 terminal/output 能读到拒绝原因并自行调整。
+	denyCheck func(command string) string
+
 	// onExit 可选：命令退出时回调（工具调用记录回填退出码）。SetOnExit 注入；nil 则跳过。
 	onExit func(dbID uint, terminalID, command, cwd string, exitCode *int, signal *string)
+}
+
+// SetDenyCheck 注入执行前安全策略裁决函数（返回命中的 deny 规则原文；空串=放行）。
+func (b *TerminalBridge) SetDenyCheck(fn func(command string) string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.denyCheck = fn
 }
 
 // SetOnExit 注入命令退出回调（在广播 exit 事件后同 goroutine 调用）。
@@ -215,6 +227,7 @@ func startProcess(cmd *exec.Cmd) (*os.File, func(), error) {
 }
 
 // Create 执行 terminal/create：启动命令并开始采集输出。
+// 命中安全策略 deny 名单的命令不会启动，返回合成失败终端（非零退出码 + 拒绝原因）。
 func (b *TerminalBridge) Create(ctx context.Context, params acp.CreateTerminalRequest) (acp.CreateTerminalResponse, error) {
 	command := params.Command
 	args := params.Args
@@ -222,6 +235,17 @@ func (b *TerminalBridge) Create(ctx context.Context, params acp.CreateTerminalRe
 	if len(args) == 0 && strings.ContainsAny(command, " \t|&;<>()$`") {
 		args = []string{"-c", command}
 		command = findShell()
+	}
+
+	// 执行前安全策略裁决：deny 命中 → 不 spawn，合成失败终端让 agent 可读原因。
+	// 用原始 command+args 拼展示串裁决（与权限名单的 title 语义一致）。
+	b.mu.Lock()
+	denyCheck := b.denyCheck
+	b.mu.Unlock()
+	if denyCheck != nil {
+		if rule := denyCheck(displayCommand(params.Command, params.Args)); rule != "" {
+			return b.createDenied(params, rule), nil
+		}
 	}
 
 	cmd := exec.Command(command, args...)
@@ -278,6 +302,61 @@ func (b *TerminalBridge) Create(ctx context.Context, params acp.CreateTerminalRe
 	go b.pump(term, reader)
 
 	return acp.CreateTerminalResponse{TerminalId: term.id}, nil
+}
+
+// createDenied 生成 deny 命中的合成失败终端：不启动进程，缓冲写入拒绝原因，
+// 立即标记退出（exit code 1）。agent 走 terminal/output / wait_for_exit 均能拿到
+// 确定性结果，前端也能看到"命令被安全策略拒绝"的记录。
+func (b *TerminalBridge) createDenied(params acp.CreateTerminalRequest, rule string) acp.CreateTerminalResponse {
+	var dbID uint
+	if b.resolve != nil {
+		dbID = b.resolve(params.SessionId)
+	}
+	display := displayCommand(params.Command, params.Args)
+	reason := fmt.Sprintf("命令被安全策略拒绝（命中规则: %s）。该命令属于受限操作，请调整方案后继续。\r\n", rule)
+	code := 1
+
+	b.mu.Lock()
+	b.seq++
+	term := &bridgeTerminal{
+		id:       fmt.Sprintf("term-%d", b.seq),
+		dbID:     dbID,
+		display:  display,
+		cwd:      derefStr(params.Cwd),
+		limit:    defaultTerminalOutputLimit,
+		buf:      []byte(reason),
+		exited:   true,
+		exitCode: &code,
+		done:     make(chan struct{}),
+	}
+	close(term.done)
+	b.terms[term.id] = term
+	if dbID != 0 {
+		if b.byDB[dbID] == nil {
+			b.byDB[dbID] = make(map[string]*bridgeTerminal)
+		}
+		b.byDB[dbID][term.id] = term
+	}
+	onExit := b.onExit
+	b.mu.Unlock()
+
+	slog.Warn("ACP terminal/create 命中安全策略拒绝", "terminal", term.id, "session", params.SessionId,
+		"command", display, "rule", rule)
+	b.broadcast(dbID, TerminalEvent{Type: TerminalEventCreated, TerminalID: term.id, Command: display, Cwd: term.cwd})
+	b.broadcast(dbID, TerminalEvent{Type: TerminalEventOutput, TerminalID: term.id, Data: []byte(reason)})
+	b.broadcast(dbID, TerminalEvent{Type: TerminalEventExit, TerminalID: term.id, ExitCode: &code})
+	if onExit != nil {
+		onExit(dbID, term.id, display, term.cwd, &code, nil)
+	}
+	return acp.CreateTerminalResponse{TerminalId: term.id}
+}
+
+// derefStr 解引用可空字符串指针（nil 返回空串）。
+func derefStr(p *string) string {
+	if p == nil {
+		return ""
+	}
+	return *p
 }
 
 // pump 持续读取命令输出：追加缓冲、广播 output 事件；EOF 后 Wait 回收并广播 exit。

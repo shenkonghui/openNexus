@@ -2,7 +2,9 @@ package acp
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -64,5 +66,58 @@ func TestCreateAndRemoveWorktree(t *testing.T) {
 	}
 	if _, err := os.Stat(wt); err == nil {
 		t.Fatalf("worktree 目录应已被移除")
+	}
+}
+
+func TestCreateWorktree_Hardened(t *testing.T) {
+	repo := t.TempDir()
+	git := func(args ...string) error { return runGit(repo, args...) }
+	for _, args := range [][]string{
+		{"init"},
+		{"config", "user.email", "t@t.com"},
+		{"config", "user.name", "tester"},
+		{"remote", "add", "origin", "https://example.com/fake.git"},
+	} {
+		if err := git(args...); err != nil {
+			t.Fatalf("git %v: %v", args, err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(repo, "a.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := git("add", "."); err != nil {
+		t.Fatal(err)
+	}
+	if err := git("commit", "-m", "init"); err != nil {
+		t.Fatal(err)
+	}
+
+	wt := WorktreePath(repo, "h1")
+	if err := CreateWorktree(repo, "task-h1", wt, ""); err != nil {
+		t.Fatalf("CreateWorktree: %v", err)
+	}
+	gitOut := func(dir string, args ...string) string {
+		out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).Output()
+		if err != nil {
+			t.Fatalf("git -C %s %v: %v", dir, args, err)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	// worktree 内 pushurl 被禁用
+	if got := gitOut(wt, "config", "remote.origin.pushurl"); got != disabledPushURL {
+		t.Fatalf("worktree pushurl 应为 %s, got=%q", disabledPushURL, got)
+	}
+	// pre-push hook 就位且 hooksPath 指向私有 git dir
+	hooksPath := gitOut(wt, "config", "core.hooksPath")
+	if _, err := os.Stat(filepath.Join(hooksPath, "pre-push")); err != nil {
+		t.Fatalf("pre-push hook 缺失: %v", err)
+	}
+	// 主仓库配置不被污染：pushurl 仅 worktree 级
+	if out, err := exec.Command("git", "-C", repo, "config", "remote.origin.pushurl").Output(); err == nil {
+		t.Fatalf("主仓库不应有 pushurl: %q", string(out))
+	}
+	// git push 在 worktree 内应失败
+	if err := runGit(wt, "push", "origin", "HEAD"); err == nil {
+		t.Fatalf("worktree 内 git push 应失败")
 	}
 }

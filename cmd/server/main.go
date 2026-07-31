@@ -200,6 +200,13 @@ func main() {
 		acpSvc.SetBridgeMode(true, acp.ResolveBridgeSocketDir(filepath.Dir(cfg.Database.Path)))
 		log.Printf("agent 常驻模式已启用（acp-bridge + UDS，主程序重启不重启 agent）")
 	}
+	// OS 级沙箱开关：须在 ApplyPermissions 前设置——沙箱开启时权限层跳过默认 Ask 名单
+	//（环境防线已兜底，不再打断全自动流程）。
+	acp.SetSandboxSettings(acp.SandboxSettings{Enabled: cfg.Sandbox.Enabled, Mode: cfg.Sandbox.Mode})
+	acpSvc.SetSandboxActive(cfg.Sandbox.Enabled)
+	if cfg.Sandbox.Enabled {
+		log.Printf("agent 沙箱已启用（mode=%s：文件系统只读+写白名单+凭证剥离）", cfg.Sandbox.Mode)
+	}
 	// 全局权限规则（yolo/白名单/黑名单）来自 config.yaml 的 permissions 段。
 	// 启动时立即下发到 service（须在 PreconnectAllAsync 前，使新连接建连即拿到规则）。
 	acpSvc.ApplyPermissions(cfg.Permissions.Mode, cfg.Permissions.Allow, cfg.Permissions.Ask, cfg.Permissions.Deny)

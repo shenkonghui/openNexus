@@ -94,3 +94,9 @@ permissions:
     allow: []
     ask: []
     deny: []
+# agent 进程 OS 级沙箱（macOS sandbox-exec / Linux bwrap）：
+# 文件系统整体只读、仅工作区等白名单目录可写、剥离凭证类环境变量。
+# mode: auto=平台沙箱不可用时降级直通并告警；enforce=不可用时拒绝启动 agent。
+sandbox:
+    enabled: false
+    mode: auto
