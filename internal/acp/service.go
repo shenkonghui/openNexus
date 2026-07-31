@@ -2709,6 +2709,20 @@ func (s *Service) CachedModelOptions(agentType string) []acp.SessionConfigOption
 			}
 		}
 	}
+
+	// 无活跃会话时回退到探测缓存（启动时从磁盘预加载），
+	// 供设置页能力测试等无会话场景选择模型。
+	s.mu.RLock()
+	cached := s.probeCache[agentType]
+	s.mu.RUnlock()
+	for _, opt := range cached {
+		if opt.Select == nil || opt.Select.Category == nil {
+			continue
+		}
+		if string(*opt.Select.Category) == "model" {
+			return []acp.SessionConfigOption{opt}
+		}
+	}
 	return nil
 }
 

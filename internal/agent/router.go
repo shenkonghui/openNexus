@@ -157,11 +157,11 @@ func (r *Router) ProbeConfigOptions(ctx context.Context, agentType string, userI
 }
 
 // TestAgentCapabilities 对指定 agent 类型执行 rule/skill/mcp 能力接入测试，委托 service。
-func (r *Router) TestAgentCapabilities(ctx context.Context, agentType string, userID uint, e2e bool) (acp.CapabilityTestReport, error) {
+func (r *Router) TestAgentCapabilities(ctx context.Context, agentType string, userID uint, e2e bool, modelValue string) (acp.CapabilityTestReport, error) {
 	if r.service == nil {
 		return acp.CapabilityTestReport{}, errors.New("service 未配置")
 	}
-	return r.service.TestAgentCapabilities(ctx, agentType, userID, e2e)
+	return r.service.TestAgentCapabilities(ctx, agentType, userID, e2e, modelValue)
 }
 
 // LastCapabilityTest 返回指定 agent 类型最近一次能力测试报告（内存缓存），委托 service。

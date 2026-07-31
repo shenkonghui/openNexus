@@ -856,6 +856,8 @@
     "allProgress": "正在并行测试全部 Agent…",
     "colAgent": "Agent",
     "colDuration": "耗时",
+    "modelAuto": "自动（运行模型）",
+    "modelHint": "选择测试使用的模型；自动=使用 Agent 当前运行的模型",
     "modeStatic": "静态检查",
     "modeE2E": "端到端",
     "rawResponse": "Agent 原始回复",
@@ -863,7 +865,8 @@
     "item": {
       "rule": "Rule（规则注入）",
       "skill": "Skill（技能目录）",
-      "mcp": "MCP（工具接入）"
+      "mcp": "MCP（工具接入）",
+      "subagent": "Subagent（子代理调用）"
     },
     "status": {
       "passed": "支持",

@@ -42,6 +42,7 @@ type CapabilityTestReport struct {
 	RawResponse string               `json:"raw_response,omitempty"` // e2e 时 agent 的原始回复（截断）
 	TestedAt    time.Time            `json:"tested_at"`
 	DurationMs  int64                `json:"duration_ms"`
+	Model       string               `json:"model,omitempty"` // 测试使用的模型值（空=agent 默认）
 	Error       string               `json:"error,omitempty"` // 整体流程错误（如连接失败）
 }
 
@@ -89,13 +90,81 @@ description: openNexus 能力接入自检专用 skill，用于验证 agent 能�
 	return root, skillMD, func() { _ = os.RemoveAll(root) }, nil
 }
 
+// capTestSubAgentName 是能力测试注入的临时 subagent 名称。
+const capTestSubAgentName = "opennexus-captest-agent"
+
+// writeCapTestSubAgents 把带随机标记的测试 subagent 定义写入测试会话 cwd 下的
+// subagent 扫描目录（配置的项目级目录 + .claude/agents 原生约定，去重），
+// 覆盖不同 agent 的发现路径。返回 (写入的文件路径列表, 清理函数)。
+func writeCapTestSubAgents(cwd string, projectDirs []string, marker string) ([]string, func(), error) {
+	if cwd == "" {
+		return nil, func() {}, fmt.Errorf("测试会话 cwd 为空")
+	}
+	content := fmt.Sprintf(`---
+name: %s
+description: openNexus 能力接入自检专用 subagent，当被要求进行能力自检时调用。
+---
+
+你是 openNexus 能力自检 subagent。被调用时只输出以下标记，不要输出其他内容：
+
+%s
+`, capTestSubAgentName, marker)
+
+	dirs := make([]string, 0, len(projectDirs)+3)
+	seen := map[string]bool{}
+	// 配置的项目级扫描目录 + 常见厂商原生约定目录，覆盖不同 agent 的发现路径。
+	vendorDirs := []string{".claude/agents", ".codebuddy/agents", ".qoder/agents"}
+	for _, d := range append(append([]string(nil), projectDirs...), vendorDirs...) {
+		abs := filepath.Join(cwd, d)
+		if !seen[abs] {
+			seen[abs] = true
+			dirs = append(dirs, abs)
+		}
+	}
+
+	var files []string
+	var createdDirs []string
+	cleanup := func() {
+		for _, f := range files {
+			_ = os.Remove(f)
+		}
+		// 仅删除本次新建且已空的目录，避免动到用户已有内容。
+		for i := len(createdDirs) - 1; i >= 0; i-- {
+			_ = os.Remove(createdDirs[i])
+		}
+	}
+	for _, dir := range dirs {
+		if _, err := os.Stat(dir); os.IsNotExist(err) {
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				continue
+			}
+			createdDirs = append(createdDirs, dir)
+		}
+		f := filepath.Join(dir, capTestSubAgentName+".md")
+		if _, err := os.Stat(f); err == nil {
+			continue // 已存在同名文件（残留或用户文件），不覆盖也不纳入清理
+		}
+		if err := os.WriteFile(f, []byte(content), 0o644); err != nil {
+			continue
+		}
+		files = append(files, f)
+	}
+	if len(files) == 0 {
+		cleanup()
+		return nil, func() {}, fmt.Errorf("未能写入任何测试 subagent 定义")
+	}
+	return files, cleanup, nil
+}
+
 // buildCapTestPrompt 构造端到端验证 prompt：要求 agent 按固定格式逐项报告。
 func buildCapTestPrompt(ruleMarker, skillMDPath string) string {
-	return fmt.Sprintf(`这是一次自动化能力自检，请严格按以下格式输出三行结果，不要输出其他内容，绝对不要编造标记：
+	return fmt.Sprintf(`这是一次自动化能力自检，请严格按以下格式输出四行结果，不要输出其他内容，绝对不要编造标记：
 RULE: <如果你的系统规则/系统提示中包含形如 CAPTEST-RULE-XXXX 的标记，原样输出该标记；否则输出 NONE>
 SKILL: <读取文件 %s，原样输出其中形如 CAPTEST-SKILL-XXXX 的标记；无法读取则输出 NONE>
 MCP: <列出你当前可调用的 MCP 工具名称（逗号分隔，最多 20 个）；一个都没有则输出 NONE>
-规则说明：%s 行的标记只能来自你真实看到的内容；读取文件时直接读取，不要询问确认。`, skillMDPath, "RULE/SKILL")
+AGENT: <如果你能调用名为 %s 的 subagent/子代理（如 Task/Agent 工具），调用它并原样输出它返回的形如 CAPTEST-SUBAGENT-XXXX 的标记；无法调用则输出 NONE>
+规则说明：%s 行的标记只能来自你真实看到的内容；读取文件与调用 subagent 时直接执行，不要询问确认。`,
+		skillMDPath, capTestSubAgentName, "RULE/SKILL/AGENT")
 }
 
 // mcpServerNames 提取注入列表中的 server 名称（任意传输类型）。
@@ -154,7 +223,9 @@ func autoApprovePermissions(conn *Connection, permCh <-chan PermissionNotify) {
 //     发送一条验证 prompt 让 agent 复述标记 / 列举 MCP 工具，按回复判定支持度。
 //
 // 结果缓存到 capTestReports（内存，按 agentType 覆盖）。
-func (s *Service) TestAgentCapabilities(ctx context.Context, agentType string, userID uint, e2e bool) (CapabilityTestReport, error) {
+//
+// modelValue 指定测试使用的模型；为空时自动选取 agent 当前运行的模型（configOptions 的 CurrentValue）。
+func (s *Service) TestAgentCapabilities(ctx context.Context, agentType string, userID uint, e2e bool, modelValue string) (CapabilityTestReport, error) {
 	if _, err := s.GetBackend(agentType); err != nil {
 		return CapabilityTestReport{}, err
 	}
@@ -181,6 +252,7 @@ func (s *Service) TestAgentCapabilities(ctx context.Context, agentType string, u
 			{ID: "rule", Status: CapTestError, Detail: report.Error},
 			{ID: "skill", Status: CapTestError, Detail: report.Error},
 			{ID: "mcp", Status: CapTestError, Detail: report.Error},
+			{ID: "subagent", Status: CapTestError, Detail: report.Error},
 		}
 		return finish(report), nil
 	}
@@ -207,21 +279,51 @@ func (s *Service) TestAgentCapabilities(ctx context.Context, agentType string, u
 	mcpDetail := fmt.Sprintf("传输能力 http=%v sse=%v（stdio 为协议基线）；注入 server: %s",
 		caps.Http, caps.Sse, strings.Join(mcpServerNames(mcpServers), ", "))
 
-	sessionID, _, _, err := conn.NewSession(ctx, cwd, additionalDirs, mcpServers, rulePrompt)
+	// 测试 subagent：把带随机标记的定义写入 cwd 下的 subagent 扫描目录（session/new 前写入，
+	// 保证 agent 启动扫描时可见）；写入失败不阻断其余测试项。
+	subMarker := capTestMarker("subagent")
+	s.mu.RLock()
+	subProjDirs := append([]string(nil), s.subAgentProjectDirs...)
+	s.mu.RUnlock()
+	subFiles, subCleanup, subErr := writeCapTestSubAgents(cwd, subProjDirs, subMarker)
+	defer subCleanup()
+	subDetail := fmt.Sprintf("测试 subagent %s 已写入: %s", capTestSubAgentName, strings.Join(subFiles, ", "))
+	if subErr != nil {
+		subDetail = fmt.Sprintf("准备测试 subagent 失败: %v", subErr)
+		slog.Warn("能力测试准备 subagent 定义失败", "agent", agentType, "err", subErr)
+	}
+
+	sessionID, configOptions, _, err := conn.NewSession(ctx, cwd, additionalDirs, mcpServers, rulePrompt)
 	if err != nil {
 		return fail("创建测试会话", err)
 	}
 	defer func() { _ = conn.CloseSessionByID(ctx, sessionID) }()
 
+	// 设置测试模型：前端指定优先；为空时自动取 agent 当前运行的模型（CurrentValue）。
+	if modelValue == "" {
+		modelValue = pickDefaultModel(configOptions)
+	}
+	if modelValue != "" {
+		if mErr := applyModelOption(ctx, conn, sessionID, configOptions, modelValue); mErr != nil {
+			slog.Warn("能力测试设置模型失败，使用 agent 默认模型继续", "agent", agentType, "model", modelValue, "err", mErr)
+		} else {
+			report.Model = modelValue
+		}
+	}
+
 	if !e2e {
-		// 静态级：session/new 未报错即认为注入被接受；rule/skill 无协议回执，标记 injected。
+		// 静态级：session/new 未报错即认为注入被接受；rule/skill/subagent 无协议回执，标记 injected。
 		report.Items = []CapabilityTestItem{
 			{ID: "rule", Status: CapTestInjected, Detail: "Meta.systemPrompt 注入已被 session/new 接受（非标准字段，agent 可能静默忽略）"},
 			{ID: "skill", Status: CapTestInjected, Detail: "AdditionalDirectories 注入已被 session/new 接受（是否扫描 skill 取决于 agent）"},
 			{ID: "mcp", Status: CapTestInjected, Detail: mcpDetail},
+			{ID: "subagent", Status: CapTestInjected, Detail: subDetail + "（是否扫描定义取决于 agent）"},
 		}
 		if len(mcpServers) == 0 {
 			report.Items[2] = CapabilityTestItem{ID: "mcp", Status: CapTestSkipped, Detail: "无可注入的 MCP server（未配置或全部被能力过滤丢弃）"}
+		}
+		if subErr != nil {
+			report.Items[3] = CapabilityTestItem{ID: "subagent", Status: CapTestError, Detail: subDetail}
 		}
 		return finish(report), nil
 	}
@@ -250,9 +352,10 @@ func (s *Service) TestAgentCapabilities(ctx context.Context, agentType string, u
 		evalMarkerItem("rule", response, "RULE", ruleMarker),
 		evalMarkerItem("skill", response, "SKILL", skillMarker),
 		evalMCPItem(response, mcpServers, mcpDetail),
+		evalSubAgentItem(response, subMarker, subDetail, subErr),
 	}
 	slog.Info("agent 能力测试完成", "agent", agentType, "mode", report.Mode,
-		"rule", report.Items[0].Status, "skill", report.Items[1].Status, "mcp", report.Items[2].Status)
+		"rule", report.Items[0].Status, "skill", report.Items[1].Status, "mcp", report.Items[2].Status, "subagent", report.Items[3].Status)
 	return finish(report), nil
 }
 
@@ -309,6 +412,23 @@ func evalMCPItem(response string, servers []acp.McpServer, baseDetail string) Ca
 		}
 	}
 	return CapabilityTestItem{ID: "mcp", Status: CapTestPartial, Detail: fmt.Sprintf("agent 报告了工具（%s）但未匹配到注入 server 名；%s", truncateDetail(val, 200), baseDetail)}
+}
+
+// evalSubAgentItem 判定 subagent 单项：
+//   - 定义写入失败 → error
+//   - 回复包含标记 → passed（agent 真实调用了测试 subagent 并拿到其输出）
+//   - AGENT 行返回其他内容或缺失 → failed
+func evalSubAgentItem(response, marker, baseDetail string, subErr error) CapabilityTestItem {
+	if subErr != nil {
+		return CapabilityTestItem{ID: "subagent", Status: CapTestError, Detail: baseDetail}
+	}
+	if strings.Contains(response, marker) {
+		return CapabilityTestItem{ID: "subagent", Status: CapTestPassed, Detail: fmt.Sprintf("agent 调用测试 subagent 并复述了标记 %s", marker)}
+	}
+	if val, ok := parseCapTestLine(response, "AGENT"); ok {
+		return CapabilityTestItem{ID: "subagent", Status: CapTestFailed, Detail: fmt.Sprintf("AGENT 行返回 %q，未包含标记 %s；%s（注：常驻 agent 若仅在进程启动时扫描 subagent 定义，此项可能为假阴性）", truncateDetail(val, 200), marker, baseDetail)}
+	}
+	return CapabilityTestItem{ID: "subagent", Status: CapTestFailed, Detail: "回复中未找到 AGENT 行与标记；" + baseDetail}
 }
 
 // truncateDetail 截断过长的明细文本。
@@ -370,7 +490,7 @@ func (s *Service) TestAllAgentCapabilities(ctx context.Context, userID uint, e2e
 			defer wg.Done()
 			// TestAgentCapabilities 内部对 error 已封装为 report（fail 函数返回 nil error），
 			// 仅 agentType 不存在才返回非 nil error——批量场景 names 来自 backends，不会触发。
-			rep, err := s.TestAgentCapabilities(ctx, agentType, userID, e2e)
+			rep, err := s.TestAgentCapabilities(ctx, agentType, userID, e2e, "") // 批量测试：各 agent 自动选取运行模型
 			if err != nil {
 				rep = CapabilityTestReport{AgentType: agentType, Mode: modeStr(e2e), TestedAt: time.Now(),
 					Error: err.Error(),
@@ -378,6 +498,7 @@ func (s *Service) TestAllAgentCapabilities(ctx context.Context, userID uint, e2e
 						{ID: "rule", Status: CapTestError, Detail: err.Error()},
 						{ID: "skill", Status: CapTestError, Detail: err.Error()},
 						{ID: "mcp", Status: CapTestError, Detail: err.Error()},
+						{ID: "subagent", Status: CapTestError, Detail: err.Error()},
 					}}
 			}
 			reports[idx] = rep
@@ -401,4 +522,30 @@ func modeStr(e2e bool) string {
 		return "e2e"
 	}
 	return "static"
+}
+
+// pickDefaultModel 从 configOptions 中提取 agent 当前运行的模型值（category=="model" 的 CurrentValue）。
+// 用于批量测试或前端未指定模型时自动选取"运行中的模型"。
+func pickDefaultModel(opts []acp.SessionConfigOption) string {
+	for _, opt := range opts {
+		if opt.Select == nil || opt.Select.Category == nil || string(*opt.Select.Category) != "model" {
+			continue
+		}
+		cv := string(opt.Select.CurrentValue)
+		if cv != "" {
+			return cv
+		}
+		// CurrentValue 为空时退回到第一个可用选项
+		if opt.Select.Options.Ungrouped != nil && len(*opt.Select.Options.Ungrouped) > 0 {
+			return string((*opt.Select.Options.Ungrouped)[0].Value)
+		}
+		if opt.Select.Options.Grouped != nil {
+			for _, g := range *opt.Select.Options.Grouped {
+				if len(g.Options) > 0 {
+					return string(g.Options[0].Value)
+				}
+			}
+		}
+	}
+	return ""
 }

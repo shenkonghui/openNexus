@@ -17,10 +17,11 @@ export function getAgentCapabilities(agentType: string): Promise<{ data: AgentAc
 }
 
 // 执行 rule/skill/mcp 能力接入测试；e2e=true 时创建临时会话并发送验证 prompt（耗时较长）
-export function runCapabilityTest(agentType: string, e2e: boolean): Promise<{ data: CapabilityTestReport }> {
+// modelValue 指定测试模型；省略/空=后端自动选取 agent 当前运行模型
+export function runCapabilityTest(agentType: string, e2e: boolean, modelValue?: string): Promise<{ data: CapabilityTestReport }> {
   return apiFetch(`/agents/${encodeURIComponent(agentType)}/capability-test`, {
     method: 'POST',
-    body: JSON.stringify({ e2e }),
+    body: JSON.stringify({ e2e, model_value: modelValue || '' }),
   })
 }
 

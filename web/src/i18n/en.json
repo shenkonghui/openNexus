@@ -856,6 +856,8 @@
     "allProgress": "Testing all agents in parallel…",
     "colAgent": "Agent",
     "colDuration": "Duration",
+    "modelAuto": "Auto (running model)",
+    "modelHint": "Select the model used for testing; Auto = the agent's currently running model",
     "modeStatic": "Static",
     "modeE2E": "End-to-End",
     "rawResponse": "Raw Agent Response",
@@ -863,7 +865,8 @@
     "item": {
       "rule": "Rule (system prompt injection)",
       "skill": "Skill (skill directories)",
-      "mcp": "MCP (tool access)"
+      "mcp": "MCP (tool access)",
+      "subagent": "Subagent (sub-agent invocation)"
     },
     "status": {
       "passed": "Supported",

@@ -40,7 +40,7 @@ type AgentConfigProber interface {
 
 // AgentCapabilityTester 对指定 agent 类型执行 rule/skill/mcp 能力接入测试。
 type AgentCapabilityTester interface {
-	TestAgentCapabilities(ctx context.Context, agentType string, userID uint, e2e bool) (acplocal.CapabilityTestReport, error)
+	TestAgentCapabilities(ctx context.Context, agentType string, userID uint, e2e bool, modelValue string) (acplocal.CapabilityTestReport, error)
 	TestAllAgentCapabilities(ctx context.Context, userID uint, e2e bool) (acplocal.CapabilityTestBatchResult, error)
 	LastCapabilityTest(agentType string) (acplocal.CapabilityTestReport, bool)
 }
@@ -489,10 +489,11 @@ func (h *AgentHandler) CapabilityTest(c *gin.Context) {
 		return
 	}
 	var req struct {
-		E2E bool `json:"e2e"`
+		E2E        bool   `json:"e2e"`
+		ModelValue string `json:"model_value"` // 指定测试模型；空=自动选取 agent 当前运行模型
 	}
-	_ = c.ShouldBindJSON(&req) // body 可省略，默认静态检查
-	report, err := h.capTester.TestAgentCapabilities(c.Request.Context(), agentType, uid, req.E2E)
+	_ = c.ShouldBindJSON(&req) // body 可省略，默认静态检查 + 自动选模型
+	report, err := h.capTester.TestAgentCapabilities(c.Request.Context(), agentType, uid, req.E2E, req.ModelValue)
 	if err != nil {
 		Fail(c, http.StatusInternalServerError, "CAPTEST_FAILED", err.Error())
 		return

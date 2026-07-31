@@ -29,6 +29,7 @@ export interface CapabilityTestReport {
   raw_response?: string;
   tested_at: string;
   duration_ms: number;
+  model?: string; // 测试使用的模型值（空=agent 默认）
   error?: string;
 }
 

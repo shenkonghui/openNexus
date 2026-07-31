@@ -1,8 +1,8 @@
 import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { CheckCircle2, XCircle, AlertTriangle, MinusCircle, CircleDashed, FlaskConical, Zap, ChevronDown, ChevronRight, Layers } from 'lucide-react'
-import { runCapabilityTest, getLastCapabilityTest, runCapabilityTestAll } from '../api/agents'
-import type { Agent, CapabilityTestReport, CapabilityTestItem, CapabilityTestBatchResult } from '../types'
+import { runCapabilityTest, getLastCapabilityTest, runCapabilityTestAll, getAgentModels } from '../api/agents'
+import type { Agent, CapabilityTestReport, CapabilityTestItem, CapabilityTestBatchResult, ConfigOptionValue } from '../types'
 import LoadingSpinner from './LoadingSpinner'
 import styles from './AgentCapabilityTest.module.css'
 
@@ -68,6 +68,8 @@ export default function AgentCapabilityTest({ agents }: Props) {
   const [showRaw, setShowRaw] = useState(false)
   const [batchResult, setBatchResult] = useState<CapabilityTestBatchResult | null>(null)
   const [runningAll, setRunningAll] = useState(false)
+  const [models, setModels] = useState<ConfigOptionValue[]>([])
+  const [modelValue, setModelValue] = useState('') // 空=自动选取 agent 运行模型
 
   useEffect(() => {
     if (!agentType && agents.length > 0) setAgentType(agents[0].type)
@@ -87,13 +89,29 @@ export default function AgentCapabilityTest({ agents }: Props) {
     return () => { cancelled = true }
   }, [agentType])
 
+  // 切换 agent 时加载可用模型列表（用于指定测试模型），并重置为自动
+  useEffect(() => {
+    if (!agentType) return
+    let cancelled = false
+    setModels([])
+    setModelValue('')
+    getAgentModels(agentType)
+      .then((resp) => {
+        if (cancelled) return
+        const opts = resp.data.model_options?.flatMap((m) => m.options || []) || []
+        setModels(opts)
+      })
+      .catch(() => { /* 模型列表不可用时仅隐藏下拉框 */ })
+    return () => { cancelled = true }
+  }, [agentType])
+
   async function run(e2e: boolean) {
     if (!agentType || running || runningAll) return
     if (e2e && !window.confirm(t('capTest.e2eConfirm'))) return
     setRunning(e2e ? 'e2e' : 'static')
     setError('')
     try {
-      const resp = await runCapabilityTest(agentType, e2e)
+      const resp = await runCapabilityTest(agentType, e2e, modelValue)
       setReport(resp.data)
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
@@ -141,6 +159,20 @@ export default function AgentCapabilityTest({ agents }: Props) {
             <option key={a.type} value={a.type}>{a.display_name || a.type}</option>
           ))}
         </select>
+        {models.length > 0 && (
+          <select
+            className={styles.agentSelect}
+            value={modelValue}
+            onChange={(e) => setModelValue(e.target.value)}
+            disabled={busy}
+            title={t('capTest.modelHint')}
+          >
+            <option value="">{t('capTest.modelAuto')}</option>
+            {models.map((m) => (
+              <option key={m.value} value={m.value}>{m.name || m.value}</option>
+            ))}
+          </select>
+        )}
         <button type="button" className={styles.btn} onClick={() => void run(false)} disabled={!agentType || busy}>
           <Zap size={13} />
           {running === 'static' ? t('capTest.running') : t('capTest.runStatic')}
@@ -193,6 +225,7 @@ export default function AgentCapabilityTest({ agents }: Props) {
                 <th>RULE</th>
                 <th>SKILL</th>
                 <th>MCP</th>
+                <th>AGENT</th>
                 <th>{t('capTest.colDuration')}</th>
               </tr>
             </thead>
@@ -207,6 +240,7 @@ export default function AgentCapabilityTest({ agents }: Props) {
                   <td className={styles.colDot}><StatusDot status={itemStatus(rep, 'rule')} /></td>
                   <td className={styles.colDot}><StatusDot status={itemStatus(rep, 'skill')} /></td>
                   <td className={styles.colDot}><StatusDot status={itemStatus(rep, 'mcp')} /></td>
+                  <td className={styles.colDot}><StatusDot status={itemStatus(rep, 'subagent')} /></td>
                   <td className={styles.colDur}>{(rep.duration_ms / 1000).toFixed(1)}s</td>
                 </tr>
               ))}
@@ -223,6 +257,7 @@ export default function AgentCapabilityTest({ agents }: Props) {
             <span>{agentName(report.agent_type)}</span>
             <span>{new Date(report.tested_at).toLocaleString()}</span>
             <span>{(report.duration_ms / 1000).toFixed(1)}s</span>
+            {report.model && <span className={styles.modelTag}>{report.model}</span>}
           </div>
           {report.error && <div className={styles.error}>{report.error}</div>}
           <div className={styles.items}>

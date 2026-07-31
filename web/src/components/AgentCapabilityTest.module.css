@@ -85,6 +85,14 @@
   font-weight: 600;
 }
 
+.modelTag {
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: var(--bg-secondary, #f2f4f7);
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+}
+
 .items {
   display: flex;
   flex-direction: column;
