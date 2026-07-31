@@ -156,6 +156,22 @@ func (r *Router) ProbeConfigOptions(ctx context.Context, agentType string, userI
 	return r.service.ProbeConfigOptions(ctx, agentType, userID)
 }
 
+// TestAgentCapabilities 对指定 agent 类型执行 rule/skill/mcp 能力接入测试，委托 service。
+func (r *Router) TestAgentCapabilities(ctx context.Context, agentType string, userID uint, e2e bool) (acp.CapabilityTestReport, error) {
+	if r.service == nil {
+		return acp.CapabilityTestReport{}, errors.New("service 未配置")
+	}
+	return r.service.TestAgentCapabilities(ctx, agentType, userID, e2e)
+}
+
+// LastCapabilityTest 返回指定 agent 类型最近一次能力测试报告（内存缓存），委托 service。
+func (r *Router) LastCapabilityTest(agentType string) (acp.CapabilityTestReport, bool) {
+	if r.service == nil {
+		return acp.CapabilityTestReport{}, false
+	}
+	return r.service.LastCapabilityTest(agentType)
+}
+
 // PreconnectAgent 异步预连接指定 agent 与工作目录，委托 service。
 func (r *Router) PreconnectAgent(agentType, cwd string) error {
 	if _, err := r.registry.Get(agentType); err != nil {

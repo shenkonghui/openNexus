@@ -1,0 +1,170 @@
+/* Agent 能力接入测试面板（设置页 Tab） */
+
+.wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.agentSelect {
+  min-width: 180px;
+  padding: 6px 10px;
+  border: 1px solid var(--border-color, #d0d5dd);
+  border-radius: 6px;
+  background: var(--bg-primary, #fff);
+  color: inherit;
+  font-size: 13px;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 12px;
+  border: 1px solid var(--border-color, #d0d5dd);
+  border-radius: 6px;
+  background: var(--bg-primary, #fff);
+  color: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btnPrimary {
+  background: var(--accent-color, #4f46e5);
+  border-color: var(--accent-color, #4f46e5);
+  color: #fff;
+}
+
+.progress {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-secondary, #667085);
+}
+
+.error {
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: rgba(220, 38, 38, 0.08);
+  color: #dc2626;
+  font-size: 13px;
+  word-break: break-all;
+}
+
+.report {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.reportMeta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--text-secondary, #667085);
+}
+
+.modeBadge {
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: var(--bg-secondary, #f2f4f7);
+  font-weight: 600;
+}
+
+.items {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.itemRow {
+  padding: 10px 12px;
+  border: 1px solid var(--border-color, #e4e7ec);
+  border-radius: 8px;
+}
+
+.itemHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.itemName {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.itemDetail {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--text-secondary, #667085);
+  word-break: break-all;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.stPassed { background: rgba(22, 163, 74, 0.12); color: #16a34a; }
+.stFailed { background: rgba(220, 38, 38, 0.1); color: #dc2626; }
+.stPartial { background: rgba(217, 119, 6, 0.12); color: #d97706; }
+.stInjected { background: rgba(79, 70, 229, 0.1); color: #4f46e5; }
+.stSkipped { background: var(--bg-secondary, #f2f4f7); color: var(--text-secondary, #667085); }
+
+.rawWrap {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.rawToggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--text-secondary, #667085);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.rawText {
+  margin: 0;
+  padding: 10px;
+  border-radius: 6px;
+  background: var(--bg-secondary, #f8f9fb);
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 260px;
+  overflow: auto;
+}
+
+.empty {
+  padding: 20px 0;
+  text-align: center;
+  font-size: 13px;
+  color: var(--text-secondary, #98a2b3);
+}

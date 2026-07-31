@@ -14,6 +14,24 @@ export interface Agent {
   description: string;
 }
 
+// rule/skill/mcp 能力接入测试：单项结果
+export interface CapabilityTestItem {
+  id: 'rule' | 'skill' | 'mcp' | string;
+  status: 'passed' | 'failed' | 'partial' | 'injected' | 'skipped' | 'error' | string;
+  detail?: string;
+}
+
+// rule/skill/mcp 能力接入测试：完整报告（最近一次结果由后端内存缓存）
+export interface CapabilityTestReport {
+  agent_type: string;
+  mode: 'static' | 'e2e';
+  items: CapabilityTestItem[];
+  raw_response?: string;
+  tested_at: string;
+  duration_ms: number;
+  error?: string;
+}
+
 // Agent 连接状态（侧边栏展示用）
 export interface AgentStatus {
   agent_type: string;

@@ -304,6 +304,7 @@
     "goalRoleTemplateDesc": "One sentence describing the target goal type (required; used for auto-selection)",
     "goalRoleTemplateBody": "The body is the evaluation prompt template; use {{condition}} / {{transcript}} placeholders, or omit them to have the body appended as evaluation guidance before the standard sections.",
     "tabConfig": "Agent Settings",
+    "tabCapTest": "Capability Test",
     "tabTask": "Task Settings",
     "tabPermission": "Permissions",
     "tabSystem": "System",
@@ -839,6 +840,32 @@
     "addTab": "Open panel",
     "closeTab": "Close panel",
     "requireSession": "Create or select a task session first"
+  },
+  "capTest": {
+    "hint": "Verify whether a given Agent (ACP server) recognizes the Rule, Skill and MCP capabilities injected by openNexus. Static check finishes in seconds; the end-to-end test creates a temporary session and sends one verification prompt, consuming a real Agent call (about 30-120s).",
+    "runStatic": "Static Check",
+    "runE2E": "End-to-End Test",
+    "running": "Testing…",
+    "staticProgress": "Running static check (handshake capabilities + injection acceptance)…",
+    "e2eProgress": "Running end-to-end test (temporary session + verification prompt), may take 1-2 minutes…",
+    "e2eConfirm": "The end-to-end test creates a temporary session and makes a real Agent call (consumes tokens, about 1-2 minutes). Continue?",
+    "modeStatic": "Static",
+    "modeE2E": "End-to-End",
+    "rawResponse": "Raw Agent Response",
+    "empty": "Select an Agent and click a button above to start testing.",
+    "item": {
+      "rule": "Rule (system prompt injection)",
+      "skill": "Skill (skill directories)",
+      "mcp": "MCP (tool access)"
+    },
+    "status": {
+      "passed": "Supported",
+      "failed": "Not supported",
+      "partial": "Partial",
+      "injected": "Injected (unverified)",
+      "skipped": "Skipped",
+      "error": "Error"
+    }
   },
   "capPanel": {
     "noAgent": "No agent selected",

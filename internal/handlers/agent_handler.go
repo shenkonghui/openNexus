@@ -38,6 +38,12 @@ type AgentConfigProber interface {
 	ProbeConfigOptions(ctx context.Context, agentType string, userID uint) ([]acpsdk.SessionConfigOption, error)
 }
 
+// AgentCapabilityTester 对指定 agent 类型执行 rule/skill/mcp 能力接入测试。
+type AgentCapabilityTester interface {
+	TestAgentCapabilities(ctx context.Context, agentType string, userID uint, e2e bool) (acplocal.CapabilityTestReport, error)
+	LastCapabilityTest(agentType string) (acplocal.CapabilityTestReport, bool)
+}
+
 // AgentPreconnector 异步预连接 agent 与工作目录。
 type AgentPreconnector interface {
 	PreconnectAgent(agentType, cwd string) error
@@ -64,6 +70,7 @@ type AgentHandler struct {
 	modeLister   AgentModeLister
 	statusLister AgentStatusLister
 	acpInfo      AgentACPInfoProvider
+	capTester    AgentCapabilityTester
 	// selectorFilters 是 config.yaml 中 agents.selector.filters 的正则列表，
 	// 随 GET /agents 透出，由前端对 agent+模型 合并下拉项做显示过滤。
 	selectorFilters []string
@@ -83,6 +90,9 @@ func NewAgentHandler(lister AgentLister, prober AgentModelProber, cfgProber Agen
 	}
 	if ip, ok := statusLister.(AgentACPInfoProvider); ok {
 		h.acpInfo = ip
+	}
+	if ct, ok := cfgProber.(AgentCapabilityTester); ok {
+		h.capTester = ct
 	}
 	return h
 }
@@ -458,4 +468,52 @@ func (h *AgentHandler) Modes(c *gin.Context) {
 		})
 	}
 	Success(c, http.StatusOK, gin.H{"modes": items})
+}
+
+// CapabilityTest POST /api/v1/agents/:type/capability-test — 执行 rule/skill/mcp 能力接入测试。
+// body: {"e2e": true|false}；e2e=true 时创建临时会话并发送验证 prompt（真实消耗一次 agent 调用）。
+func (h *AgentHandler) CapabilityTest(c *gin.Context) {
+	agentType := strings.TrimSpace(c.Param("type"))
+	if agentType == "" {
+		Fail(c, http.StatusBadRequest, "INVALID_REQUEST", "缺少 agent 类型")
+		return
+	}
+	if h.capTester == nil {
+		Fail(c, http.StatusServiceUnavailable, "CAPTEST_UNAVAILABLE", "当前服务不支持能力测试")
+		return
+	}
+	uid, ok := currentUserID(c)
+	if !ok {
+		Fail(c, http.StatusUnauthorized, "UNAUTHORIZED", "未认证")
+		return
+	}
+	var req struct {
+		E2E bool `json:"e2e"`
+	}
+	_ = c.ShouldBindJSON(&req) // body 可省略，默认静态检查
+	report, err := h.capTester.TestAgentCapabilities(c.Request.Context(), agentType, uid, req.E2E)
+	if err != nil {
+		Fail(c, http.StatusInternalServerError, "CAPTEST_FAILED", err.Error())
+		return
+	}
+	Success(c, http.StatusOK, report)
+}
+
+// LastCapabilityTest GET /api/v1/agents/:type/capability-test — 返回最近一次能力测试报告（内存缓存）。
+func (h *AgentHandler) LastCapabilityTest(c *gin.Context) {
+	agentType := strings.TrimSpace(c.Param("type"))
+	if agentType == "" {
+		Fail(c, http.StatusBadRequest, "INVALID_REQUEST", "缺少 agent 类型")
+		return
+	}
+	if h.capTester == nil {
+		Fail(c, http.StatusServiceUnavailable, "CAPTEST_UNAVAILABLE", "当前服务不支持能力测试")
+		return
+	}
+	report, ok := h.capTester.LastCapabilityTest(agentType)
+	if !ok {
+		Success(c, http.StatusOK, gin.H{"agent_type": agentType, "available": false})
+		return
+	}
+	Success(c, http.StatusOK, gin.H{"agent_type": agentType, "available": true, "report": report})
 }

@@ -27,6 +27,7 @@ electron/out/
 .DS_Store
 .superpowers/
 .zcode/
+.qoder/
 config.yaml.bak
 
 # build artifacts (binaries)

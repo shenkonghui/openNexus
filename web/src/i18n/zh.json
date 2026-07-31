@@ -304,6 +304,7 @@
     "goalRoleTemplateDesc": "一句话描述适用的目标类型（自动选取的依据，必填）",
     "goalRoleTemplateBody": "正文为评估 prompt 模板，可用 {{condition}} / {{transcript}} 占位符；不写占位符时作为评估指引与标准段落拼接。",
     "tabConfig": "Agent 设置",
+    "tabCapTest": "能力测试",
     "tabTask": "任务设置",
     "tabPermission": "权限规则",
     "tabSystem": "系统",
@@ -839,6 +840,32 @@
     "addTab": "打开面板",
     "closeTab": "关闭面板",
     "requireSession": "请先创建或选择一个任务会话"
+  },
+  "capTest": {
+    "hint": "验证指定 Agent（ACP server）能否识别 openNexus 注入的 Rule、Skill 与 MCP 能力。静态检查秒级完成；端到端测试会创建临时会话并发送一条验证消息，真实消耗一次 Agent 调用（约 30-120 秒）。",
+    "runStatic": "静态检查",
+    "runE2E": "端到端测试",
+    "running": "测试中…",
+    "staticProgress": "正在执行静态检查（握手能力 + 注入验证）…",
+    "e2eProgress": "正在执行端到端测试（临时会话 + 验证消息），可能需要 1-2 分钟…",
+    "e2eConfirm": "端到端测试会创建临时会话并真实调用一次 Agent（消耗 token，约 1-2 分钟），确定继续？",
+    "modeStatic": "静态检查",
+    "modeE2E": "端到端",
+    "rawResponse": "Agent 原始回复",
+    "empty": "选择 Agent 后点击上方按钮开始测试。",
+    "item": {
+      "rule": "Rule（规则注入）",
+      "skill": "Skill（技能目录）",
+      "mcp": "MCP（工具接入）"
+    },
+    "status": {
+      "passed": "支持",
+      "failed": "不支持",
+      "partial": "部分支持",
+      "injected": "已注入（未验证）",
+      "skipped": "跳过",
+      "error": "出错"
+    }
   },
   "capPanel": {
     "noAgent": "未选择 Agent",

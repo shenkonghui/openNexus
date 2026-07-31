@@ -1,4 +1,4 @@
-import type { Agent, ModelOption, ConfigOption, AgentStatus, AgentCommand, SessionMode, AgentAcpCapabilities } from '../types'
+import type { Agent, ModelOption, ConfigOption, AgentStatus, AgentCommand, SessionMode, AgentAcpCapabilities, CapabilityTestReport } from '../types'
 import { apiFetch } from './client'
 
 // 获取可用 agent 列表（selector_filters 为 agent+模型 合并下拉的显示过滤正则，来自 config.yaml）
@@ -14,6 +14,19 @@ export function listAgentStatus(): Promise<{ data: { agents: AgentStatus[] } }> 
 // 获取指定 agent 类型最近一次 ACP 握手的能力信息（从未握手时 available=false）
 export function getAgentCapabilities(agentType: string): Promise<{ data: AgentAcpCapabilities }> {
   return apiFetch(`/agents/${encodeURIComponent(agentType)}/capabilities`)
+}
+
+// 执行 rule/skill/mcp 能力接入测试；e2e=true 时创建临时会话并发送验证 prompt（耗时较长）
+export function runCapabilityTest(agentType: string, e2e: boolean): Promise<{ data: CapabilityTestReport }> {
+  return apiFetch(`/agents/${encodeURIComponent(agentType)}/capability-test`, {
+    method: 'POST',
+    body: JSON.stringify({ e2e }),
+  })
+}
+
+// 获取最近一次能力测试报告（后端内存缓存，从未测试时 available=false）
+export function getLastCapabilityTest(agentType: string): Promise<{ data: { available: boolean; report?: CapabilityTestReport } }> {
+  return apiFetch(`/agents/${encodeURIComponent(agentType)}/capability-test`)
 }
 
 // 获取指定 agent 类型的可用模型列表（从已有会话缓存获取，可能为空）
