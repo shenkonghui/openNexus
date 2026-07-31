@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
 	"sort"
 	"time"
 
@@ -24,6 +25,7 @@ const bridgeRefreshInterval = 30 * time.Second
 //
 // 阻塞运行直到 ctx 取消或 stdin 关闭（agent 结束 MCP server 时关闭管道）。
 func RunStdioBridge(ctx context.Context, url, token string) error {
+	slog.Info("stdio 桥启动", "pid", os.Getpid(), "ppid", os.Getppid(), "gateway", url)
 	entry := acp.MCPServerEntry{
 		Type:    acp.MCPTypeHTTP,
 		Url:     url,
@@ -45,6 +47,14 @@ func RunStdioBridge(ctx context.Context, url, token string) error {
 	srv := mcp.NewServer(&mcp.Implementation{Name: GatewayMCPName, Version: "1.0.0"}, &mcp.ServerOptions{
 		Instructions: "openNexus MCP 聚合网关（stdio 桥）：工具以 <server>_<tool> 命名，来自全局 MCP 配置中的各个上游 server。",
 	})
+	// 请求日志：记录下游 agent 实际发来的每个 MCP 方法及时序，
+	// 用于排查“agent 连了桥但模型看不见工具”类问题（是否调过 tools/list、何时调）。
+	srv.AddReceivingMiddleware(func(next mcp.MethodHandler) mcp.MethodHandler {
+		return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
+			slog.Info("stdio 桥收到请求", "method", method)
+			return next(ctx, method, req)
+		}
+	})
 
 	// 首次同步失败直接退出：一个工具都拿不到时保持进程存活没有意义，
 	// 让 agent 感知失败并走自身的 MCP 失败处理。
@@ -52,6 +62,7 @@ func RunStdioBridge(ctx context.Context, url, token string) error {
 	if err := syncBridgeTools(ctx, srv, sess, known); err != nil {
 		return fmt.Errorf("列举网关工具失败: %w", err)
 	}
+	slog.Info("stdio 桥首次工具同步完成", "tools", len(known))
 
 	// 周期同步：网关上游增删（mcp.json 变更、上游重连）后，
 	// 通过 AddTool/RemoveTools 触发 list_changed 通知下游 agent。
@@ -70,7 +81,9 @@ func RunStdioBridge(ctx context.Context, url, token string) error {
 		}
 	}()
 
-	return srv.Run(ctx, &mcp.StdioTransport{})
+	err = srv.Run(ctx, &mcp.StdioTransport{})
+	slog.Info("stdio 桥退出", "pid", os.Getpid(), "err", err)
+	return err
 }
 
 // syncBridgeTools 从网关会话列举工具并与本地已注册集合做差量同步。

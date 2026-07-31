@@ -331,6 +331,7 @@ func main() {
 	noteH.SyncAllNotesMCP()
 	acpSvc.SetNotesMCP(noteSettingsRepo, publicBase)
 	acpSvc.SetMCPConfigPath(cfg.Agents.MCP.ConfigPath)
+	acpSvc.SetGatewayTransport(cfg.Agents.MCP.GatewayTransport)
 
 	// 任务元数据：自动打标签 + AI 标题生成（异步，fire-and-forget）
 	taskSettingsRepo := repository.NewTaskSettingsRepository(db)

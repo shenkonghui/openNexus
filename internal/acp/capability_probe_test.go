@@ -1,6 +1,7 @@
 package acp
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/coder/acp-go-sdk"
@@ -25,6 +26,19 @@ func TestParseCapTestLine(t *testing.T) {
 	if _, ok := parseCapTestLine(resp, "NOPE"); ok {
 		t.Error("parseCapTestLine 对不存在前缀应返回 false")
 	}
+
+	// 工具输出与格式行粘连（无换行）：前缀允许出现在行中间。
+	glued := "CAPTEST-SUBAGENT-D109C7EBMCP: mcp__opennexus-gateway__opennexus-notes_get_note\nAGENT: CAPTEST-SUBAGENT-D109C7EB"
+	if got, ok := parseCapTestLine(glued, "MCP"); !ok || got != "mcp__opennexus-gateway__opennexus-notes_get_note" {
+		t.Errorf("粘连行 MCP 解析失败: %q, %v", got, ok)
+	}
+	// AGENT 不应误命中 SUBAGENT 的中段。
+	if got, ok := parseCapTestLine("SUBAGENT: X", "AGENT"); ok {
+		t.Errorf("AGENT 误匹配 SUBAGENT 中段: %q", got)
+	}
+	if got, ok := parseCapTestLine(glued, "AGENT"); !ok || got != "CAPTEST-SUBAGENT-D109C7EB" {
+		t.Errorf("AGENT 行解析失败: %q, %v", got, ok)
+	}
 }
 
 func TestEvalMarkerItem(t *testing.T) {
@@ -42,18 +56,40 @@ func TestEvalMarkerItem(t *testing.T) {
 
 func TestEvalMCPItem(t *testing.T) {
 	servers := []acp.McpServer{{Stdio: &acp.McpServerStdio{Name: "opennexus-gateway"}}}
+	accept := append(mcpServerNames(servers), "opennexus-notes")
 
-	if item := evalMCPItem("MCP: opennexus-gateway_foo", servers, ""); item.Status != CapTestPassed {
+	if item := evalMCPItem("MCP: opennexus-gateway_foo", servers, accept, ""); item.Status != CapTestPassed {
 		t.Errorf("匹配 server 名应 passed，得到 %s", item.Status)
 	}
-	if item := evalMCPItem("MCP: something-else", servers, ""); item.Status != CapTestPartial {
+	if item := evalMCPItem("MCP: opennexus-notes_get_note", servers, accept, ""); item.Status != CapTestPassed {
+		t.Errorf("匹配网关上游名应 passed，得到 %s", item.Status)
+	}
+	if item := evalMCPItem("MCP: something-else", servers, accept, ""); item.Status != CapTestPartial {
 		t.Errorf("有工具但不匹配应 partial，得到 %s", item.Status)
 	}
-	if item := evalMCPItem("MCP: NONE", servers, ""); item.Status != CapTestFailed {
+	if item := evalMCPItem("MCP: NONE", servers, accept, ""); item.Status != CapTestFailed {
 		t.Errorf("NONE 应 failed，得到 %s", item.Status)
 	}
-	if item := evalMCPItem("MCP: whatever", nil, ""); item.Status != CapTestSkipped {
+	if item := evalMCPItem("MCP: whatever", nil, nil, ""); item.Status != CapTestSkipped {
 		t.Errorf("无注入 server 应 skipped，得到 %s", item.Status)
+	}
+}
+
+func TestCapTestRetryMerge(t *testing.T) {
+	first := "RULE: NONE\nSKILL: CAPTEST-SKILL-AAAA\nMCP: NONE\nAGENT: NONE"
+	retry := "MCP: opennexus-notes_get_note\nAGENT: CAPTEST-SUBAGENT-BBBB"
+
+	if !needCapTestRetry(first) {
+		t.Error("MCP/AGENT 为 NONE 时应触发重试")
+	}
+	if needCapTestRetry("MCP: tool_a\nAGENT: CAPTEST-SUBAGENT-X") {
+		t.Error("两行均有值时不应触发重试")
+	}
+	merged := mergeCapTestResponses(first, retry)
+	for _, want := range []string{"SKILL: CAPTEST-SKILL-AAAA", "MCP: opennexus-notes_get_note", "AGENT: CAPTEST-SUBAGENT-BBBB", "RULE: NONE"} {
+		if !strings.Contains(merged, want) {
+			t.Errorf("合并结果缺少 %q，得到:\n%s", want, merged)
+		}
 	}
 }
 

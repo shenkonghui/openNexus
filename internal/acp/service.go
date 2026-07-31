@@ -94,13 +94,13 @@ type Service struct {
 	// 断开后保留最后一次握手结果，供设置页展示 ACP 能力。
 	agentInitInfo map[string]acp.InitializeResponse
 	// agentCommands / agentModes 按 agentType 缓存，供新建任务页使用（无会话时）。
-	agentCommands    map[string][]acp.AvailableCommand
-	agentModes       map[string][]acp.SessionMode
-	probeLock        sync.Mutex // 缓存未命中时串行探测，避免并发重复建临时 session
+	agentCommands map[string][]acp.AvailableCommand
+	agentModes    map[string][]acp.SessionMode
+	probeLock     sync.Mutex // 缓存未命中时串行探测，避免并发重复建临时 session
 	// capTestReports 按 agentType 缓存最近一次能力接入测试报告（内存，重启失效）。
-	capTestReports map[string]CapabilityTestReport
-	capTestLocks   map[string]*sync.Mutex // 按 agentType 串行，允许不同 agent 并行测试
-	capTestLocksMu sync.Mutex             // 保护 capTestLocks map 本身
+	capTestReports   map[string]CapabilityTestReport
+	capTestLocks     map[string]*sync.Mutex // 按 agentType 串行，允许不同 agent 并行测试
+	capTestLocksMu   sync.Mutex             // 保护 capTestLocks map 本身
 	mu               sync.RWMutex
 	wsConfig         config.WorkspaceConfig
 	skillUserDirs    []string
@@ -111,8 +111,10 @@ type Service struct {
 	// gatewayEndpoint / gatewayToken 由主程序通过 SetGatewayEndpoint 注入。
 	// 非空时 configuredMCPServers 会默认把网关 endpoint 注入给所有会话，
 	// 并收敛被网关代理的 http/sse 上游，无需用户手动启用网关条目。
-	gatewayEndpoint     string
-	gatewayToken        string
+	gatewayEndpoint string
+	gatewayToken    string
+	// gatewayTransport 网关注入传输形态：stdio（默认，统一 stdio 桥）/ auto（按握手能力选 http）。
+	gatewayTransport    string
 	commandUserDirs     []string
 	commandProjectDirs  []string
 	ruleUserDirs        []string
@@ -329,6 +331,11 @@ func (s *Service) SetGatewayEndpoint(endpoint, token string) {
 	s.gatewayToken = strings.TrimSpace(token)
 }
 
+// SetGatewayTransport 设置网关注入传输形态（stdio/auto），空值按 stdio 处理。
+func (s *Service) SetGatewayTransport(transport string) {
+	s.gatewayTransport = strings.TrimSpace(transport)
+}
+
 // SetScanDirs 热刷新 skill/command/rule/subagent 的扫描目录配置。
 // 用于"软重载":config.yaml 改动后无需重启进程，调用此方法刷新内存中固化的目录副本，
 // 随后 ListSkills / ListConfiguredCommands / ListSubAgents / 新建会话注入 additionalDirectories 都会用新目录。
@@ -358,8 +365,8 @@ func (s *Service) SetScanDirs(skills config.SkillsConfig, commands config.Comman
 // 并收敛被网关代理的 http/sse 上游——无需用户在 mcp.json 里手动启用网关条目。
 // 网关不接管的 stdio server 仍走 session/new 原路注入。
 //
-// caps 为 agent 握手声明的 MCP 传输能力：agent 不支持 http 时（如 devin），
-// 网关降级为 stdio 桥形态（`opennexus mcp-bridge` 子进程）注入，工具集不变。
+// caps 为 agent 握手声明的 MCP 传输能力：gatewayTransport=auto 时按 caps 选择
+// http 网关或 stdio 桥；默认（stdio）统一注入 stdio 桥（`opennexus mcp-bridge` 子进程），工具集不变。
 func (s *Service) configuredMCPServers(caps acp.McpCapabilities) []acp.McpServer {
 	if s.mcpConfigPath == "" {
 		return nil
@@ -372,9 +379,11 @@ func (s *Service) configuredMCPServers(caps acp.McpCapabilities) []acp.McpServer
 	// 主程序默认启用网关：endpoint + token 就绪时直接注入，不依赖 mcp.json 条目。
 	if s.gatewayEndpoint != "" && s.gatewayToken != "" {
 		gwEntry := gatewayHTTPEntry(s.gatewayEndpoint, s.gatewayToken)
-		if !caps.Http {
-			// 不支持 http 传输的 agent：网关降级为 stdio 桥注入。
-			// 桥不可用（取不到主程序路径）时保留 http 条目，交由末端能力过滤兜底。
+		// stdio 形态（默认）：统一走 stdio 桥——协议基线所有 agent 支持，
+		// 且桥启动时同步拉取网关工具，规避部分 agent http 懒加载导致工具不可见；
+		// auto 形态：仅在 agent 握手声明不支持 http 时才降级 stdio 桥。
+		// 桥不可用（取不到主程序路径）时保留 http 条目，交由末端能力过滤兜底。
+		if s.gatewayTransport != "auto" || !caps.Http {
 			if bridge, ok := s.gatewayBridgeEntry(); ok {
 				gwEntry = bridge
 			}
@@ -395,16 +404,20 @@ func (s *Service) gatewayBridgeEntry() (NamedMCPServerEntry, bool) {
 		slog.Warn("获取主程序可执行文件路径失败，无法注入 stdio 网关桥", "err", err)
 		return NamedMCPServerEntry{}, false
 	}
+	env := map[string]string{
+		"OPENNEXUS_GATEWAY_URL":   s.gatewayEndpoint,
+		"OPENNEXUS_GATEWAY_TOKEN": s.gatewayToken,
+	}
+	// 探针日志：桥被 agent 拉起后 stderr 对主程序不可见，落盘到临时目录
+	// 便于排查“agent 是否真的拉起桥/工具是否同步就绪”（追加写，量很小）。
+	env["OPENNEXUS_BRIDGE_LOG"] = filepath.Join(os.TempDir(), "opennexus-mcp-bridge.log")
 	return NamedMCPServerEntry{
 		Name: GatewayMCPName,
 		Entry: MCPServerEntry{
 			Type:    MCPTypeStdio,
 			Command: exe,
 			Args:    []string{"mcp-bridge"},
-			Env: map[string]string{
-				"OPENNEXUS_GATEWAY_URL":   s.gatewayEndpoint,
-				"OPENNEXUS_GATEWAY_TOKEN": s.gatewayToken,
-			},
+			Env:     env,
 		},
 	}, true
 }

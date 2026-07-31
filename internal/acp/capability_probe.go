@@ -157,14 +157,79 @@ description: openNexus 能力接入自检专用 subagent，当被要求进行能
 }
 
 // buildCapTestPrompt 构造端到端验证 prompt：要求 agent 按固定格式逐项报告。
-func buildCapTestPrompt(ruleMarker, skillMDPath string) string {
+// mcpKeywords 为 MCP 判定的可接受名称集合（注入 server 名 + 网关上游条目名）：
+// 直接写进 prompt 让模型按关键字在工具清单里查找——聚合网关的工具名形如
+// <上游server>_<tool>，不带 "MCP" 字样，不给关键字模型无法辨认哪些是 MCP 工具。
+func buildCapTestPrompt(ruleMarker, skillMDPath string, mcpKeywords []string) string {
 	return fmt.Sprintf(`这是一次自动化能力自检，请严格按以下格式输出四行结果，不要输出其他内容，绝对不要编造标记：
 RULE: <如果你的系统规则/系统提示中包含形如 CAPTEST-RULE-XXXX 的标记，原样输出该标记；否则输出 NONE>
 SKILL: <读取文件 %s，原样输出其中形如 CAPTEST-SKILL-XXXX 的标记；无法读取则输出 NONE>
-MCP: <列出你当前可调用的 MCP 工具名称（逗号分隔，最多 20 个）；一个都没有则输出 NONE>
+MCP: %s
 AGENT: <如果你能调用名为 %s 的 subagent/子代理（如 Task/Agent 工具），调用它并原样输出它返回的形如 CAPTEST-SUBAGENT-XXXX 的标记；无法调用则输出 NONE>
-规则说明：%s 行的标记只能来自你真实看到的内容；读取文件与调用 subagent 时直接执行，不要询问确认。`,
-		skillMDPath, capTestSubAgentName, "RULE/SKILL/AGENT")
+规则说明：%s 行的标记只能来自你真实看到的内容；读取文件、调用 MCP 工具与 subagent 时直接执行，不要询问确认。`,
+		skillMDPath, mcpLineInstruction(mcpKeywords), capTestSubAgentName, "RULE/SKILL/AGENT")
+}
+
+// mcpLineInstruction 生成 MCP 行的填写说明：有关键字时要求实际调用（动作式验证，
+// 与 skill/subagent 一致——自省式"看工具清单"在多家 agent 上都不稳定），否则退回泛化描述。
+func mcpLineInstruction(keywords []string) string {
+	if len(keywords) == 0 {
+		return "<列出你当前可调用的 MCP 工具名称（逗号分隔，最多 20 个）；一个都没有则输出 NONE>"
+	}
+	return fmt.Sprintf("<在你当前可用的全部工具（含 MCP 工具）中查找名称包含 %s 任一关键字的工具，实际调用其中一个只读工具（名称含 list/get/read 的，无参数或用默认参数），调用成功后输出该工具名；找不到或调用失败则输出 NONE>",
+		strings.Join(keywords, "、"))
+}
+
+// needCapTestRetry 判断首轮回复的 MCP/AGENT 行是否为 NONE（或缺失），需要追问一轮。
+func needCapTestRetry(response string) bool {
+	for _, key := range []string{"MCP", "AGENT"} {
+		val, ok := parseCapTestLine(response, key)
+		if !ok || strings.EqualFold(strings.TrimSpace(val), "NONE") {
+			return true
+		}
+	}
+	return false
+}
+
+// buildCapTestRetryPrompt 构造第二轮追问 prompt：只复查 MCP 与 AGENT 两行。
+func buildCapTestRetryPrompt(mcpKeywords []string) string {
+	return fmt.Sprintf(`请重新检查一遍你当前可用的全部工具，然后严格按以下格式输出两行结果，不要输出其他内容：
+MCP: %s
+AGENT: <如果你能调用名为 %s 的 subagent/子代理（如 Task/Agent 工具），调用它并原样输出它返回的形如 CAPTEST-SUBAGENT-XXXX 的标记；无法调用则输出 NONE>
+标记只能来自你真实看到的内容，调用 subagent 时直接执行，不要询问确认。`, mcpLineInstruction(mcpKeywords), capTestSubAgentName)
+}
+
+// mergeCapTestResponses 合并两轮回复：各行取"非 NONE"的一轮（首轮优先，NONE/缺失时用追问轮补），
+// 产出规范化的四行文本供判定使用。
+func mergeCapTestResponses(first, retry string) string {
+	var lines []string
+	for _, key := range []string{"RULE", "SKILL", "MCP", "AGENT"} {
+		val, ok := parseCapTestLine(first, key)
+		if !ok || strings.EqualFold(strings.TrimSpace(val), "NONE") {
+			if rv, rok := parseCapTestLine(retry, key); rok && !strings.EqualFold(strings.TrimSpace(rv), "NONE") {
+				val, ok = rv, true
+			}
+		}
+		if ok {
+			lines = append(lines, key+": "+strings.TrimSpace(val))
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+// mcpAcceptNames 返回 MCP 判定的可接受名称集合：注入 server 名 + 全局配置的上游条目名。
+// 网关聚合工具以 <上游server>_<tool> 命名（不含网关自身名 opennexus-gateway），
+// 因此 agent 上报的工具需按上游条目名匹配才能识别为通过。
+func (s *Service) mcpAcceptNames(servers []acp.McpServer) []string {
+	names := mcpServerNames(servers)
+	if s.mcpConfigPath != "" {
+		if entries, err := LoadMCPServerEntries(s.mcpConfigPath); err == nil {
+			for _, e := range entries {
+				names = append(names, e.Name)
+			}
+		}
+	}
+	return names
 }
 
 // mcpServerNames 提取注入列表中的 server 名称（任意传输类型）。
@@ -186,15 +251,26 @@ func mcpServerNames(servers []acp.McpServer) []string {
 }
 
 // parseCapTestLine 从 agent 回复中提取 "PREFIX:" 行的内容（大小写不敏感，容忍 markdown 修饰）。
+// 前缀允许出现在行中间：部分 agent 会把工具输出（如 subagent 返回的标记）与
+// 格式行不加换行地拼在一起（例："CAPTEST-SUBAGENT-XXXXMCP: NONE"）。
 func parseCapTestLine(response, prefix string) (string, bool) {
+	upperPrefix := strings.ToUpper(prefix) + ":"
 	for _, line := range strings.Split(response, "\n") {
 		trimmed := strings.TrimSpace(strings.Trim(strings.TrimSpace(line), "*`#>-"))
-		if len(trimmed) < len(prefix)+1 {
-			continue
-		}
-		if strings.EqualFold(trimmed[:len(prefix)], prefix) && trimmed[len(prefix)] == ':' {
+		upper := strings.ToUpper(trimmed)
+		for start := 0; start < len(upper); {
+			idx := strings.Index(upper[start:], upperPrefix)
+			if idx < 0 {
+				break
+			}
+			idx += start
+			// 防误匹配更长关键字的尾部（如 "AGENT:" 命中 "SUBAGENT:" 中段）。
+			if idx >= 3 && upper[idx-3:idx] == "SUB" {
+				start = idx + len(upperPrefix)
+				continue
+			}
 			// 值可能残留 markdown 修饰（如 **SKILL:** value）：再去一次首尾修饰字符。
-			return strings.Trim(strings.TrimSpace(trimmed[len(prefix)+1:]), "*`# "), true
+			return strings.Trim(strings.TrimSpace(trimmed[idx+len(upperPrefix):]), "*`# "), true
 		}
 	}
 	return "", false
@@ -258,6 +334,17 @@ func (s *Service) TestAgentCapabilities(ctx context.Context, agentType string, u
 	}
 
 	cwd := s.probeCwd()
+	if e2e {
+		// 端到端级用独立 cwd 强制拉起全新 agent 进程：常驻 agent 进程只在其
+		// 首个 session 消费注入的 mcpServers 并扫描 subagent 定义（codebuddy/
+		// qoder/devin 实测一致），复用进程会产生 MCP/subagent 假阴性。
+		// 独立 cwd 使 connectionKey 与常驻连接不同 → 必新建进程；测试后释放。
+		capCwd := filepath.Join(cwd, ".captest", agentType)
+		if err := os.MkdirAll(capCwd, 0o755); err == nil {
+			cwd = capCwd
+			defer s.releaseConnection(agentType, cwd)
+		}
+	}
 	conn, err := s.ensureConnection(ctx, agentType, cwd)
 	if err != nil {
 		return fail("连接 agent", err)
@@ -334,7 +421,8 @@ func (s *Service) TestAgentCapabilities(ctx context.Context, agentType string, u
 	defer conn.Client().UnregisterPermissionWaiter(sid)
 	go autoApprovePermissions(conn, permCh)
 
-	updates, err := conn.Prompt(ctx, sessionID, buildCapTestPrompt(ruleMarker, skillMD))
+	mcpKeywords := s.mcpAcceptNames(mcpServers)
+	updates, err := conn.Prompt(ctx, sessionID, buildCapTestPrompt(ruleMarker, skillMD, mcpKeywords))
 	if err != nil {
 		return fail("发送验证 prompt", err)
 	}
@@ -342,16 +430,29 @@ func (s *Service) TestAgentCapabilities(ctx context.Context, agentType string, u
 	if err != nil {
 		return fail("收集 agent 回复", err)
 	}
-	if len(response) > capTestRawResponseLimit {
-		report.RawResponse = response[:capTestRawResponseLimit] + "…"
+
+	// MCP/AGENT 行为 NONE 时同会话追问一轮：部分 agent（codebuddy/qoder）的
+	// MCP 工具与 subagent 定义在首轮 prompt 时可能尚未注册完成（异步竞态），
+	// 第二轮时大概率已就绪；连续两轮 NONE 才判 failed，降低假阴性。
+	rawResponse := response
+	if needCapTestRetry(response) {
+		if retryUpdates, rErr := conn.Prompt(ctx, sessionID, buildCapTestRetryPrompt(mcpKeywords)); rErr == nil {
+			if retryResp, cErr := collectPromptText(ctx, retryUpdates, capTestPromptTimeout); cErr == nil && retryResp != "" {
+				rawResponse = response + "\n--- 追问轮 ---\n" + retryResp
+				response = mergeCapTestResponses(response, retryResp)
+			}
+		}
+	}
+	if len(rawResponse) > capTestRawResponseLimit {
+		report.RawResponse = rawResponse[:capTestRawResponseLimit] + "…"
 	} else {
-		report.RawResponse = response
+		report.RawResponse = rawResponse
 	}
 
 	report.Items = []CapabilityTestItem{
 		evalMarkerItem("rule", response, "RULE", ruleMarker),
 		evalMarkerItem("skill", response, "SKILL", skillMarker),
-		evalMCPItem(response, mcpServers, mcpDetail),
+		evalMCPItem(response, mcpServers, mcpKeywords, mcpDetail),
 		evalSubAgentItem(response, subMarker, subDetail, subErr),
 	}
 	slog.Info("agent 能力测试完成", "agent", agentType, "mode", report.Mode,
@@ -395,10 +496,11 @@ func evalMarkerItem(id, response, linePrefix, marker string) CapabilityTestItem 
 
 // evalMCPItem 判定 MCP 单项：
 //   - 未注入任何 server → skipped
-//   - MCP 行列出的工具名包含任一注入 server 名 → passed
-//   - 有非 NONE 的工具列表但匹配不到 server 名 → partial（agent 可能改写了工具名前缀）
+//   - MCP 行列出的工具名包含任一可接受名称（注入 server 名或网关上游条目名，
+//     网关聚合工具以 <上游server>_<tool> 命名，不含网关自身名）→ passed
+//   - 有非 NONE 的工具列表但匹配不到 → partial（agent 可能改写了工具名前缀）
 //   - NONE 或缺失 → failed
-func evalMCPItem(response string, servers []acp.McpServer, baseDetail string) CapabilityTestItem {
+func evalMCPItem(response string, servers []acp.McpServer, acceptNames []string, baseDetail string) CapabilityTestItem {
 	if len(servers) == 0 {
 		return CapabilityTestItem{ID: "mcp", Status: CapTestSkipped, Detail: "无可注入的 MCP server（未配置或全部被能力过滤丢弃）"}
 	}
@@ -406,9 +508,9 @@ func evalMCPItem(response string, servers []acp.McpServer, baseDetail string) Ca
 	if !ok || strings.EqualFold(strings.TrimSpace(val), "NONE") || strings.TrimSpace(val) == "" {
 		return CapabilityTestItem{ID: "mcp", Status: CapTestFailed, Detail: "agent 未报告任何 MCP 工具；" + baseDetail}
 	}
-	for _, name := range mcpServerNames(servers) {
+	for _, name := range acceptNames {
 		if name != "" && strings.Contains(val, name) {
-			return CapabilityTestItem{ID: "mcp", Status: CapTestPassed, Detail: fmt.Sprintf("agent 报告的工具包含 server %q；%s", name, baseDetail)}
+			return CapabilityTestItem{ID: "mcp", Status: CapTestPassed, Detail: fmt.Sprintf("agent 报告的工具匹配 %q；%s", name, baseDetail)}
 		}
 	}
 	return CapabilityTestItem{ID: "mcp", Status: CapTestPartial, Detail: fmt.Sprintf("agent 报告了工具（%s）但未匹配到注入 server 名；%s", truncateDetail(val, 200), baseDetail)}
@@ -426,6 +528,11 @@ func evalSubAgentItem(response, marker, baseDetail string, subErr error) Capabil
 		return CapabilityTestItem{ID: "subagent", Status: CapTestPassed, Detail: fmt.Sprintf("agent 调用测试 subagent 并复述了标记 %s", marker)}
 	}
 	if val, ok := parseCapTestLine(response, "AGENT"); ok {
+		// 返回了 CAPTEST-SUBAGENT 格式但标记不符：agent 实际调通了测试 subagent，
+		// 只是常驻进程缓存了旧一轮测试写入的定义文件（不重扫），判 partial。
+		if strings.Contains(val, "CAPTEST-SUBAGENT-") {
+			return CapabilityTestItem{ID: "subagent", Status: CapTestPartial, Detail: fmt.Sprintf("agent 调用了测试 subagent 但返回旧标记 %q（本轮 %s）：常驻 agent 进程缓存了上一轮的 subagent 定义，未重新扫描；调用链路本身可用", truncateDetail(val, 100), marker)}
+		}
 		return CapabilityTestItem{ID: "subagent", Status: CapTestFailed, Detail: fmt.Sprintf("AGENT 行返回 %q，未包含标记 %s；%s（注：常驻 agent 若仅在进程启动时扫描 subagent 定义，此项可能为假阴性）", truncateDetail(val, 200), marker, baseDetail)}
 	}
 	return CapabilityTestItem{ID: "subagent", Status: CapTestFailed, Detail: "回复中未找到 AGENT 行与标记；" + baseDetail}

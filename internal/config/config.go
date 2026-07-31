@@ -220,6 +220,11 @@ type MCPConfig struct {
 	// ConfigPath 是 MCP server 配置文件路径，默认 ~/.agents/mcp.json。
 	// 该文件中的 mcpServers 会注入给所有 agent 会话。
 	ConfigPath string `yaml:"config_path"`
+	// GatewayTransport 控制聚合网关的注入传输形态：
+	//   stdio（默认）：统一走 stdio 桥（协议基线，所有 agent 支持且工具同步就绪，
+	//     规避部分 agent http 懒加载导致的工具不可见问题）；
+	//   auto：按 agent 握手声明选择，支持 http 时注入 http 网关，否则降级 stdio 桥。
+	GatewayTransport string `yaml:"gateway_transport"`
 }
 
 // SkillsConfig 配置 Agent Skills 扫描目录（agentskills.io 规范）。
@@ -598,8 +603,15 @@ func (g *GoalRolesConfig) normalize() error {
 	return nil
 }
 
-// normalize 填充 MCP 配置文件路径默认值并展开 ~。
+// normalize 填充 MCP 配置文件路径默认值并展开 ~，同时校验网关传输形态取值。
 func (m *MCPConfig) normalize() error {
+	switch m.GatewayTransport {
+	case "":
+		m.GatewayTransport = "stdio"
+	case "stdio", "auto":
+	default:
+		return fmt.Errorf("mcp.gateway_transport 取值 %q 无效（可选 stdio/auto）", m.GatewayTransport)
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return fmt.Errorf("获取用户主目录以设置 MCP 配置路径: %w", err)

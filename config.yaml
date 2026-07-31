@@ -62,6 +62,10 @@ agents:
         # 全局共享 MCP server 配置文件（标准 mcpServers JSON 格式）。
         # 该文件中的 mcpServers 会注入给所有 agent 会话。可在设置页「MCP」Tab 编辑。
         config_path: ~/.agents/mcp.json
+        # 聚合网关注入传输形态：
+        #   stdio（默认）：统一走 stdio 桥（协议基线，工具同步就绪，规避部分 agent http 懒加载问题）
+        #   auto：按 agent 握手能力选择，支持 http 时注入 http 网关
+        gateway_transport: stdio
     # agent+模型 合并下拉框的显示过滤（正则列表，对 "agentType/模型值" 与 "agentType/模型显示名称" 做子串匹配，忽略大小写）。
     # 为空则全部显示；非空时任一正则命中即显示。示例：
     # selector:
