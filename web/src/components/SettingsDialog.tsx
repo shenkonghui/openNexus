@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
-import { X, SlidersHorizontal, Bot, Wrench, StickyNote, ListTodo, Shield, Monitor, Target, FlaskConical } from 'lucide-react'
+import { X, SlidersHorizontal, Bot, Wrench, StickyNote, ListTodo, Shield, ShieldAlert, Monitor, Target, FlaskConical } from 'lucide-react'
 import { listAgentConfigs, updateAgentConfig, deleteAgentConfig, refreshRegistry, getRegistryDefault, updateAgentFromRegistry } from '../api/agentConfigs'
 import type { RegistryRefreshResult } from '../api/agentConfigs'
 import { listAgents, getAgentModels, probeAgentConfigs, clearAgentProbeCache } from '../api/agents'
@@ -21,16 +21,17 @@ import AgentModelSelector from './AgentModelSelector'
 import AgentModelMultiSelect from './AgentModelMultiSelect'
 import ConfigEditor from './ConfigEditor'
 import AgentCapabilityTest from './AgentCapabilityTest'
+import AgentSecurityTest from './AgentSecurityTest'
 import RawConfigCard from './RawConfigCard'
 import ErrorBanner from './ErrorBanner'
 import LoadingSpinner from './LoadingSpinner'
 import i18n from '../i18n'
 import styles from './SettingsDialog.module.css'
 
-export type SettingsTab = 'language' | 'agent' | 'classify' | 'config' | 'captest' | 'task' | 'goal' | 'permission' | 'system'
+export type SettingsTab = 'language' | 'agent' | 'classify' | 'config' | 'captest' | 'sectest' | 'task' | 'goal' | 'permission' | 'system'
 
 export function parseSettingsTab(raw: string | null): SettingsTab {
-  if (raw === 'agent' || raw === 'classify' || raw === 'config' || raw === 'captest' || raw === 'task' || raw === 'goal' || raw === 'permission' || raw === 'system') return raw
+  if (raw === 'agent' || raw === 'classify' || raw === 'config' || raw === 'captest' || raw === 'sectest' || raw === 'task' || raw === 'goal' || raw === 'permission' || raw === 'system') return raw
   return 'language'
 }
 
@@ -743,6 +744,7 @@ export default function SettingsDialog({ initialTab = 'language', onClose }: Pro
         { key: 'agent', icon: <Bot size={15} />, label: t('settings.tabAgent') },
         { key: 'config', icon: <Wrench size={15} />, label: t('settings.tabConfig') },
         { key: 'captest', icon: <FlaskConical size={15} />, label: t('settings.tabCapTest') },
+        { key: 'sectest', icon: <ShieldAlert size={15} />, label: t('settings.tabSecTest') },
         { key: 'permission', icon: <Shield size={15} />, label: t('settings.tabPermission') },
       ],
     },
@@ -1143,6 +1145,13 @@ export default function SettingsDialog({ initialTab = 'language', onClose }: Pro
                 <>
                   <p className={styles.hint}>{t('capTest.hint')}</p>
                   <AgentCapabilityTest agents={agents} filters={linesToList(selectorFiltersText)} />
+                </>
+              )}
+
+              {tab === 'sectest' && (
+                <>
+                  <p className={styles.hint}>{t('secTest.hint')}</p>
+                  <AgentSecurityTest agents={agents} filters={linesToList(selectorFiltersText)} />
                 </>
               )}
 

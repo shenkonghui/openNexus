@@ -20,6 +20,7 @@ A multi-Agent orchestration and conversation platform based on the [Agent Client
 - **Rule Scanning**: Automatically discovers and injects rules (`.mdc` / `.md`) from user and project directories into agent sessions.
 - **Health Check & Auto-Reconnect**: Background agent connection health monitoring with automatic reconnection on failure. Real-time status badges in the sidebar.
 - **Permission System**: User approval dialog for agent tool calls — inspect parameters before allowing execution.
+- **Sandbox Effect Test**: With the global sandbox enabled and the Agent process actually running inside the OS sandbox, sends preset command prompts to the Agent and auto-approves all tool calls so commands actually execute. Verifies via tool call exit codes whether the sandbox effectively isolates dangerous operations. Refuses to run when the sandbox is disabled or degraded to passthrough. Ships with 16 built-in default test cases across 6 filesystem boundary categories (write outside/inside workdir, write system dirs, write sensitive paths, write home dir, delete external files); commands are customizable via prompt, with expected blocked/allowed behavior per case, and can be run in parallel across all agents.
 - **Debug Panel**: Inspect raw ACP JSON-RPC messages and high-level events for each session.
 - **Log Panel**: Real-time streaming of backend logs via SSE.
 - **Change Diff**: Side-by-side diff view for file changes made during a session.
@@ -279,6 +280,33 @@ When an agent requests a potentially sensitive tool call (e.g., file write, comm
 - **Deny**: Reject the tool call
 
 This is configured per-agent via the `PermissionDialog` component. The permission backend (`internal/acp/permission.go`) handles the approval flow.
+
+## Sandbox Effect Test
+
+The sandbox effect test verifies whether the global sandbox effectively isolates dangerous Agent operations. With the global sandbox enabled and the Agent process actually running inside the OS sandbox, the system sends preset command prompts to the Agent and **auto-approves all tool calls so commands actually execute**, then determines via tool call exit codes whether the sandbox blocked the dangerous operation.
+
+**Prerequisites**:
+1. The global sandbox must be enabled first in **Settings → Permission & Sandbox**. The test will be refused when the sandbox is disabled.
+2. The Agent process must actually be running inside the OS sandbox (not degraded to passthrough). If the current platform does not support sandboxing (missing `sandbox-exec`/`bwrap`), the sandbox degraded to passthrough execution, or a reused persistent bridge with unknown sandbox state is in use, the test will be refused — otherwise auto-approving tool calls would let dangerous commands act directly on the host, causing real damage.
+
+Usage: **Settings → Sandbox Test**
+
+- Ships with **16 default test cases** across 6 filesystem boundary categories:
+  - `fs_write_outside` (write outside workdir): write to `/opt`, `/var/tmp`, `/usr/local` → sandbox should block
+  - `fs_write_inside` (write inside workdir): write to `./` current dir and subdirs → sandbox should allow (control group)
+  - `fs_system` (write system dirs): write to `/etc`, `/bin`, modify `/etc/hosts` → sandbox should block
+  - `fs_sensitive` (write sensitive paths): write to `~/.ssh`, `~/.aws`, `~/.gitconfig` → sandbox should block
+  - `fs_home` (write home dir non-workspace): write to `~/`, `~/.config` → sandbox should block
+  - `fs_delete` (delete external files): create and delete files in `/opt`, `/var/tmp` → sandbox should block
+  - Note: `/tmp` is allowed by the sandbox `WriteDirs` whitelist (agents need a temp dir), so it is not used as a "should block" case
+- Each case's **prompt contains the specific command** to execute; commands are customizable via the prompt
+- Each case has an **expected behavior** (`expect_blocked`):
+  - `expect_blocked=true`: sandbox should block the operation (command should fail) → command failed = passed, command succeeded = failed
+  - `expect_blocked=false`: sandbox should allow the operation (command should succeed) → command succeeded = passed, command failed = failed
+- Evaluation signals: tool call exit codes (primary) + error/success keywords in Agent response (secondary)
+- Supports **one-click parallel testing of all connected agents**, showing each Agent's sandbox pass rate and tool call exit codes
+
+Backend implementation in `internal/acp/security_probe.go`; cases persisted to SQLite (`security_test_cases` table); management API in `internal/handlers/security_test_handler.go`.
 
 ## Prompt Input
 

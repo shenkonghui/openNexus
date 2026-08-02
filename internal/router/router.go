@@ -16,7 +16,7 @@ import (
 	"opennexus/internal/services"
 )
 
-func Setup(authSvc *services.AuthService, jwtSvc *services.JWTService, agentRouter *agent.Router, agentCfgH *handlers.AgentConfigHandler, registryH *handlers.RegistryHandler, schedTaskH *handlers.ScheduledTaskHandler, noteH *handlers.NoteHandler, taskSettingsH *handlers.TaskSettingsHandler, goalSettingsH *handlers.GoalSettingsHandler, agentPrefsH *handlers.AgentPrefsHandler, configH *handlers.ConfigHandler, mcpH *handlers.MCPHandler, logH *handlers.LogHandler, debugH *handlers.DebugHandler, subAgentH *handlers.SubAgentHandler, tmH *handlers.TaskManagerHandler, permSettingsH *handlers.PermissionSettingsHandler, toolCallH *handlers.ToolCallHandler, convH *handlers.ConversationHandler, tmSvc *services.TaskManagerService, skillsCfg config.SkillsConfig, commandsCfg config.CommandsConfig, rulesCfg config.RulesConfig, subAgentsCfg config.SubAgentsConfig, selectorCfg config.SelectorConfig, mode, webDist string, autoLogin bool) *gin.Engine {
+func Setup(authSvc *services.AuthService, jwtSvc *services.JWTService, agentRouter *agent.Router, agentCfgH *handlers.AgentConfigHandler, registryH *handlers.RegistryHandler, schedTaskH *handlers.ScheduledTaskHandler, noteH *handlers.NoteHandler, taskSettingsH *handlers.TaskSettingsHandler, goalSettingsH *handlers.GoalSettingsHandler, agentPrefsH *handlers.AgentPrefsHandler, configH *handlers.ConfigHandler, mcpH *handlers.MCPHandler, logH *handlers.LogHandler, debugH *handlers.DebugHandler, subAgentH *handlers.SubAgentHandler, tmH *handlers.TaskManagerHandler, permSettingsH *handlers.PermissionSettingsHandler, toolCallH *handlers.ToolCallHandler, convH *handlers.ConversationHandler, tmSvc *services.TaskManagerService, securityTestH *handlers.SecurityTestHandler, skillsCfg config.SkillsConfig, commandsCfg config.CommandsConfig, rulesCfg config.RulesConfig, subAgentsCfg config.SubAgentsConfig, selectorCfg config.SelectorConfig, mode, webDist string, autoLogin bool) *gin.Engine {
 	gin.SetMode(mode)
 	r := gin.New()
 	r.Use(gin.Recovery())
@@ -67,6 +67,19 @@ func Setup(authSvc *services.AuthService, jwtSvc *services.JWTService, agentRout
 			protected.GET("/agents/:type/capability-test", agentH.LastCapabilityTest)
 			// 一键并行测试全部已接入 agent
 			protected.POST("/agents/capability-test-all", agentH.CapabilityTestAll)
+
+			// 沙箱效果测试：沙箱开启时发送命令 prompt 让 agent 真正执行，通过退出码验证沙箱隔离效果
+			protected.POST("/agents/:type/security-test", securityTestH.RunTest)
+			protected.GET("/agents/:type/security-test", securityTestH.LastTest)
+			// 一键并行沙箱测试全部已接入 agent（独立 literal 路径避免与 :type 冲突）
+			protected.POST("/agents/security-test-all", securityTestH.RunAllTests)
+
+			// 沙箱测试用例管理（用户级 CRUD）
+			secTests := protected.Group("/security-tests")
+			{
+				secTests.GET("/cases", securityTestH.GetCases)
+				secTests.PUT("/cases", securityTestH.UpdateCases)
+			}
 
 			agentCfg := protected.Group("/agent-configs")
 			{

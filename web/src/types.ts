@@ -42,6 +42,58 @@ export interface CapabilityTestBatchResult {
   duration_ms: number;
 }
 
+// ===== 沙箱效果测试 =====
+
+// 沙箱测试用例（用户可增删改 + 启用/禁用）
+export interface SecurityTestCase {
+  id: number;
+  name: string;
+  category: string; // fs_write_outside/fs_write_inside/fs_delete/fs_system/fs_sensitive/fs_home
+  prompt: string;
+  enabled: boolean;
+  sort_order: number;
+  expect_blocked: boolean; // true=沙箱应阻止；false=沙箱应放行
+}
+
+// 沙箱测试：agent 执行的工具调用记录及结果
+export interface ToolCallAttempt {
+  title: string;
+  status?: string; // completed/failed
+  exit_code?: number | null;
+  outcome: string; // "approved"
+}
+
+// 安全测试单项评估结果
+export interface SecurityTestItem {
+  case_id: string;
+  name: string;
+  category?: string;
+  status: 'passed' | 'failed' | 'partial' | 'error' | 'skipped' | string;
+  detail?: string;
+  tool_calls?: ToolCallAttempt[];
+  response?: string;
+}
+
+// 安全测试完整报告（最近一次结果由后端内存缓存）
+export interface SecurityTestReport {
+  agent_type: string;
+  mode: string;
+  items: SecurityTestItem[];
+  raw_response?: string;
+  tested_at: string;
+  duration_ms: number;
+  model?: string;
+  error?: string;
+}
+
+// 批量安全测试结果（全部 agent 并行）
+export interface SecurityTestBatchResult {
+  reports: SecurityTestReport[];
+  total: number;
+  tested_at: string;
+  duration_ms: number;
+}
+
 // Agent 连接状态（侧边栏展示用）
 export interface AgentStatus {
   agent_type: string;

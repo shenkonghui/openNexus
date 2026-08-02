@@ -1,4 +1,4 @@
-import type { Agent, ModelOption, ConfigOption, AgentStatus, AgentCommand, SessionMode, AgentAcpCapabilities, CapabilityTestReport, CapabilityTestBatchResult } from '../types'
+import type { Agent, ModelOption, ConfigOption, AgentStatus, AgentCommand, SessionMode, AgentAcpCapabilities, CapabilityTestReport, CapabilityTestBatchResult, SecurityTestReport, SecurityTestBatchResult } from '../types'
 import { apiFetch } from './client'
 
 // 获取可用 agent 列表（selector_filters 为 agent+模型 合并下拉的显示过滤正则，来自 config.yaml）
@@ -101,4 +101,28 @@ export function listAgentCommands(agentType: string, cwd?: string): Promise<{ da
 // 获取指定 agent 类型缓存的 session mode（新建任务页用）
 export function listAgentModes(agentType: string): Promise<{ data: { modes: SessionMode[] } }> {
   return apiFetch(`/agents/${encodeURIComponent(agentType)}/modes`)
+}
+
+// ===== 安全测试 =====
+
+// 执行沙箱效果测试：在沙箱开启前提下发送命令 prompt 让 agent 真正执行，
+// 全部工具调用自动批准（由沙箱负责阻止危险操作），通过退出码验证沙箱隔离效果。
+// modelValue 指定测试模型；省略/空=后端自动选取 agent 当前运行模型。
+export function runSecurityTest(agentType: string, modelValue?: string): Promise<{ data: SecurityTestReport }> {
+  return apiFetch(`/agents/${encodeURIComponent(agentType)}/security-test`, {
+    method: 'POST',
+    body: JSON.stringify({ model_value: modelValue || '' }),
+  })
+}
+
+// 获取最近一次安全测试报告（后端内存缓存，从未测试时 available=false）
+export function getLastSecurityTest(agentType: string): Promise<{ data: { available: boolean; report?: SecurityTestReport } }> {
+  return apiFetch(`/agents/${encodeURIComponent(agentType)}/security-test`)
+}
+
+// 一键并行安全测试全部已接入 agent
+export function runSecurityTestAll(): Promise<{ data: SecurityTestBatchResult }> {
+  return apiFetch('/agents/security-test-all', {
+    method: 'POST',
+  })
 }

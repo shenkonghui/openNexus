@@ -29,6 +29,9 @@ type agentTransport interface {
 	Detach() error
 	// Pid 返回可供 KillProcessGroup 使用的进程组 PGID（bridge 模式为 bridge PID）。
 	Pid() int
+	// Sandboxed 返回 agent 进程是否真正运行在 OS 沙箱内（非降级直通）。
+	// 复用已存在 bridge 时无法确定，返回 false。
+	Sandboxed() bool
 	InspectFailure() string
 }
 
@@ -63,7 +66,13 @@ type bridgeTransport struct {
 	socketPath string
 	reused     bool // true=拨号复用已存在的 bridge（主 server 重启场景）
 	agentName  string
+	// sandboxed 标记本次新建的 bridge+agent 是否真正运行在 OS 沙箱内。
+	// 复用已存在 bridge 时为 false（无法确定原 bridge 的沙箱状态）。
+	sandboxed bool
 }
+
+// Sandboxed 返回 bridge+agent 是否真正运行在 OS 沙箱内。
+func (b *bridgeTransport) Sandboxed() bool { return b.sandboxed }
 
 // NewBridgeTransport 建立到 bridge 的 UDS 连接。
 // 先尝试拨号已存在的 socket（复用存活 bridge 及其 agent）；
@@ -81,7 +90,7 @@ func NewBridgeTransport(backend Backend, workDir, socketPath string, forceNew bo
 		}
 	}
 
-	pid, err := spawnBridgeDaemon(backend, workDir, socketPath)
+	pid, sandboxed, err := spawnBridgeDaemon(backend, workDir, socketPath)
 	if err != nil {
 		return nil, err
 	}
@@ -92,7 +101,7 @@ func NewBridgeTransport(backend Backend, workDir, socketPath string, forceNew bo
 		if dialErr == nil {
 			return &bridgeTransport{
 				conn: conn, pid: pid, socketPath: socketPath,
-				reused: false, agentName: backend.Name(),
+				reused: false, agentName: backend.Name(), sandboxed: sandboxed,
 			}, nil
 		}
 		if time.Now().After(deadline) {
@@ -104,21 +113,22 @@ func NewBridgeTransport(backend Backend, workDir, socketPath string, forceNew bo
 	}
 }
 
-// spawnBridgeDaemon 以 Setsid 独立会话拉起 acp-bridge 守护进程，返回其 PID。
+// spawnBridgeDaemon 以 Setsid 独立会话拉起 acp-bridge 守护进程，返回其 PID 与沙箱状态。
 // bridge 与主 server 生命周期解耦（同 watchdog 机制），主 server 退出后由 init/launchd 接管。
-func spawnBridgeDaemon(backend Backend, workDir, socketPath string) (int, error) {
+// 返回的 sandboxed=true 表示 bridge+agent 真正运行在 OS 沙箱内（非降级直通）。
+func spawnBridgeDaemon(backend Backend, workDir, socketPath string) (pid int, sandboxed bool, err error) {
 	command := backend.Command()
 	resolved, lookErr := resolveAgentCommand(command)
 	if lookErr != nil {
-		return 0, fmt.Errorf("启动 agent 进程 %s：命令 %q 不在 PATH 中（%w）；请检查命令是否安装或配置是否正确",
+		return 0, false, fmt.Errorf("启动 agent 进程 %s：命令 %q 不在 PATH 中（%w）；请检查命令是否安装或配置是否正确",
 			backend.Name(), filepath.Base(command), lookErr)
 	}
 	exe, err := os.Executable()
 	if err != nil {
-		return 0, fmt.Errorf("获取自身可执行文件路径: %w", err)
+		return 0, false, fmt.Errorf("获取自身可执行文件路径: %w", err)
 	}
 	if err := os.MkdirAll(filepath.Dir(socketPath), 0o700); err != nil {
-		return 0, fmt.Errorf("创建 bridge socket 目录: %w", err)
+		return 0, false, fmt.Errorf("创建 bridge socket 目录: %w", err)
 	}
 	// 拨号已失败说明无人监听，残留 socket 文件可安全清理
 	_ = os.Remove(socketPath)
@@ -127,8 +137,8 @@ func spawnBridgeDaemon(backend Backend, workDir, socketPath string) (int, error)
 	args = append(args, backend.Args()...)
 	argv := append([]string{exe}, args...)
 	// 沙箱包裹整条 bridge argv（bridge+agent 同沙箱）；socket 目录须可写
-	sandboxed := false
-	if sb := CurrentSandboxSettings(); sb.Enabled {
+	sb := CurrentSandboxSettings()
+	if sb.Enabled {
 		profile := BuildSandboxProfile(backend, workDir, filepath.Dir(socketPath))
 		wrapped, degraded := SandboxWrap(argv, profile)
 		switch {
@@ -136,7 +146,7 @@ func spawnBridgeDaemon(backend Backend, workDir, socketPath string) (int, error)
 			argv = wrapped
 			sandboxed = true
 		case sb.Mode == SandboxModeEnforce:
-			return 0, fmt.Errorf("沙箱模式为 enforce 但当前平台沙箱不可用，拒绝启动 agent %s", backend.Name())
+			return 0, false, fmt.Errorf("沙箱模式为 enforce 但当前平台沙箱不可用，拒绝启动 agent %s", backend.Name())
 		default:
 			logSandboxDegraded(backend.Name())
 		}
@@ -156,11 +166,11 @@ func spawnBridgeDaemon(backend Backend, workDir, socketPath string) (int, error)
 	slog.Debug("拉起 acp-bridge 守护进程",
 		"agent", backend.Name(), "socket", socketPath, "command", resolved, "cwd", workDir)
 	if err := cmd.Start(); err != nil {
-		return 0, fmt.Errorf("启动 acp-bridge 进程: %w", err)
+		return 0, false, fmt.Errorf("启动 acp-bridge 进程: %w", err)
 	}
-	pid := cmd.Process.Pid
+	pid = cmd.Process.Pid
 	_ = cmd.Process.Release()
-	return pid, nil
+	return pid, sandboxed, nil
 }
 
 // readBridgePID 读取 bridge 的 PID 文件；失败返回 0（Stop 时退化为仅断开连接）。

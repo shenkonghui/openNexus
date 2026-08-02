@@ -40,6 +40,16 @@ type Connection struct {
 	initResp acp.InitializeResponse
 }
 
+// Sandboxed 返回底层 agent 进程是否真正运行在 OS 沙箱内（非降级直通）。
+// 复用已存在 bridge 时无法确定原 bridge 的沙箱状态，返回 false。
+// 沙箱效果测试据此判断是否可安全自动批准工具调用。
+func (c *Connection) Sandboxed() bool {
+	if c == nil || c.transport == nil {
+		return false
+	}
+	return c.transport.Sandboxed()
+}
+
 // NewConnection 启动 agent 进程（直连模式）并建立 ACP 连接。
 // dbg 非空且 Enabled 时，用 tee 包装 stdin/stdout 捕获 JSON-RPC 报文。
 // terminalEnabled 为 true 时握手声明 terminal 能力（agent 的 shell 改由本服务代执行）。
@@ -305,7 +315,7 @@ func (c *Connection) Client() *Client {
 }
 
 // Pid 返回可供 KillProcessGroup 使用的进程组 PGID
-//（直连模式为 agent 直系子进程 PID，bridge 模式为 bridge 守护进程 PID）。未启动返回 0。
+// （直连模式为 agent 直系子进程 PID，bridge 模式为 bridge 守护进程 PID）。未启动返回 0。
 func (c *Connection) Pid() int {
 	return c.transport.Pid()
 }

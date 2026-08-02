@@ -355,6 +355,10 @@ func main() {
 	// 全局权限规则（yolo / 白名单 / 黑名单）：配置来自 config.yaml，设置页保存时写回文件并热更新到所有连接
 	permSettingsH := handlers.NewPermissionSettingsHandler(cfgPath, agentRouter)
 
+	// 沙箱效果测试：在沙箱开启前提下发送命令 prompt 让 agent 真正执行，通过退出码验证沙箱隔离效果（用例存 DB，agentRouter 实现测试接口）
+	securityTestCaseRepo := repository.NewSecurityTestCaseRepository(db)
+	securityTestH := handlers.NewSecurityTestHandler(securityTestCaseRepo, agentRouter)
+
 	configH := handlers.NewConfigHandler(cfgPath, acpSvc)
 
 	// MCP 聚合网关：把全局 mcp.json 里的 http/sse 上游汇聚成单一 endpoint。
@@ -391,7 +395,7 @@ func main() {
 	subAgentH := handlers.NewSubAgentHandler(noteSettingsRepo, cfg.Agents.MCP.ConfigPath, publicBase)
 	subAgentH.SyncAllSubagentMCP()
 
-	engine := router.Setup(authSvc, jwtSvc, agentRouter, agentCfgH, registryH, schedTaskH, noteH, taskSettingsH, goalSettingsH, agentPrefsH, configH, mcpH, logH, debugH, subAgentH, tmH, permSettingsH, toolCallH, convH, tmSvc, cfg.Agents.Skills, cfg.Agents.Commands, cfg.Agents.Rules, cfg.Agents.SubAgents, cfg.Agents.Selector, cfg.Server.Mode, cfg.Server.WebDist, cfg.Auth.AutoLogin)
+	engine := router.Setup(authSvc, jwtSvc, agentRouter, agentCfgH, registryH, schedTaskH, noteH, taskSettingsH, goalSettingsH, agentPrefsH, configH, mcpH, logH, debugH, subAgentH, tmH, permSettingsH, toolCallH, convH, tmSvc, securityTestH, cfg.Agents.Skills, cfg.Agents.Commands, cfg.Agents.Rules, cfg.Agents.SubAgents, cfg.Agents.Selector, cfg.Server.Mode, cfg.Server.WebDist, cfg.Auth.AutoLogin)
 	engine.Any("/mcp/notes", gin.WrapH(notesmcp.Handler(noteRepo, noteSettingsRepo)))
 	engine.Any("/mcp/notes/*path", gin.WrapH(notesmcp.Handler(noteRepo, noteSettingsRepo)))
 	// taskmanager MCP server：主 agent 通过 MCP 工具管理工作区任务（tasks.json）。

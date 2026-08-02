@@ -35,7 +35,13 @@ type Process struct {
 	stdout    io.ReadCloser
 	stderrBuf *ringBuffer // 捕获 stderr 尾部，握手失败时用于诊断
 	backend   Backend
+	// sandboxed 标记 agent 进程是否真正运行在 OS 沙箱内（SandboxWrap 未降级时为 true）。
+	// 复用 bridge 时无法确定，按 false 处理（沙箱测试会据此拒绝执行）。
+	sandboxed bool
 }
+
+// Sandboxed 返回 agent 进程是否真正运行在 OS 沙箱内。
+func (p *Process) Sandboxed() bool { return p.sandboxed }
 
 // resolveAgentCommand 定位可执行文件。
 // 对带路径的占位命令（如 ./dist-package/cursor-agent），取最后一段在 PATH 中查找。
@@ -141,6 +147,7 @@ func NewProcess(backend Backend, workDir string) (*Process, error) {
 		stdout:    stdout,
 		stderrBuf: stderrBuf,
 		backend:   backend,
+		sandboxed: sandboxed,
 	}, nil
 }
 

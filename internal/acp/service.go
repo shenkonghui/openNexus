@@ -98,16 +98,20 @@ type Service struct {
 	agentModes    map[string][]acp.SessionMode
 	probeLock     sync.Mutex // 缓存未命中时串行探测，避免并发重复建临时 session
 	// capTestReports 按 agentType 缓存最近一次能力接入测试报告（内存，重启失效）。
-	capTestReports   map[string]CapabilityTestReport
-	capTestLocks     map[string]*sync.Mutex // 按 agentType 串行，允许不同 agent 并行测试
-	capTestLocksMu   sync.Mutex             // 保护 capTestLocks map 本身
-	mu               sync.RWMutex
-	wsConfig         config.WorkspaceConfig
-	skillUserDirs    []string
-	skillProjectDirs []string
-	noteSettings     *repository.NoteSettingsRepository
-	publicBaseURL    string
-	mcpConfigPath    string
+	capTestReports map[string]CapabilityTestReport
+	capTestLocks   map[string]*sync.Mutex // 按 agentType 串行，允许不同 agent 并行测试
+	capTestLocksMu sync.Mutex             // 保护 capTestLocks map 本身
+	// securityTestReports 按 agentType 缓存最近一次沙箱测试报告（内存，重启失效）。
+	securityTestReports map[string]SecurityTestReport
+	securityTestLocks   map[string]*sync.Mutex // 按 agentType 串行，允许不同 agent 并行测试
+	securityTestLocksMu sync.Mutex             // 保护 securityTestLocks map 本身
+	mu                  sync.RWMutex
+	wsConfig            config.WorkspaceConfig
+	skillUserDirs       []string
+	skillProjectDirs    []string
+	noteSettings        *repository.NoteSettingsRepository
+	publicBaseURL       string
+	mcpConfigPath       string
 	// gatewayEndpoint / gatewayToken 由主程序通过 SetGatewayEndpoint 注入。
 	// 非空时 configuredMCPServers 会默认把网关 endpoint 注入给所有会话，
 	// 并收敛被网关代理的 http/sse 上游，无需用户手动启用网关条目。
@@ -254,6 +258,8 @@ func NewService(db *gorm.DB, messagesDir string, wsConfig config.WorkspaceConfig
 		probeCache:              make(map[string][]acp.SessionConfigOption),
 		capTestReports:          make(map[string]CapabilityTestReport),
 		capTestLocks:            make(map[string]*sync.Mutex),
+		securityTestReports:     make(map[string]SecurityTestReport),
+		securityTestLocks:       make(map[string]*sync.Mutex),
 		agentInitInfo:           make(map[string]acp.InitializeResponse),
 		agentCommands:           make(map[string][]acp.AvailableCommand),
 		agentModes:              make(map[string][]acp.SessionMode),
@@ -288,6 +294,20 @@ func NewService(db *gorm.DB, messagesDir string, wsConfig config.WorkspaceConfig
 			return ""
 		}
 		return rules.MatchDeny(command)
+	})
+	// 沙箱包裹 terminal/create 命令时，按 SessionId 反查所属 agent 的 Backend，
+	// 构建与 agent 一致的 WriteDirs 白名单（含 agent 配置目录如 ~/.claude）。
+	// 查不到（如临时探测会话）时退化为 nil backend。
+	svc.terminalBridge.SetBackendProvider(func(sid acp.SessionId) Backend {
+		sess, err := svc.sessions.FindByAgentSessionID(string(sid))
+		if err != nil || sess.AgentType == "" {
+			return nil
+		}
+		b, err := svc.GetBackend(sess.AgentType)
+		if err != nil {
+			return nil
+		}
+		return b
 	})
 	// 探测缓存持久化：路径取 SessionDir 的同级目录（与 opennexus.db 同层），
 	// 启动时从文件预加载 probeCache，避免每次重启都重新探测 agent 模型列表。

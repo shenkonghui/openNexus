@@ -180,6 +180,30 @@ func (r *Router) TestAllAgentCapabilities(ctx context.Context, userID uint, e2e 
 	return r.service.TestAllAgentCapabilities(ctx, userID, e2e)
 }
 
+// TestAgentSecurity 对指定 agent 类型执行沙箱测试，委托 service。
+func (r *Router) TestAgentSecurity(ctx context.Context, agentType string, cases []acp.SecurityTestCaseInput, modelValue string) (acp.SecurityTestReport, error) {
+	if r.service == nil {
+		return acp.SecurityTestReport{}, errors.New("service 未配置")
+	}
+	return r.service.TestAgentSecurity(ctx, agentType, cases, modelValue)
+}
+
+// LastSecurityTest 返回指定 agent 类型最近一次沙箱测试报告（内存缓存），委托 service。
+func (r *Router) LastSecurityTest(agentType string) (acp.SecurityTestReport, bool) {
+	if r.service == nil {
+		return acp.SecurityTestReport{}, false
+	}
+	return r.service.LastSecurityTest(agentType)
+}
+
+// TestAllAgentSecurity 对所有已接入 agent 并行执行沙箱测试，委托 service。
+func (r *Router) TestAllAgentSecurity(ctx context.Context, cases []acp.SecurityTestCaseInput) (acp.SecurityTestBatchResult, error) {
+	if r.service == nil {
+		return acp.SecurityTestBatchResult{}, errors.New("service 未配置")
+	}
+	return r.service.TestAllAgentSecurity(ctx, cases)
+}
+
 // PreconnectAgent 异步预连接指定 agent 与工作目录，委托 service。
 func (r *Router) PreconnectAgent(agentType, cwd string) error {
 	if _, err := r.registry.Get(agentType); err != nil {

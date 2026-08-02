@@ -131,6 +131,12 @@ type TerminalBridge struct {
 
 	// onExit 可选：命令退出时回调（工具调用记录回填退出码）。SetOnExit 注入；nil 则跳过。
 	onExit func(dbID uint, terminalID, command, cwd string, exitCode *int, signal *string)
+
+	// backendProvider 可选：按 ACP SessionId 反查所属 agent 的 Backend，
+	// 用于沙箱包裹 terminal/create 命令时构建与 agent 一致的 WriteDirs 白名单
+	// （含 agent 配置目录如 ~/.claude）。SetBackendProvider 注入；nil 则用 nil backend
+	// （仅工作目录 + 数据目录 + 临时目录可写，agent 配置目录不在白名单内）。
+	backendProvider func(acp.SessionId) Backend
 }
 
 // SetDenyCheck 注入执行前安全策略裁决函数（返回命中的 deny 规则原文；空串=放行）。
@@ -145,6 +151,14 @@ func (b *TerminalBridge) SetOnExit(fn func(dbID uint, terminalID, command, cwd s
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.onExit = fn
+}
+
+// SetBackendProvider 注入按 ACP SessionId 反查 Backend 的回调，
+// 用于沙箱包裹 terminal/create 命令时构建与 agent 一致的 WriteDirs 白名单。
+func (b *TerminalBridge) SetBackendProvider(fn func(acp.SessionId) Backend) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.backendProvider = fn
 }
 
 // NewTerminalBridge 创建 TerminalBridge。resolve 可为 nil（此时事件不路由到前端）。
@@ -253,11 +267,47 @@ func (b *TerminalBridge) Create(ctx context.Context, params acp.CreateTerminalRe
 		cmd.Dir = *params.Cwd
 	}
 	// UTF-8 locale 兼平台兼容；agent 显式传入的 LANG/LC_ALL 在后，优先生效
-	env := append(EnsureUTF8Locale(os.Environ()), "TERM=xterm-256color")
+	// baseEnv 为主进程环境（沙箱生效时会被 SanitizeEnvForSandbox 剥离凭证类变量），
+	// agentEnv 为 agent 显式声明的变量（始终透传，不受净化影响）。
+	baseEnv := append(EnsureUTF8Locale(os.Environ()), "TERM=xterm-256color")
+	agentEnv := make([]string, 0, len(params.Env))
 	for _, e := range params.Env {
-		env = append(env, e.Name+"="+e.Value)
+		agentEnv = append(agentEnv, e.Name+"="+e.Value)
 	}
-	cmd.Env = env
+	cmd.Env = append(baseEnv, agentEnv...)
+
+	// 沙箱开启时，TerminalBridge 执行的命令也须用 sandbox-exec 包裹，
+	// 否则 agent 通过 terminal/create 协议在主 server 进程中执行命令会绕过沙箱。
+	// 白名单沿用 agent 的沙箱 profile（工作目录 + 数据目录 + 临时目录 + agent 配置目录等）。
+	if sb := CurrentSandboxSettings(); sb.Enabled {
+		workDir := cmd.Dir
+		if workDir == "" {
+			workDir, _ = os.Getwd()
+		}
+		// 按 SessionId 反查所属 agent 的 Backend，构建与 agent 一致的 WriteDirs 白名单。
+		// 查不到时退化为 nil backend（仅工作目录 + 数据目录 + 临时目录可写）。
+		b.mu.Lock()
+		provider := b.backendProvider
+		b.mu.Unlock()
+		var backend Backend
+		if provider != nil {
+			backend = provider(params.SessionId)
+		}
+		profile := BuildSandboxProfile(backend, workDir)
+		argv := append([]string{command}, args...)
+		wrapped, degraded := SandboxWrap(argv, profile)
+		if !degraded {
+			// 沙箱生效时剥离 baseEnv 中的凭证类变量（DOCKER_/AWS_/KUBECONFIG 等），
+			// 与 process.go / bridge_transport.go 保持一致——sandbox-exec/bwrap 仅隔离文件系统，
+			// 环境变量仍会透传，不剥离则 agent 可经 terminal/create 执行 printenv/env 窃取凭证。
+			// agentEnv 为 agent 显式声明的工作所需变量，在净化后追加，不受净化影响。
+			cmd.Env = append(SanitizeEnvForSandbox(baseEnv), agentEnv...)
+			cmd.Path = wrapped[0]
+			cmd.Args = wrapped
+		} else if sb.Mode == SandboxModeEnforce {
+			return b.createDenied(params, "沙箱模式为 enforce 但当前平台沙箱不可用"), nil
+		}
+	}
 
 	reader, closer, err := startProcess(cmd)
 	if err != nil {
