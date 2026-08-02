@@ -8,7 +8,7 @@ This guide covers how to set up a local development environment, common commands
 - Node.js >= 20
 - npm or pnpm
 - (Optional) Docker and Docker Compose
-- (Optional) Rust + pnpm + `pake-cli@3.13.0` for desktop builds
+
 - API keys for the agents you want to use (e.g. `ANTHROPIC_API_KEY` for Claude Code)
 
 ## Quick Start
@@ -49,8 +49,6 @@ Register an account on first use.
 
 | Command | Description |
 |---------|-------------|
-| `make pake` | Build Pake desktop wrapper |
-| `make desktop` | Build macOS desktop app |
 | `make electron-dev` | Run Electron in dev mode |
 | `make electron-dist` | Package Electron app for current platform |
 

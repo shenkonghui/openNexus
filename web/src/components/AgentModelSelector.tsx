@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { ChevronUp, ChevronDown } from 'lucide-react'
 import type { ConfigOptionValue } from '../types'
 import { fullOptionLabel, truncateSelectLabel } from '../utils/selectLabel'
+import { compileFilters, matchFilters } from '../utils/modelFilter'
 import styles from './AgentModelSelector.module.css'
 
 interface AgentItem {
@@ -62,20 +63,13 @@ export default function AgentModelSelector({
   const searchRef = useRef<HTMLInputElement>(null)
 
   // 编译过滤正则（忽略大小写；非法项忽略，后端启动时已校验，此处仅兜底）
-  const regexes = useMemo(() => {
-    const out: RegExp[] = []
-    for (const f of filters) {
-      try { out.push(new RegExp(f, 'i')) } catch { /* 非法正则忽略 */ }
-    }
-    return out
-  }, [filters])
+  const regexes = useMemo(() => compileFilters(filters), [filters])
 
   const entries = useMemo(() => {
     const list: ComboEntry[] = []
     // 任一候选串被任一正则命中即显示；候选串同时覆盖模型值与显示名称，
     // 避免用户按下拉里看到的名称（如 "SWE 1.5"）过滤时因 value 写法不同（如 "swe-1.5"）而漏配。
-    const matches = (...candidates: string[]) =>
-      regexes.length === 0 || regexes.some((re) => candidates.some((c) => re.test(c)))
+    const matches = (...candidates: string[]) => matchFilters(regexes, ...candidates)
 
     for (const agent of agents) {
       const models = modelsByAgent[agent.type]

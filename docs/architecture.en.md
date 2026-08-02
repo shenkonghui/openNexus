@@ -124,7 +124,7 @@ MCP servers extend what agents can do. openNexus provides built-in MCP servers f
 - **Development** — separate backend (`:8080`) and Vite frontend (`:3000`)
 - **Single-port production** — backend serves the built frontend from `web/dist`
 - **Docker** — multi-stage build with both frontend and backend
-- **Desktop** — Pake (Tauri) or Electron wrapper around the web UI
+- **Desktop** — Electron wrapper around the web UI
 
 ## Configuration
 

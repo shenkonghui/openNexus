@@ -1,252 +1,246 @@
 # openNexus
 
-A multi-Agent orchestration and conversation platform based on the [Agent Client Protocol (ACP)](https://github.com/coder/acp-go-sdk). Connect and drive coding agents like Claude Code, CodeBuddy, Kilo Code and Devin from a single interface with multi-session concurrency, streaming conversations, file editing, terminal interaction, and scheduled task automation.
+基于 [Agent Client Protocol (ACP)](https://github.com/coder/acp-go-sdk) 的多 Agent 统一管理与对话平台。在一个界面中接入并驱动 Claude Code、CodeBuddy、Kilo Code、Devin 等编码 Agent，实现多会话并发、流式对话、文件浏览编辑、终端交互与定时任务调度。
 
-[🇨🇳 中文文档](README.zh-CN.md)
+[English Documentation](README.en.md)
 
-## Features
+## 功能特性
 
-- **Multi-Agent Access**: Built-in support for Claude Code, CodeBuddy, Kilo Code, Devin and more ACP agents. Add custom agent configurations dynamically via the Settings page.
-- **Session Management**: Create / resume / close / delete sessions. Multiple sessions share a single ACP connection per agent type (multiplexed) for concurrent usage.
-- **Streaming Conversations**: Real-time SSE streaming output showing Agent thinking, tool calls, and final responses.
-- **File Browsing & Editing**: Browse directories, view and edit files within the session workspace (CodeMirror with multi-language syntax highlighting).
-- **Terminal**: WebSocket-based xterm terminal for direct session workspace interaction.
-- **Scheduled Tasks**: Cron-driven task scheduling with automatic session creation and prompt execution. View execution history.
-- **Sub-Agents**: Define reusable sub-agents as markdown files (frontmatter with name/description/model/tools); invoke them from any agent session via the built-in MCP server.
-- **Notes**: Quick capture with `#tag` parsing, tag filtering, Markdown rendering, and optional Agent-based auto-classification.
-- **Prompt Input Enhancements**: `/` completes commands, skills, and modes; `@` provides hierarchical references to commands, skills, workspace files, and notes (browse by tag).
-- **Skills & Commands Discovery**: Scans `SKILL.md` and slash command files under workspace and user directories for autocomplete.
-- **MCP Integration**: Global MCP server configuration (`mcpServers` JSON) shared across all agent sessions. Built-in MCP servers for Notes and Sub-Agents. Editable in the Settings page.
-- **Rule Scanning**: Automatically discovers and injects rules (`.mdc` / `.md`) from user and project directories into agent sessions.
-- **Health Check & Auto-Reconnect**: Background agent connection health monitoring with automatic reconnection on failure. Real-time status badges in the sidebar.
-- **Permission System**: User approval dialog for agent tool calls — inspect parameters before allowing execution.
-- **Debug Panel**: Inspect raw ACP JSON-RPC messages and high-level events for each session.
-- **Log Panel**: Real-time streaming of backend logs via SSE.
-- **Change Diff**: Side-by-side diff view for file changes made during a session.
-- **Drawio Rendering**: Render drawio diagrams (embed ` ```drawio ` code blocks) in conversations.
-- **User Authentication**: JWT-based auth with registration, login, password change, and profile management.
-- **Theme Toggle**: Light and dark theme support.
-- **Internationalization**: Chinese and English UI. Switch language in the Settings page.
-- **Single-Port Deployment**: Production mode serves the frontend build directly from the backend. Docker support included.
-- **Desktop Clients**: Two options — [Pake](https://github.com/tw93/Pake) (lightweight Tauri wrapper) and Electron (full-featured, with auto-update support).
+- **多 Agent 接入**：内置 Claude Code、CodeBuddy、Kilo Code、Devin 等 ACP Agent，支持在设置页动态添加自定义 Agent 配置
+- **会话管理**：创建 / 恢复 / 关闭 / 删除会话，每个 Agent 共享一条 ACP 连接（多路复用），支持同时并发多个会话
+- **流式对话**：基于 SSE 的实时流式输出，展示 Agent 的思考、工具调用与最终回复
+- **文件浏览与编辑**：在会话工作区内浏览目录、查看与编辑文件（集成 CodeMirror，支持多语言语法高亮）
+- **终端交互**：基于 WebSocket 的 xterm 终端，可直接操作会话工作区
+- **定时任务**：支持 cron 表达式调度，自动创建会话并发送 prompt，可查看历史执行记录
+- **子 Agent (Sub-Agent)**：通过 Markdown 文件定义可复用的子 Agent（frontmatter 含 name/description/model/tools），通过内置 MCP 服务从任意会话中调用
+- **笔记**：快速记录想法，支持 `#标签` 解析、按标签筛选、Markdown 渲染；可配置 Agent 自动分类任务
+- **Prompt 输入增强**：`/` 补全 command / skill / mode；`@` 分级引用 Command、Skill、工作区文件与笔记（按标签浏览）
+- **Skills & Commands 发现**：扫描工作区与用户目录下的 `SKILL.md` 与 slash command 文件，在输入框中补全
+- **MCP 集成**：全局 MCP server 配置（`mcpServers` JSON）自动注入所有 Agent 会话；内置笔记 MCP 和子 Agent MCP 服务
+- **规则扫描**：自动发现用户和项目目录下的规则文件（`.mdc` / `.md`）并注入 Agent 会话
+- **连接健康检查与自动重连**：后台定期检测各 Agent 连接状态，断线自动重连；侧边栏实时展示连接状态
+- **权限系统**：Agent 发起敏感操作时弹出用户审批对话框，审查参数后决定是否放行
+- **调试面板**：查看每次会话的原始 ACP JSON-RPC 报文与高层事件
+- **日志面板**：后端日志实时 SSE 推送到前端
+- **文件变更对比**：会话中文件变更的左右对比视图
+- **Drawio 渲染**：对话中嵌入 ` ```drawio ` 代码块自动渲染图表
+- **用户认证**：JWT 鉴权，支持注册 / 登录 / 密码修改 / 个人资料
+- **主题切换**：内置亮色 / 暗色主题
+- **国际化**：支持中文和英文界面，在设置页可切换语言
+- **单端口部署**：生产模式下前端构建产物由后端直接服务，前后端同一端口；同时支持 Docker 化部署
+- **桌面客户端**：使用 Electron（功能完整，支持自动更新）
 
-## Tech Stack
+## 技术栈
 
-| Layer | Technology |
-|-------|-----------|
-| Backend | Go 1.25 · Gin · GORM · SQLite · JWT · gorilla/websocket · robfig/cron |
-| Frontend | React 18 · TypeScript · Vite · CodeMirror · xterm.js · react-markdown · react-router-dom · i18next |
-| Protocol | Agent Client Protocol (ACP) · Model Context Protocol (MCP) |
+| 层 | 技术 |
+|------|------|
+| 后端 | Go 1.25 · Gin · GORM · SQLite · JWT · gorilla/websocket · robfig/cron |
+| 前端 | React 18 · TypeScript · Vite · CodeMirror · xterm.js · react-markdown · react-router-dom · i18next |
+| 协议 | Agent Client Protocol (ACP) · Model Context Protocol (MCP) |
 
-## Project Structure
+## 项目结构
 
 ```
 openNexus/
 ├── cmd/
-│   ├── server/            # Entry point (main server)
-│   └── import-fleeting/   # Fleeting notes import tool
+│   ├── server/            # 程序入口（主服务）
+│   └── import-fleeting/   # Fleeting notes 导入工具
 ├── internal/
-│   ├── acp/               # ACP protocol: connection, client, session, health check, binary install, registry, sub-agent runner
-│   ├── agent/             # Agent registry and router
-│   ├── config/            # Config loading, validation, and legacy data migration
-│   ├── database/          # DB connection
-│   ├── handlers/          # HTTP handlers (sessions, agents, files, terminal, tasks, notes, MCP, logs, debug, workspace)
-│   ├── logging/           # Logging hub, handler, and setup (real-time log streaming via SSE)
+│   ├── acp/               # ACP 协议封装：连接、客户端、会话、健康检查、二进制安装、注册表、子 Agent 运行
+│   ├── agent/             # Agent 注册表与路由
+│   ├── config/            # 配置加载、校验与历史数据迁移
+│   ├── database/          # 数据库连接
+│   ├── handlers/          # HTTP 处理器（会话、Agent、文件、终端、任务、笔记、MCP、日志、调试、工作区）
+│   ├── logging/           # 日志中心与处理（实时日志 SSE 推送）
 │   ├── mcp/
-│   │   ├── notes/         # MCP server for Notes (expose notes as tools/resources)
-│   │   └── subagent/      # MCP server for Sub-Agents (invoke sub-agent sessions)
-│   ├── middleware/        # JWT auth middleware
-│   ├── models/            # Data models
-│   ├── repository/        # Data access layer
-│   ├── router/            # Route registration and static file serving
-│   ├── services/          # Business services (auth, JWT, scheduler, note classifier, task meta)
-│   └── sysutil/           # System utilities (PATH enrichment, file paths)
-├── web/                   # Frontend (React + Vite)
-├── electron/              # Electron desktop client (alternative to Pake)
-├── scripts/               # Build and packaging scripts (Pake, desktop, release)
-├── assets/                # Application icons (PNG, SVG)
-├── docs/                  # Additional documentation
-├── vendor/                # Vendored Go dependencies
-├── config.yaml            # Default configuration
-├── Dockerfile             # Multi-stage build (frontend + backend)
-├── docker-compose.yml     # Container orchestration
-└── Makefile               # Common command shortcuts
+│   │   ├── notes/         # 笔记 MCP 服务器（将笔记暴露为工具/资源）
+│   │   └── subagent/      # 子 Agent MCP 服务器（调用子 Agent 会话）
+│   ├── middleware/        # JWT 鉴权中间件
+│   ├── models/            # 数据模型
+│   ├── repository/        # 数据访问层
+│   ├── router/            # 路由注册与静态文件服务
+│   ├── services/          # 业务服务（认证、JWT、调度器、笔记分类、任务元数据）
+│   └── sysutil/           # 系统工具（PATH 扩充、文件路径）
+├── web/                   # 前端源码（React + Vite）
+├── electron/              # Electron 桌面客户端
+├── scripts/               # 构建与打包脚本（桌面应用、发布）
+├── assets/                # 应用图标（PNG、SVG）
+├── docs/                  # 附加文档
+├── vendor/                # 第三方 Go 依赖
+├── config.yaml            # 默认配置文件
+├── Dockerfile             # 多阶段构建（前端 + 后端）
+├── docker-compose.yml     # 容器编排
+└── Makefile               # 常用命令快捷方式
 ```
 
-## Quick Start
+## 快速开始
 
-### Prerequisites
+### 环境要求
 
 - Go >= 1.25
 - Node.js >= 20
-- API keys for the agents you want to use (e.g., `ANTHROPIC_API_KEY` for Claude Code)
+- 各 Agent 所需的 API Key（如 Claude Code 需要 `ANTHROPIC_API_KEY`）
 
-### Local Development
+### 本地开发
 
 ```bash
-# Start both frontend and backend dev servers (backend :8080, frontend :3000)
+# 一键启动前后端开发服务器（后端 :8080，前端 :3000）
 make dev
 ```
 
-Visit http://localhost:3000. Register an account to get started.
+启动后访问 http://localhost:3000 即可使用。首次使用需注册账号。
 
-To start individually:
+如需单独启动：
 
 ```bash
-make backend    # Start backend only on http://localhost:8080
-make frontend   # Start frontend only on http://localhost:3000
+make backend    # 仅启动后端 http://localhost:8080
+make frontend   # 仅启动前端 http://localhost:3000
 ```
 
-### Production Mode (Single Port)
+### 单端口运行（生产模式）
 
 ```bash
-# Build frontend + backend, run in release mode
+# 构建前端 + 后端，以 release 模式启动（前端 + API 同端口）
 make run
 ```
 
-Visit http://localhost:8080.
+访问 http://localhost:8080。
 
-### Docker Deployment
+### Docker 部署
 
 ```bash
-# Build image and start
+# 构建镜像并前台启动
 make docker-up
 
-# Or run in background
+# 或后台启动
 make docker-up-d
 ```
 
-Set environment variables like `ANTHROPIC_API_KEY` before starting:
+如需配置 `ANTHROPIC_API_KEY` 等环境变量，在启动前设置：
 
 ```bash
 ANTHROPIC_API_KEY=sk-xxx make docker-up-d
 ```
 
-### Desktop Clients
+### 桌面客户端
 
 ```bash
-# Pake desktop (lightweight Tauri wrapper)
-make pake              # Build Pake wrapper only
-make desktop           # macOS desktop app (Apple Silicon)
-make desktop-linux     # Linux amd64 desktop app
-make desktop-windows   # Windows amd64 desktop app
-
-# Electron desktop (full-featured, with auto-update)
-make electron-dev     # Run in dev mode
-make electron-dist    # Package for current platform
-make electron-install # Install to /Applications (macOS)
-make electron-run     # Launch installed app
+# Electron 桌面客户端（功能完整，支持自动更新）
+make electron-dev     # 开发模式运行
+make electron-dist    # 打包当前平台
+make electron-install # 安装到 /Applications（macOS）
+make electron-run     # 启动已安装的应用
 ```
 
-## Configuration
+## 配置说明
 
-The configuration file is `config.yaml`. Environment variable overrides:
+配置文件为 `config.yaml`，也可通过环境变量覆盖：
 
-| Config | Env Var | Description |
-|--------|---------|-------------|
-| `server.port` | `SERVER_PORT` | Server port (default: `8080`) |
+| 配置项 | 环境变量 | 说明 |
+|--------|---------|------|
+| `server.port` | `SERVER_PORT` | 服务端口，默认 `8080` |
 | `server.mode` | `SERVER_MODE` | `debug` / `release` |
-| `server.web_dist` | `WEB_DIST` | Frontend build directory (default: `./web/dist`) |
-| `server.public_base_url` | `PUBLIC_BASE_URL` | Public base URL for MCP endpoints |
-| `logging.level` | `LOGGING_LEVEL` | Log level: `debug` / `info` / `warn` / `error` (default: `info`) |
-| `database.path` | `DATABASE_PATH` | SQLite database path (default: `~/.openNexus/opennexus.db`) |
-| `jwt.secret` | `JWT_SECRET` | JWT signing secret (change in production!) |
-| `jwt.access_ttl` | `JWT_ACCESS_TTL` | Access token TTL (default: `15m`) |
-| `jwt.refresh_ttl` | `JWT_REFRESH_TTL` | Refresh token TTL (default: `168h`) |
-| `auth.auto_login` | `AUTH_AUTO_LOGIN` | Auto-login as admin (default: `true`) |
-| `debug.acp.enabled` | `DEBUG_ACP_ENABLED` | Enable ACP debug logging (default: `true`) |
-| `debug.acp.dir` | `DEBUG_ACP_DIR` | ACP debug log directory |
-| `agents.workspace.session_dir` | `AGENTS_WORKSPACE_SESSION_DIR` | Session workspace root (default: `~/.openNexus/session`) |
-| `agents.workspace.default_mode` | - | Default workspace mode: `temporary` / `persistent` |
-| `agents.mcp.config_path` | `AGENTS_MCP_CONFIG_PATH` | Global MCP servers config path (default: `~/.agents/mcp.json`) |
+| `server.web_dist` | `WEB_DIST` | 前端构建产物目录，默认 `./web/dist` |
+| `server.public_base_url` | `PUBLIC_BASE_URL` | MCP 端点公网基础 URL |
+| `logging.level` | `LOGGING_LEVEL` | 日志等级：`debug` / `info` / `warn` / `error`，默认 `info` |
+| `database.path` | `DATABASE_PATH` | SQLite 数据库路径，默认 `~/.openNexus/opennexus.db` |
+| `jwt.secret` | `JWT_SECRET` | JWT 签名密钥（生产环境务必修改） |
+| `jwt.access_ttl` | `JWT_ACCESS_TTL` | 访问令牌有效期，默认 `15m` |
+| `jwt.refresh_ttl` | `JWT_REFRESH_TTL` | 刷新令牌有效期，默认 `168h` |
+| `auth.auto_login` | `AUTH_AUTO_LOGIN` | 自动以 admin 登录，默认 `true` |
+| `debug.acp.enabled` | `DEBUG_ACP_ENABLED` | 启用 ACP 调试日志，默认 `true` |
+| `debug.acp.dir` | `DEBUG_ACP_DIR` | ACP 调试日志存储目录 |
+| `agents.workspace.session_dir` | `AGENTS_WORKSPACE_SESSION_DIR` | 会话工作区根目录，默认 `~/.openNexus/session` |
+| `agents.workspace.default_mode` | - | 工作区模式：`temporary` / `persistent` |
+| `agents.mcp.config_path` | `AGENTS_MCP_CONFIG_PATH` | 全局 MCP 配置路径，默认 `~/.agents/mcp.json` |
 
-Config file lookup: `CONFIG_PATH` → `~/.openNexus/config.yaml` → `./config.yaml`. Database and session data default to `~/.openNexus/`.
+配置文件查找顺序：`CONFIG_PATH` → `~/.openNexus/config.yaml` → `./config.yaml`。数据库与会话数据默认均在 `~/.openNexus/`。
 
-Agent commands, arguments, and API keys can be managed dynamically in the Settings page — changes take effect immediately. Skills, commands, rules, sub-agents, and MCP servers are also configurable via user and project directories in `config.yaml`.
+Agent 的连接命令、参数、API Key 等可在前端「设置」页面动态管理，修改后实时生效。Skills、Commands、Rules、Sub-Agents、MCP 等均可通过 `config.yaml` 中的用户/项目目录配置。
 
-## Data Migration (Automatic)
+## 数据迁移（自动）
 
-On startup, openNexus automatically migrates data from legacy directories left by previous versions, so existing users can upgrade without data loss. The migration runs once before config loading and is **idempotent** — re-running has no effect.
+启动时，openNexus 会自动迁移历史版本遗留的数据目录，老用户可无感升级。迁移在配置加载之前执行一次，**幂等**——重复运行无副作用。
 
-| Legacy directory | Migrated to | Contents |
-|------------------|-------------|----------|
-| `~/.nextAgent` | `~/.openNexus` | Database, session workspaces, config, ACP debug logs |
-| `~/.nexusagent/binaries` | `~/.openNexus/binaries` | Downloaded agent binaries and `versions.json` |
-| `~/.openNexus/nexus.db` | `~/.openNexus/opennexus.db` | Renamed in place (within the data dir) |
+| 历史目录 | 迁移到 | 内容 |
+|---------|--------|------|
+| `~/.nextAgent` | `~/.openNexus` | 数据库、会话工作区、配置、ACP 调试日志 |
+| `~/.nexusagent/binaries` | `~/.openNexus/binaries` | 已下载的 agent 二进制与 `versions.json` |
+| `~/.openNexus/nexus.db` | `~/.openNexus/opennexus.db` | 数据目录内的库文件改名 |
 
-**Migration policy (target-first):** if `~/.openNexus` already exists and is non-empty, the main-directory migration is skipped to avoid overwriting existing data (the legacy directory is preserved as-is, and a log line points you to it). The binary cache is still merged entry-by-entry (target entries are kept). When both `nexus.db` and `opennexus.db` exist, `opennexus.db` wins and the old file is removed.
+**迁移策略（目标优先）：** 若 `~/.openNexus` 已存在且非空，主目录迁移会跳过以避免覆盖已有数据（历史目录原样保留，日志会提示用户手动处理）。二进制缓存仍会逐条目合并（目标已有的条目保留）。当 `nexus.db` 与 `opennexus.db` 同时存在时，保留 `opennexus.db`，删除旧文件。
 
-Migration errors are **non-fatal** — they are logged as warnings and startup continues (consistent with existing recover-on-startup logic like `RestoreBinarySymlinks` / `RecoverActiveSessions`).
+迁移过程出错**不阻断启动**——仅记录警告日志后继续（与现有 `RestoreBinarySymlinks` / `RecoverActiveSessions` 等启动自愈逻辑风格一致）。
 
-**Skip the migration** (e.g. for Docker / CI where data is managed externally):
+**跳过迁移**（如 Docker / CI 场景由外部管理数据）：
 
 ```bash
 SKIP_DATA_MIGRATION=1 ./opennexus
 ```
 
-> **Manual recovery:** if a fresh start created an empty `~/.openNexus` before the migration could run, the auto-migration will skip it. You can recover by stopping the server, replacing `~/.openNexus/opennexus.db` with your `~/.nextAgent/nexus.db`, and moving `~/.nextAgent/session/*` into `~/.openNexus/session/`. The original legacy directory is never deleted by the migration.
+> **手动恢复：** 若新版首次启动已创建了空的 `~/.openNexus`（导致自动迁移被跳过），可手动恢复——停掉服务，用 `~/.nextAgent/nexus.db` 覆盖 `~/.openNexus/opennexus.db`，并把 `~/.nextAgent/session/*` 移入 `~/.openNexus/session/`。迁移逻辑不会删除原始历史目录，数据始终安全。
 
-## Agent Integration
+## Agent 接入
 
-### Enabling an Agent
+### 启用流程
 
-1. Open **Settings → Agent** and enable the target agent (Claude Code is enabled by default on first launch; other agents from the [ACP Registry](https://cdn.agentclientprotocol.com/registry/v1/latest/registry.json) are synced but disabled)
-2. Configure required environment variables (e.g. `ANTHROPIC_API_KEY` for Claude Code)
-3. The backend registers the agent immediately and completes connection **asynchronously in the background**
+1. 打开「设置 → Agent」，在列表中启用目标 Agent（首次启动默认仅启用 Claude Code，其余 Agent 从 [ACP Registry](https://cdn.agentclientprotocol.com/registry/v1/latest/registry.json) 同步但默认禁用）
+2. 配置所需环境变量（如 Claude Code 需要 `ANTHROPIC_API_KEY`）
+3. 保存后后端立即注册该 Agent，并在**后台异步**完成连接
 
-### Background Authentication
+### 后台认证
 
-After enabling an agent, openNexus automatically performs these steps in the background (`PreconnectAllAsync` + health-check reconnect), with no manual action in the UI:
+启用 Agent 后，openNexus 会在后台自动执行以下步骤（`PreconnectAllAsync` + 健康检查重连），无需在前端手动操作：
 
-1. **Start subprocess**: run the configured `npx` / `uvx` or binary distribution command
-2. **ACP handshake**: call `initialize` to negotiate capabilities
-3. **ACP authentication**: only `env_var` methods (API key injected via `api_key_env`) are auto-authenticated; `agent` / `terminal` interactive login is not attempted in the background
-4. **Config probe**: cache available models, modes, and commands
-5. **Health check**: poll connection status every 30 seconds and auto-reconnect on failure
+1. **启动子进程**：按配置执行 `npx` / `uvx` 或 binary 分发命令
+2. **ACP 握手**：调用 `initialize` 协商协议能力
+3. **ACP 认证**：仅对 `env_var` 类型（API Key 已通过 `api_key_env` 注入子进程）自动调用 `authenticate`；`agent` / `terminal` 交互式登录不在后台自动执行
+4. **配置探测**：缓存可用模型、模式与命令列表
+5. **健康检查**：每 30 秒检测连接状态，断线自动重连
 
-Connection status (connected / connecting / disconnected) is shown in the sidebar. Check backend logs on failure (agent stderr is forwarded to the server console).
+侧边栏会实时展示各 Agent 的连接状态（已连接 / 连接中 / 已断开）。连接失败时查看后端日志（agent 子进程 stderr 会输出到服务端控制台）。
 
-### Distribution Types & Binaries
+### 分发类型与二进制
 
-| Type | Launch | Prerequisites |
-|------|--------|---------------|
-| `npx` | `npm exec --include=optional --yes <package>` | Node.js / npm (included in Docker image) |
-| `uvx` | `uvx <package>` | [uv](https://github.com/astral-sh/uv) installed on host |
-| `binary` | Download platform archive from Registry | Auto-downloaded to `~/.openNexus/binaries/<agent>-<version>/` on first enable |
+| 分发类型 | 启动方式 | 前置条件 |
+|---------|---------|---------|
+| `npx` | `npm exec --include=optional --yes <package>` | 需 Node.js / npm；Docker 镜像已内置 |
+| `uvx` | `uvx <package>` | 宿主机需安装 [uv](https://github.com/astral-sh/uv) |
+| `binary` | 从 Registry 下载平台对应压缩包 | 首次启用时自动下载到 `~/.openNexus/binaries/<agent>-<version>/` |
 
-**Binary distribution notes:**
+**binary 分发 Agent 注意事项：**
 
-- Downloads match the current OS/arch (e.g. `darwin-aarch64`, `linux-x86_64`); connection fails if Registry has no entry for your platform
-- Ensure the binary is executable; check logs for `安装 binary agent 失败` on download/extract errors
-- In Docker, binary cache lives at `~/.openNexus/binaries/` inside the container — mount this path to avoid re-downloads
-- Alpine containers use musl libc; some glibc-built binaries may not run — prefer host deployment or npx distribution
+- 下载按当前 OS/架构（如 `darwin-aarch64`、`linux-x86_64`）自动选择；Registry 未提供当前平台条目时会连接失败
+- 确保二进制有执行权限；下载失败或解压后找不到可执行文件时，查看日志中 `安装 binary agent 失败` 相关错误
+- Docker 部署时 binary 缓存在容器内 `~/.openNexus/binaries/`，如需避免重复下载可挂载该目录
+- Alpine 容器使用 musl libc，部分 binary 分发包（基于 glibc 编译）可能无法运行，建议在宿主机直接部署或使用 npx 分发
 
-**Verify before enabling:**
+**启用前验证二进制可用：**
 
 ```bash
-# npx example (Claude Code)
+# npx 类型（以 Claude Code 为例）
 npm exec --include=optional --yes @agentclientprotocol/claude-agent-acp@latest -- --help
 
-# After enabling: click "Fetch Config" in Settings, or confirm sidebar shows "connected"
+# 启用后在设置页点击「获取配置」，或观察侧边栏连接状态变为「已连接」
 ```
 
-Workspace directory policy:
+工作区目录策略：
 
-- **temporary**: Cleaned up only when the entire workspace is deleted; deleting a single session does not remove the shared directory; missing dirs are recreated on session resume
-- **persistent**: Directory must exist beforehand; cleanup happens when the workspace is deleted
+- **temporary**：临时工作区，仅在删除整个工作区时清理目录；删除单个会话不会删除共享目录；目录被误删时恢复会话会自动重建
+- **persistent**：持久工作区，目录需事先存在，删除工作区时才会清理关联记录
 
-## Sub-Agents
+## 子 Agent (Sub-Agent)
 
-Sub-agents are reusable agent definitions (markdown files) scanned by the backend and shown in Settings; agents with native subagent support (e.g. Claude Code) can invoke definitions of the same format directly via their own Task mechanism.
+子 Agent 是可复用的 Agent 定义（Markdown 文件），由后端扫描并在设置页展示；支持原生 subagent 的 Agent（如 Claude Code）可通过自身的 Task 机制直接调用同规范的定义。
 
-### Defining a Sub-Agent
+### 定义子 Agent
 
-Create a markdown file in `~/.agents/agents/` (or your configured sub-agent directory) with frontmatter:
+在 `~/.agents/agents/`（或配置的 sub-agent 目录）下创建 Markdown 文件，包含 frontmatter：
 
 ```markdown
 ---
 name: my-reviewer
-description: Code review specialist
+description: 代码审查专家
 model: claude-sonnet-4-20250514
 tools:
   - read
@@ -254,105 +248,100 @@ tools:
   - bash
 ---
 
-You are a code review specialist. Analyze pull requests for bugs, style issues, and security vulnerabilities.
+你是一个代码审查专家。分析提交请求中的 Bug、风格问题和安全漏洞。
 ```
 
-The backend scans these files on startup; they can be viewed and managed in Settings.
+后端启动时自动扫描这些文件，可在设置页查看管理。
 
-### Usage
+### 使用方法
 
-- **Native invocation**: Agents with subagent support (e.g. Claude Code) discover and delegate to sub-agents automatically within a session
-- **Session-level delegation**: Use task orchestration (the `opennexus-task` MCP server) to create independent sub-task sessions
+- **原生调用**：支持 subagent 的 Agent（如 Claude Code）在会话中自动发现并委派给子 Agent
+- **会话级任务委派**：使用任务编排（`opennexus-task` MCP 服务）创建独立子任务会话
 
-## Notes MCP Server
+## 笔记 MCP 服务
 
-openNexus provides a built-in MCP server at `/mcp/notes` that exposes notes as MCP tools and resources. This allows agents to:
+openNexus 提供内置 MCP 服务（`/mcp/notes`），将笔记暴露为 MCP 工具和资源。Agent 可以通过该服务：
 
-- Read notes by ID or tag
-- Search notes by content
-- Create new notes with auto-classification
+- 按 ID 或标签读取笔记
+- 按内容搜索笔记
+- 创建新笔记并自动分类
 
-The MCP server is automatically configured and synchronized — notes with generated tokens are automatically written to the global `mcp.json` config.
+MCP 服务自动配置同步——已生成令牌的笔记自动写入全局 `mcp.json` 配置。
 
-Note auto-classification can be enabled in **Settings → Notes**: a background worker periodically classifies untagged notes using the configured agent.
+笔记自动分类可在「设置 → 笔记」中启用：后台工作进程定期使用已配置的 Agent 对未分类笔记打标签。
 
-## Permission System
+## 权限系统
 
-When an agent requests a potentially sensitive tool call (e.g., file write, command execution), openNexus can prompt the user for approval:
+当 Agent 发起敏感工具调用（如文件写入、命令执行）时，openNexus 可弹窗请求用户审批：
 
-- **Allow once**: Approve the specific tool call
-- **Allow always**: Auto-approve for the remainder of the session
-- **Deny**: Reject the tool call
+- **允许一次**：批准本次调用
+- **始终允许**：本次会话中自动批准
+- **拒绝**：拒绝本次调用
 
-This is configured per-agent via the `PermissionDialog` component. The permission backend (`internal/acp/permission.go`) handles the approval flow.
+权限按 Agent 分别配置，通过 `PermissionDialog` 组件交互，由 `internal/acp/permission.go` 处理后端审批流程。
 
-## Prompt Input
+## Prompt 输入
 
-The chat input supports two completion modes (↑↓ select, Enter confirm, Esc go back or close):
+对话输入框支持两种补全方式（↑↓ 选择，Enter 确认，Esc 返回上一级或关闭）：
 
-| Trigger | Description |
-|---------|-------------|
-| `/` | Flat list of commands, skills, modes, and sub-agents |
-| `@` | Hierarchical picker: choose type first (Command / Skill / File / Note), then pick an item |
+| 触发符 | 说明 |
+|--------|------|
+| `/` | 平铺列表，筛选 command、skill、mode、sub-agent |
+| `@` | 分级选择：先选类型（Command / Skill / File / Note），再进入具体项 |
 
-`@` navigation:
+`@` 分级导航：
 
-1. **Command / Skill**: Insert `/name` (backend expands local command / skill file content)
-2. **File**: Browse the session workspace; enter subdirectories; insert `@/absolute/path` for files
-3. **Note**: Pick a tag, then a note; insert `@note:{id}`
+1. **Command / Skill**：进入对应列表，选中后插入 `/name`（后端会展开本地 command / skill 文件内容）
+2. **File**：浏览会话工作区目录，目录可继续进入，选中文件后插入 `@/绝对路径`
+3. **Note**：先选标签，再选笔记，插入 `@note:{id}`
 
-The Notes page (`/notes`) supports quick capture, tag filtering, Markdown preview, and inline editing.
+笔记页（`/notes`）支持快速输入、标签筛选、Markdown 预览与 inline 编辑。
 
-## Makefile Commands
+## 常用命令
 
-| Command | Description |
-|---------|-------------|
-| `make dev` | Start frontend + backend dev servers |
-| `make backend` | Start backend only (http://localhost:8080) |
-| `make frontend` | Start frontend only (http://localhost:3000) |
-| `make run` | Single-port production mode (build + serve) |
-| `make run-desktop` | Build + launch with browser auto-open |
-| `make build` | Build frontend + backend |
-| `make release` | Cross-platform release build (darwin/linux/windows) |
-| `make test` | Run all backend tests |
-| `make clean` | Clean build artifacts |
-| **Pake Desktop** | |
-| `make pake` | Build Pake desktop client only |
-| `make desktop` | Build macOS desktop app (Apple Silicon) |
-| `make desktop-linux` | Build Linux amd64 desktop app |
-| `make desktop-windows` | Build Windows amd64 desktop app |
-| **Electron Desktop** | |
-| `make electron-dev` | Run Electron in development mode |
-| `make electron-dist` | Package Electron desktop app (dmg/AppImage/nsis) |
-| `make electron-install` | Install Electron app to /Applications (macOS) |
-| `make electron-uninstall` | Uninstall from /Applications (macOS) |
-| `make electron-run` | Launch installed Electron app |
+| 命令 | 说明 |
+|------|------|
+| `make dev` | 一键启动前后端开发服务器 |
+| `make backend` | 仅启动后端（http://localhost:8080） |
+| `make frontend` | 仅启动前端（http://localhost:3000） |
+| `make run` | 单端口启动（构建 + release 模式） |
+| `make run-desktop` | 构建 + 启动并自动打开浏览器 |
+| `make build` | 构建前端 + 后端 |
+| `make release` | 跨平台发布构建（darwin/linux/windows） |
+| `make test` | 运行后端全部测试 |
+| `make clean` | 清理构建产物 |
+| **Electron 桌面客户端** | |
+| `make electron-dev` | Electron 开发模式运行 |
+| `make electron-dist` | 打包 Electron 桌面应用（dmg/AppImage/nsis） |
+| `make electron-install` | 安装到 /Applications（macOS） |
+| `make electron-uninstall` | 从 /Applications 卸载（macOS） |
+| `make electron-run` | 启动已安装的 Electron 应用 |
 | **Docker** | |
-| `make docker-build` | Build Docker image only |
-| `make docker-up` | Build Docker image and start |
-| `make docker-down` | Stop and clean Docker containers |
-| `make docker-logs` | View Docker container logs |
+| `make docker-build` | 仅构建 Docker 镜像 |
+| `make docker-up` | 构建 Docker 镜像并前台启动 |
+| `make docker-down` | 停止并清理 Docker 容器 |
+| `make docker-logs` | 查看 Docker 容器日志 |
 
-## Debugging & Logs
+## 调试与日志
 
-- **Debug Panel**: Open the "Debug" tab in any session to inspect raw ACP JSON-RPC messages and high-level events
-- **Log Panel**: Real-time backend log streaming in the UI (SSE-based)
-- **ACP Debug Logs**: When `debug.acp.enabled` is `true`, raw ACP communication is recorded to `~/.openNexus/acp-debug/` for offline analysis
+- **调试面板**：在任意会话中打开「调试」Tab，查看原始 ACP JSON-RPC 报文与高层事件
+- **日志面板**：后端日志实时推送到前端（基于 SSE）
+- **ACP 调试日志**：当 `debug.acp.enabled` 为 `true` 时，原始 ACP 通信记录到 `~/.openNexus/acp-debug/`，供离线分析
 
-## Release Builds
+## 发布构建
 
-Pushing a `v*` tag (e.g. `v1.0.0`) triggers GitHub Actions to build and publish a Release with:
+推送 `v*` 格式 tag（如 `v1.0.0`）后，GitHub Actions 会自动构建并创建 Release，包含：
 
-| Platform | Desktop artifact | CLI artifact |
-|----------|------------------|--------------|
-| macOS Apple Silicon | `opennexus-darwin-desktop.tar.gz` | `opennexus-darwin-arm64.tar.gz` |
-| macOS x86_64 | - | `opennexus-darwin-amd64.tar.gz` |
-| Linux x86_64 | `opennexus-linux-desktop.tar.gz` | `opennexus-linux-amd64.tar.gz` |
-| Linux arm64 | - | `opennexus-linux-arm64.tar.gz` |
-| Windows x86_64 | `opennexus-windows-desktop.zip` | `opennexus-windows-amd64.zip` |
+| 平台 | 命令行产物 |
+|------|-----------|
+| macOS Apple Silicon | `opennexus-darwin-arm64.tar.gz` |
+| macOS x86_64 | `opennexus-darwin-amd64.tar.gz` |
+| Linux x86_64 | `opennexus-linux-amd64.tar.gz` |
+| Linux arm64 | `opennexus-linux-arm64.tar.gz` |
+| Windows x86_64 | `opennexus-windows-amd64.zip` |
 
-Local desktop builds require Rust, pnpm, and `pake-cli@3.13.0` — see `scripts/build-pake.sh`.
+桌面客户端打包请使用 `make electron-dist`。
 
-## License
+## 许可证
 
-Private project. All rights reserved.
+私有项目，保留所有权利。

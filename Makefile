@@ -39,57 +39,13 @@ gateway:
 	@echo "==> 构建 MCP 网关 ($(VERSION))"
 	@CGO_ENABLED=0 go build $(LDFLAGS) -o opennexus-gateway ./cmd/gateway
 
-# 使用 Pake (Tauri) 打包桌面客户端壳子
-# 依赖: Rust + Node + pake-cli (pnpm install -g pake-cli@3.13.0)
-# 用法: make pake
-pake:
-	@echo "==> 使用 Pake 打包桌面客户端"
-	@./scripts/build-pake.sh dist $(VERSION)
 
-# 完整 macOS 桌面应用打包（Go 后端 + Pake 客户端 → app bundle）
-# 用法: make desktop
-desktop:
-	@echo "==> 1/3 构建前端"
-	@cd web && npm run build
-	@echo "==> 2/3 构建后端 binary"
-	@mkdir -p dist
-	@CGO_ENABLED=1 go build $(LDFLAGS) -o dist/opennexus ./cmd/server
-	@echo "==> 3/3 Pake 客户端 + 组装 app bundle"
-	@./scripts/build-pake.sh dist $(VERSION) app
-	@./scripts/package-darwin.sh dist opennexus dist
-	@echo ""
-	@echo "✅ 桌面应用打包完成"
-	@du -sh dist/openNexus.app
-	@echo "   双击 dist/openNexus.app 启动"
 
-# Linux amd64 桌面应用打包
-# 用法: make desktop-linux
-desktop-linux:
-	@echo "==> 1/3 构建前端"
-	@cd web && npm run build
-	@echo "==> 2/3 构建后端 binary"
-	@mkdir -p dist
-	@CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build $(LDFLAGS) -o dist/opennexus-linux-amd64 ./cmd/server
-	@echo "==> 3/3 Pake AppImage + 组装桌面目录"
-	@./scripts/build-pake.sh dist $(VERSION) appimage
-	@./scripts/package-linux.sh dist opennexus-linux-amd64 dist
-	@cd dist && tar czf opennexus-linux-desktop.tar.gz openNexus
-	@echo ""
-	@echo "✅ Linux 桌面应用打包完成: dist/opennexus-linux-desktop.tar.gz"
 
-# Windows amd64 桌面应用打包（需在 Windows 或交叉编译环境运行 Pake 步骤）
-# 用法: make desktop-windows
-desktop-windows:
-	@echo "==> 1/3 构建前端"
-	@cd web && npm run build
-	@echo "==> 2/3 构建后端 binary"
-	@mkdir -p dist
-	@CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -tags=sqlite_nocgo $(LDFLAGS) -o dist/opennexus-windows-amd64.exe ./cmd/server
-	@echo "==> 3/3 Pake 客户端 + 组装桌面目录（需在 Windows 上执行 Pake）"
-	@./scripts/build-pake.sh dist $(VERSION) x64
-	@pwsh -File ./scripts/package-windows.ps1 -OutDir dist -BinName opennexus-windows-amd64.exe -PakeDir dist
-	@echo ""
-	@echo "✅ Windows 桌面应用打包完成: dist/openNexus/"
+
+
+
+
 
 # 开发模式：构建后以 release 模式启动并打开浏览器
 # 用法: make run-desktop
@@ -163,15 +119,6 @@ release:
 	@CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -tags=sqlite_nocgo $(LDFLAGS) -o "dist/opennexus-windows-amd64.exe" ./cmd/server
 	@echo "==> 打包"
 	cd dist && tar czf opennexus-darwin-amd64.tar.gz opennexus-darwin-amd64 && tar czf opennexus-darwin-arm64.tar.gz opennexus-darwin-arm64 && tar czf opennexus-linux-amd64.tar.gz opennexus-linux-amd64 && tar czf opennexus-linux-arm64.tar.gz opennexus-linux-arm64 && zip opennexus-windows-amd64.zip opennexus-windows-amd64.exe
-	@echo "==> 创建 macOS 桌面应用包"
-	@if command -v pake &>/dev/null; then \
-		./scripts/build-pake.sh dist $(VERSION) app && \
-		./scripts/package-darwin.sh dist opennexus-darwin-arm64 dist && \
-		cd dist && tar czf opennexus-darwin-desktop.tar.gz openNexus.app; \
-	else \
-		echo "⚠️  未安装 pake-cli，跳过桌面客户端打包"; \
-		echo "   安装: pnpm install -g pake-cli"; \
-	fi
 	@echo "==> 发布文件已生成到 dist/"
 	@ls -lh dist/
 
@@ -215,7 +162,7 @@ docker-logs:
 	@docker compose logs -f
 
 # ============================================================================
-# Electron 桌面客户端（与 Pake 并存）
+# Electron 桌面客户端
 # 前端/后端均无改动：Electron 壳启动 Go 后端(release 模式)并加载同源页面。
 # 依赖: Node >= 20 (首次运行会 npm install electron + electron-builder)
 # ============================================================================

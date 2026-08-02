@@ -1,13 +1,16 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import { CheckCircle2, XCircle, AlertTriangle, MinusCircle, CircleDashed, FlaskConical, Zap, ChevronDown, ChevronRight, Layers } from 'lucide-react'
 import { runCapabilityTest, getLastCapabilityTest, runCapabilityTestAll, getAgentModels } from '../api/agents'
 import type { Agent, CapabilityTestReport, CapabilityTestItem, CapabilityTestBatchResult, ConfigOptionValue } from '../types'
+import { compileFilters, filterAgentModels } from '../utils/modelFilter'
 import LoadingSpinner from './LoadingSpinner'
 import styles from './AgentCapabilityTest.module.css'
 
 interface Props {
   agents: Agent[]
+  /** 显示过滤正则（来自 config.yaml agents.selector.filters），匹配串 "agentType/modelValue" */
+  filters?: string[]
 }
 
 /** 单项状态徽标：图标 + 状态文案 */
@@ -59,7 +62,7 @@ function StatusDot({ status }: { status: string }) {
  * 两级验证：静态检查（秒级）与端到端行为测试（临时会话 + 验证 prompt，真实消耗一次调用）。
  * 支持一键并行测试全部已接入 agent。
  */
-export default function AgentCapabilityTest({ agents }: Props) {
+export default function AgentCapabilityTest({ agents, filters }: Props) {
   const { t } = useTranslation()
   const [agentType, setAgentType] = useState('')
   const [report, setReport] = useState<CapabilityTestReport | null>(null)
@@ -70,6 +73,14 @@ export default function AgentCapabilityTest({ agents }: Props) {
   const [runningAll, setRunningAll] = useState(false)
   const [models, setModels] = useState<ConfigOptionValue[]>([])
   const [modelValue, setModelValue] = useState('') // 空=自动选取 agent 运行模型
+
+  // 编译 selector.filters（与 AgentModelSelector 同语义），用于过滤测试模型下拉
+  const filterRegexes = useMemo(() => compileFilters(filters), [filters])
+  // 按 selector.filters 过滤后的可选项（当前选中项被过滤掉时补回，避免下拉里凭空消失）
+  const visibleModels = useMemo(
+    () => filterAgentModels(agentType, models, filterRegexes, modelValue),
+    [agentType, models, filterRegexes, modelValue],
+  )
 
   useEffect(() => {
     if (!agentType && agents.length > 0) setAgentType(agents[0].type)
@@ -168,7 +179,7 @@ export default function AgentCapabilityTest({ agents }: Props) {
             title={t('capTest.modelHint')}
           >
             <option value="">{t('capTest.modelAuto')}</option>
-            {models.map((m) => (
+            {visibleModels.map((m) => (
               <option key={m.value} value={m.value}>{m.name || m.value}</option>
             ))}
           </select>

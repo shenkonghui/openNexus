@@ -1142,7 +1142,7 @@ export default function SettingsDialog({ initialTab = 'language', onClose }: Pro
               {tab === 'captest' && (
                 <>
                   <p className={styles.hint}>{t('capTest.hint')}</p>
-                  <AgentCapabilityTest agents={agents} />
+                  <AgentCapabilityTest agents={agents} filters={linesToList(selectorFiltersText)} />
                 </>
               )}
 

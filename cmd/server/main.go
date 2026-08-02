@@ -528,7 +528,7 @@ func removePIDFile(pidFile string) {
 }
 
 // openBrowserAfterDelay 延迟后用系统默认浏览器打开 URL（开发模式快速预览）。
-// 生产桌面客户端使用 Pake (Tauri) 打包，不依赖此函数。
+// 生产桌面客户端使用 Electron 打包，不依赖此函数。
 func openBrowserAfterDelay(url string) {
 	time.Sleep(800 * time.Millisecond)
 	log.Printf("打开浏览器: %s", url)

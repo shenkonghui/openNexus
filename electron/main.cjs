@@ -1,7 +1,7 @@
 /*
  * openNexus Electron 主进程
  *
- * 职责与现有 Pake 方案一致:
+ * 职责:
  *   1. 探测一个空闲端口(避免固定 8080 的冲突,支持多开)
  *   2. 拉起 Go 后端二进制(release 模式,单端口同时服务 API + 前端)
  *   3. 轮询 /health 直到后端就绪
@@ -112,7 +112,7 @@ function startBackend(port) {
   return dataDir
 }
 
-// 轮询 /health(沿用 Pake launcher 的 ~30s 超时逻辑)。
+// 轮询 /health（~30s 超时逻辑）。
 function waitReady(port, timeoutMs = 30000) {
   const deadline = Date.now() + timeoutMs
   return new Promise((resolve, reject) => {

@@ -8,7 +8,6 @@
 - Node.js >= 20
 - npm 或 pnpm
 - （可选）Docker 与 Docker Compose
-- （可选）Rust + pnpm + `pake-cli@3.13.0`，用于打包桌面端
 - 目标 Agent 所需的 API Key（例如 Claude Code 需要 `ANTHROPIC_API_KEY`）
 
 ## 快速开始
@@ -49,8 +48,6 @@ make dev
 
 | 命令 | 说明 |
 |------|------|
-| `make pake` | 构建 Pake 桌面壳 |
-| `make desktop` | 构建 macOS 桌面应用 |
 | `make electron-dev` | 以开发模式运行 Electron |
 | `make electron-dist` | 为当前平台打包 Electron 应用 |
 

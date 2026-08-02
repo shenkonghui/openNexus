@@ -17,7 +17,7 @@ import (
 
 // EnrichPath 扩充当前进程的 PATH，补齐登录 shell 与常见工具目录中的条目。
 //
-// 背景：在 macOS 上，由 launchd 或桌面客户端（Pake/Tauri）启动的进程继承的是
+// 背景：在 macOS 上，由 launchd 或桌面客户端（Electron）启动的进程继承的是
 // 最小化 PATH（约 /usr/bin:/bin:/usr/sbin:/sbin），不包含 /opt/homebrew/bin、
 // ~/.nvm/.../bin、~/.local/bin 等。这会导致通过 npm exec 启动的 agent 子进程
 // 报错 "npm: executable file not found in $PATH"，尽管终端里 npm 一切正常。

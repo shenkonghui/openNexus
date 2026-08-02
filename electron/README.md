@@ -1,6 +1,6 @@
 # openNexus Electron 客户端
 
-openNexus 的 Electron 桌面壳,与现有 Pake(Tauri)客户端**并存**,可自由选择使用哪一种。
+openNexus 的 Electron 桌面壳。
 
 ## 工作原理
 
@@ -58,16 +58,6 @@ make electron-uninstall
 配置加载顺序：`CONFIG_PATH` → `~/.openNexus/config.yaml` → 安装包/项目旁的 `config.yaml`。
 
 后端日志写入 `~/.openNexus/launcher.log`，启动失败时可在此排查。
-
-## 与 Pake 版的差异
-
-| 项 | Electron | Pake(Tauri) |
-|----|---------|-------------|
-| 渲染层 | 自带 Chromium | 系统 WebView |
-| 安装体积 | ~90–130MB | ~15–20MB |
-| 渲染一致性 | 三端一致 | 受系统 WebView 影响 |
-| 打包工具 | electron-builder | pake-cli |
-| 端口 | 动态空闲端口 | 固定 8080 |
 
 ## 手动构建(不走 Makefile)
 
