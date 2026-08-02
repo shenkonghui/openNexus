@@ -177,10 +177,10 @@ type Service struct {
 	// 规则来自 config.yaml 的 permissions 段：启动时由 ApplyPermissions 下发，
 	// 设置页保存后热更新。nil=无规则（未开会话 yolo 时全部询问）。
 	activePermRules atomic.Pointer[PermissionRules]
-	// userPermRules 用户配置的原始权限规则（未合并内置默认名单），供设置页回读，
-	// 避免默认规则被固化写回用户配置。
+	// userPermRules 用户配置的原始权限规则（与 activePermRules 一致，沙箱开启时 Ask 除外），
+	// 供设置页回读。
 	userPermRules atomic.Pointer[PermissionRules]
-	// sandboxActive 全局沙箱是否开启：开启时跳过内置默认 Ask 名单（环境已兜底，
+	// sandboxActive 全局沙箱是否开启：开启时跳过 Ask 名单（环境已兜底，
 	// 避免打断全自动流程）。由 SetSandboxActive 注入，改动后需重新 ApplyPermissions。
 	sandboxActive atomic.Bool
 	// sessionYolo 按 ACP SessionId 记录会话级 YOLO 开关（名单仍走 activePermRules）。
@@ -594,38 +594,42 @@ func (s *Service) applyRulesToAllConnections() {
 // ApplyPermissions 用给定的权限规则更新生效规则并下发到所有连接的 broker。
 // 规则来自 config.yaml 的 permissions 段：启动时下发一次（须在预连接前，使新连接建连即拿到规则），
 // 设置页保存后再次调用热更新。mode 为空/非法时兜底 normal。
-// 生效规则 = 内置默认名单（DefaultAllowRules/DefaultAskRules/DefaultDenyRules）与用户规则合并；
-// 用户可用 "!规则原文" 移除某条默认规则；沙箱开启时跳过默认 Ask 名单。
+// 默认规则已写入 config.yaml（由 MigratePermissionDefaults 初始化），运行时不再与代码内置名单合并；
+// config.yaml 是唯一生效来源。沙箱开启时跳过整个 Ask 名单（环境已兜底，避免打断全自动流程）。
 func (s *Service) ApplyPermissions(mode string, allow, ask, deny []string) {
 	if mode != config.PermissionModeNormal && mode != config.PermissionModeYolo {
 		mode = config.PermissionModeNormal
 	}
+	cleanedAllow := cleanRules(allow)
+	cleanedDeny := cleanRules(deny)
+	cleanedAsk := cleanRules(ask)
 	s.userPermRules.Store(&PermissionRules{
 		Mode:  mode,
-		Allow: cleanRules(allow),
-		Ask:   cleanRules(ask),
-		Deny:  cleanRules(deny),
+		Allow: cleanedAllow,
+		Ask:   cleanedAsk,
+		Deny:  cleanedDeny,
 	})
-	defaultAsk := DefaultAskRules
+	// 沙箱开启时跳过 Ask 名单（环境已兜底，避免打断全自动流程）
+	activeAsk := cleanedAsk
 	if s.sandboxActive.Load() {
-		defaultAsk = nil
+		activeAsk = nil
 	}
 	s.activePermRules.Store(&PermissionRules{
 		Mode:  mode,
-		Allow: MergeRuleDefaults(DefaultAllowRules, allow),
-		Ask:   MergeRuleDefaults(defaultAsk, ask),
-		Deny:  MergeRuleDefaults(DefaultDenyRules, deny),
+		Allow: cleanedAllow,
+		Ask:   activeAsk,
+		Deny:  cleanedDeny,
 	})
 	s.applyRulesToAllConnections()
 }
 
-// SetSandboxActive 设置全局沙箱开关状态（影响默认 Ask 名单是否生效）。
+// SetSandboxActive 设置全局沙箱开关状态（影响 Ask 名单是否生效）。
 // 须在 ApplyPermissions 之前调用，或调用后重新 ApplyPermissions。
 func (s *Service) SetSandboxActive(active bool) {
 	s.sandboxActive.Store(active)
 }
 
-// CurrentPermissions 返回用户配置的原始权限规则（供设置页读取，不含内置默认名单，
+// CurrentPermissions 返回用户配置的原始权限规则（供设置页读取，
 // 避免默认规则被保存动作固化进用户配置）。无规则时返回 normal + 空列表。
 func (s *Service) CurrentPermissions() (mode string, allow, ask, deny []string) {
 	r := s.userPermRules.Load()

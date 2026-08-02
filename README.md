@@ -181,6 +181,26 @@ SKIP_DATA_MIGRATION=1 ./opennexus
 
 > **手动恢复：** 若新版首次启动已创建了空的 `~/.openNexus`（导致自动迁移被跳过），可手动恢复——停掉服务，用 `~/.nextAgent/nexus.db` 覆盖 `~/.openNexus/opennexus.db`，并把 `~/.nextAgent/session/*` 移入 `~/.openNexus/session/`。迁移逻辑不会删除原始历史目录，数据始终安全。
 
+## 权限规则
+
+openNexus 通过 `config.yaml` 的 `permissions` 段对 agent 执行的命令做三层裁决：**白名单（allow，自动放行）**、**询问名单（ask，UI 确认）**、**黑名单（deny，自动拒绝，YOLO 下仍生效）**。优先级：deny > allow > ask。规则为大小写不敏感的 `*` 子串通配，按 agent 上报的工具调用标题匹配。
+
+```yaml
+permissions:
+    mode: normal              # normal | yolo（yolo=未命中名单自动放行，deny 仍生效）
+    allow: ["git status"]     # 命中→自动放行
+    ask:   ["git commit"]     # 命中→强制 UI 确认
+    deny:  ["git push"]       # 命中→自动拒绝
+```
+
+**规则匹配**：规则不含 `*` 时自动按子串匹配（等价于前后补 `*`），如 `git push` 即匹配任何含 `git push` 的命令（`git push origin main`、`bash -c "git push"`、`Bash(git push origin)` 等）。含 `*` 时保持通配语义。
+
+**默认规则**：项目根目录 `config.yaml` 已预置完整的默认白/询问/黑名单，随项目与 Docker 镜像分发。默认黑名单覆盖外发不可逆操作（`git push`、`docker push`、`npm publish` 等）、Git 历史改写、系统级破坏与灾难性删除。`config.yaml` 是唯一生效来源——编辑文件或在设置页「权限」Tab 修改即可，保存后热更新。
+
+> **老用户升级**：若你的 `config.yaml` 是旧版本（`permissions.deny: []`），默认规则不会自动写入。请用项目根目录的新 `config.yaml` 覆盖，或手动把需要的规则复制进去。
+
+> **安全提示**：清空 `deny` 段即移除所有黑名单保护（风险自担）。建议至少保留 `*git push*`、`*docker push*` 等外发不可逆操作。
+
 ## Agent 接入
 
 ### 启用流程

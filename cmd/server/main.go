@@ -143,6 +143,7 @@ func main() {
 	if err := cfg.Validate(); err != nil {
 		log.Fatalf("配置校验失败: %v", err)
 	}
+
 	logging.Setup(cfg.Logging.Level)
 	if cfg.Auth.AutoLogin {
 		log.Printf("auth.auto_login 已启用：前端将自动以 admin 身份登录")

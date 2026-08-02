@@ -1444,7 +1444,7 @@ export default function SettingsDialog({ initialTab = 'language', onClose }: Pro
                       rows={6}
                       value={permAllow}
                       onChange={(e) => setPermAllow(e.target.value)}
-                      placeholder={'Bash(git status *)\nBash(go test *)\nBash(ls *)'}
+                      placeholder={'git status\ngo test\nls'}
                       spellCheck={false}
                     />
                   </div>
@@ -1457,7 +1457,7 @@ export default function SettingsDialog({ initialTab = 'language', onClose }: Pro
                       rows={5}
                       value={permAsk}
                       onChange={(e) => setPermAsk(e.target.value)}
-                      placeholder={'Bash(git commit *)\nBash(docker *)\nBash(kubectl *)'}
+                      placeholder={'git commit\ndocker\nkubectl'}
                       spellCheck={false}
                     />
                   </div>
@@ -1470,7 +1470,7 @@ export default function SettingsDialog({ initialTab = 'language', onClose }: Pro
                       rows={5}
                       value={permDeny}
                       onChange={(e) => setPermDeny(e.target.value)}
-                      placeholder={'Bash(rm *)\nBash(shutdown *)\nBash(dd *)'}
+                      placeholder={'rm -rf\nshutdown\ndd if='}
                       spellCheck={false}
                     />
                   </div>

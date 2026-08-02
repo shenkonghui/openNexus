@@ -334,7 +334,7 @@
     "archiveRetention": "归档保留天数",
     "archiveRetentionHint": "归档到回收站的任务保留天数，过期后自动彻底删除（默认 3 天）。",
     "taskSettingsSaved": "任务设置已保存",
-    "permissionHint": "配置全局工具权限名单（对所有会话生效）。规则按 Agent 上报的工具调用标题匹配，支持 * 通配符（如 Bash(git status *)）。优先级：黑名单 > 白名单 > 询问名单。YOLO 请在任务顶栏按任务开启。",
+    "permissionHint": "配置全局工具权限名单（对所有会话生效）。规则按 Agent 上报的工具调用标题匹配，不含 * 时自动按子串匹配（如 git push 即匹配任何含 git push 的命令）；含 * 时按通配符匹配。优先级：黑名单 > 白名单 > 询问名单。YOLO 请在任务顶栏按任务开启。",
     "permissionMode": "模式",
     "permissionModeNormal": "标准模式：按列表匹配，未命中则询问",
     "permissionModeYolo": "YOLO 模式：全部自动放行（黑名单命中除外）",

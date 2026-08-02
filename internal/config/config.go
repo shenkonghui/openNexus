@@ -36,6 +36,8 @@ const (
 // YOLO 改为会话级开关；Mode 保留兼容旧配置读写，裁决时忽略。
 // 运行时按 agent 上报的工具调用标题匹配，每条规则支持 `*` 通配符（如 "Bash(git status *)"）。
 // 优先级：deny > allow > ask > (会话 yolo→allow | ask)。
+// 默认规则写在项目根目录 config.yaml 的 permissions 段（随项目/Docker 分发），
+// 代码不内置任何种子数据；config.yaml 是唯一生效来源。
 type PermissionsConfig struct {
 	Mode  string   `yaml:"mode"`  // 兼容字段；裁决忽略
 	Allow []string `yaml:"allow"` // 白名单：命中→放行
@@ -654,6 +656,42 @@ func splitCommaList(v string) []string {
 		if p != "" {
 			out = append(out, p)
 		}
+	}
+	return out
+}
+
+// MergeRuleDefaults 合并内置默认名单与用户规则：
+//   - 用户规则中以 `!` 开头的条目表示移除同文默认规则（大小写不敏感），本身不进入结果；
+//   - 其余用户规则追加在默认规则之后，重复项（大小写不敏感）去重。
+//
+// 保留供外部调用方按需合并规则使用。
+func MergeRuleDefaults(defaults, user []string) []string {
+	removed := make(map[string]bool)
+	for _, r := range user {
+		r = strings.TrimSpace(r)
+		if strings.HasPrefix(r, "!") {
+			removed[strings.ToLower(strings.TrimSpace(r[1:]))] = true
+		}
+	}
+	seen := make(map[string]bool)
+	out := make([]string, 0, len(defaults)+len(user))
+	appendRule := func(r string) {
+		r = strings.TrimSpace(r)
+		key := strings.ToLower(r)
+		if r == "" || strings.HasPrefix(r, "!") || removed[key] || seen[key] {
+			return
+		}
+		seen[key] = true
+		out = append(out, r)
+	}
+	for _, r := range defaults {
+		appendRule(r)
+	}
+	for _, r := range user {
+		appendRule(r)
+	}
+	if len(out) == 0 {
+		return nil
 	}
 	return out
 }

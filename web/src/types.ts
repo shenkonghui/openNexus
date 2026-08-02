@@ -395,7 +395,8 @@ export interface GoalSettings {
 
 // 全局权限规则配置（白名单 / 询问名单 / 黑名单，对所有会话生效）。
 // mode=yolo 为全局 YOLO（侧栏左下角开关）；会话级 yolo 仍可单独开启。
-// 规则按 agent 上报的工具调用标题匹配，支持 `*` 通配符（如 "Bash(git status *)"）。
+// 规则按 agent 上报的工具调用标题匹配，不含 * 时自动按子串匹配（如 "git push" 等价于 "*git push*"）；
+// 含 * 时按通配符匹配。
 // 优先级：deny > allow > ask > (全局/会话 yolo→allow | 询问)。
 export interface PermissionSettings {
   mode: 'normal' | 'yolo';

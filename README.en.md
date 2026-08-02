@@ -181,6 +181,26 @@ SKIP_DATA_MIGRATION=1 ./opennexus
 
 > **Manual recovery:** if a fresh start created an empty `~/.openNexus` before the migration could run, the auto-migration will skip it. You can recover by stopping the server, replacing `~/.openNexus/opennexus.db` with your `~/.nextAgent/nexus.db`, and moving `~/.nextAgent/session/*` into `~/.openNexus/session/`. The original legacy directory is never deleted by the migration.
 
+## Permission Rules
+
+openNexus applies a three-tier verdict to commands executed by agents via the `permissions` section of `config.yaml`: **allow list (auto-approve)**, **ask list (UI confirm)**, **deny list (auto-reject, enforced even in YOLO)**. Priority: deny > allow > ask. Rules are case-insensitive `*` substring globs matched against the tool-call title reported by the agent.
+
+```yaml
+permissions:
+    mode: normal              # normal | yolo (yolo=auto-allow unmatched, deny still enforced)
+    allow: ["git status"]     # match → auto-allow
+    ask:   ["git commit"]     # match → force UI confirm
+    deny:  ["git push"]       # match → auto-reject
+```
+
+**Rule matching**: rules without `*` auto-match as substrings (equivalent to wrapping with `*`), e.g. `git push` matches any command containing `git push` (`git push origin main`, `bash -c "git push"`, `Bash(git push origin)`, etc.). Rules with `*` keep glob semantics.
+
+**Default rules**: the project-root `config.yaml` ships with a complete default allow/ask/deny list, distributed with the project and Docker image. The default deny list covers irreversible remote operations (`git push`, `docker push`, `npm publish`, etc.), Git history rewrites, system-level destruction, and catastrophic deletes. `config.yaml` is the single source of truth — edit the file or use the Settings → Permissions tab; changes hot-reload on save.
+
+> **Upgrading from an older version**: if your `config.yaml` is from an older release (with `permissions.deny: []`), the defaults are NOT auto-injected. Overwrite your config with the new project-root `config.yaml`, or manually copy the rules you need.
+
+> **Security note**: clearing the `deny` section removes all deny-list protection (at your own risk). Keep at least `*git push*`, `*docker push*`, and other irreversible remote operations.
+
 ## Agent Integration
 
 ### Enabling an Agent

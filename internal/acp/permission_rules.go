@@ -18,117 +18,6 @@ const (
 	DecisionDeny
 )
 
-// DefaultDenyRules 是内置默认黑名单：外发不可逆操作与系统级破坏，命中即自动拒绝。
-// 与用户配置的 deny 合并生效；用户可在配置中写 "!规则原文" 显式移除某条默认规则。
-// 规则为大小写不敏感的 `*` 子串通配，按 agent 上报的工具调用标题匹配。
-var DefaultDenyRules = []string{
-	// —— 远端推送 / 发布（外发不可逆）——
-	"*git push*",
-	"*git remote set-url*",
-	"*docker push*",
-	"*docker login*",
-	"*crane push*",
-	"*skopeo copy*",
-	"*helm push*",
-	"*npm publish*",
-	// —— 本地 Git 历史/工作区不可逆改写（丢失已提交或未提交内容）——
-	"*git reset --hard*",
-	"*git clean -f*",
-	"*git checkout -f*",
-	"*git checkout --force*",
-	"*git branch -D*",
-	"*git filter-branch*",
-	// —— 系统级破坏 / 重启关机 ——
-	"*reboot*",
-	"*shutdown*",
-	"*poweroff*",
-	"*halt*",
-	"*init 0*",
-	"*init 6*",
-	"*mkfs*",
-	"*fdisk*",
-	"*dd if=*",
-	// —— 灾难性删除（针对根/家目录的强制递归删除；相对路径删除见 Ask 名单）——
-	"*rm -rf /*",
-	"*rm -fr /*",
-	"*rm -rf ~*",
-	"*rm -rf --no-preserve-root*",
-}
-
-// DefaultAskRules 是内置默认询问名单：本地可逆但需留痕/确认的操作。
-// 沙箱开启时由调用方跳过（环境已兜底，避免打断全自动流程）。
-var DefaultAskRules = []string{
-	// —— Git 需留痕的写操作 ——
-	"*git commit*",
-	"*git merge*",
-	"*git rebase*",
-	"*git tag*",
-	"*git stash*",
-	// —— 提权 / 远端访问 ——
-	"*sudo *",
-	"*ssh *",
-	"*scp *",
-	"*sftp *",
-	// —— 强制递归删除（非根目录）/ 批量改权限 ——
-	"*rm -rf*",
-	"*rm -fr*",
-	"*chmod -R*",
-	"*chown -R*",
-	// —— 集群变更 ——
-	"*kubectl delete*",
-	"*kubectl apply*",
-}
-
-// DefaultAllowRules 是内置默认白名单：只读/无副作用的常用命令，命中即自动放行（免打断）。
-// 与用户配置的 allow 合并生效；由于 deny 优先级最高，含破坏性子命令（如 "git branch -D"）
-// 仍会被 deny 拦截，白名单的宽松通配（如 "*git branch*"）不会放开它们。
-var DefaultAllowRules = []string{
-	"*git status*",
-	"*git diff*",
-	"*git log*",
-	"*git show*",
-	"*git branch*",
-	"*git fetch*",
-	"*git remote -v*",
-	"*ls *",
-	"*pwd*",
-	"*cat *",
-}
-
-// MergeRuleDefaults 合并内置默认名单与用户规则：
-//   - 用户规则中以 `!` 开头的条目表示移除同文默认规则（大小写不敏感），本身不进入结果；
-//   - 其余用户规则追加在默认规则之后，重复项（大小写不敏感）去重。
-func MergeRuleDefaults(defaults, user []string) []string {
-	removed := make(map[string]bool)
-	for _, r := range user {
-		r = strings.TrimSpace(r)
-		if strings.HasPrefix(r, "!") {
-			removed[strings.ToLower(strings.TrimSpace(r[1:]))] = true
-		}
-	}
-	seen := make(map[string]bool)
-	out := make([]string, 0, len(defaults)+len(user))
-	appendRule := func(r string) {
-		r = strings.TrimSpace(r)
-		key := strings.ToLower(r)
-		if r == "" || strings.HasPrefix(r, "!") || removed[key] || seen[key] {
-			return
-		}
-		seen[key] = true
-		out = append(out, r)
-	}
-	for _, r := range defaults {
-		appendRule(r)
-	}
-	for _, r := range user {
-		appendRule(r)
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
-}
-
 // PermissionRules 是生效中的全局权限规则（从 config.PermissionsConfig 构造）。
 // 规则按 agent 上报的 ToolCall.Title 匹配，支持 `*` 通配符，大小写不敏感。
 // 白/询问/黑名单全局生效；YOLO = 全局 Mode=yolo 或会话级开关。
@@ -143,11 +32,18 @@ type PermissionRules struct {
 // matchGlob 报告 title 是否匹配 rule（大小写不敏感，`*` 通配任意字符序列，含 `/`）。
 // 用自定义实现而非 path.Match——path.Match 的 `*` 不跨 `/`（路径分隔符语义），
 // 而权限规则中的 `*` 应匹配命令参数里的路径（如 "Bash(cat:/etc/*)" 需匹配 "Bash(cat:/etc/passwd)")。
+//
+// 简化约定：规则不含 `*` 时自动按子串匹配（等价于前后补 `*`），
+// 这样用户在 config.yaml 写 "git push" 即等价于 "*git push*"，无需手写通配符。
+// 规则含 `*` 时保持原语义（支持精确前缀/后缀/中间通配）。
 func matchGlob(rule, title string) bool {
 	r := strings.ToLower(strings.TrimSpace(rule))
 	t := strings.ToLower(strings.TrimSpace(title))
 	if r == "" || t == "" {
 		return false
+	}
+	if !strings.Contains(r, "*") {
+		return strings.Contains(t, r)
 	}
 	return starMatch(r, t)
 }

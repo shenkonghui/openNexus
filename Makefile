@@ -5,9 +5,23 @@ LDFLAGS := -ldflags="-s -w -X main.version=$(VERSION)"
 
 # 一键启动前后端开发服务器
 # 用法: make dev
+# 后端先启动并通过 /health 健康检查后再拉起前端，避免 vite proxy 启动时序错误
 dev: backend-stop
 	@bash -c 'trap "kill 0 2>/dev/null" INT TERM; \
 		go run ./cmd/server </dev/null & \
+		BACKEND_PID=$$!; \
+		echo "==> 等待后端 :8080 就绪 (最多 60s)..."; \
+		READY=0; \
+		for i in $$(seq 1 60); do \
+			if curl -sf http://127.0.0.1:8080/health >/dev/null 2>&1; then \
+				echo "✅ 后端就绪 (耗时 $${i}s)"; READY=1; break; \
+			fi; \
+			sleep 1; \
+		done; \
+		if [ $$READY -ne 1 ]; then \
+			echo "❌ 后端 60s 内未就绪，请检查后端日志"; \
+			kill $$BACKEND_PID 2>/dev/null; exit 1; \
+		fi; \
 		(cd web && npm run dev) </dev/null & \
 		wait'
 

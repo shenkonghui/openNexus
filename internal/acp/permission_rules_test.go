@@ -118,15 +118,33 @@ func TestToolCallTitle_FromMetaAndRawInput(t *testing.T) {
 }
 
 func TestPermissionRules_InvalidGlobFallsBackToExact(t *testing.T) {
-	// `[` 在 path.Match 中是非法模式，应回退到精确匹配（小写）
+	// 不含 `*` 的规则自动按子串匹配：`[invalid` 匹配含该子串的标题
 	r := PermissionRules{
 		Allow: []string{"[invalid"},
 	}
 	if got := r.Decide("[invalid", false); got != DecisionAllow {
-		t.Errorf("非法 glob 应回退精确匹配，期望 Allow，实际 %d", got)
+		t.Errorf("无 * 规则应按子串匹配，期望 Allow，实际 %d", got)
 	}
 	if got := r.Decide("[other", false); got != DecisionAsk {
-		t.Errorf("非法 glob 不匹配时期望 Ask，实际 %d", got)
+		t.Errorf("不含子串时期望 Ask，实际 %d", got)
+	}
+}
+
+func TestPermissionRules_NoStarAutoSubstring(t *testing.T) {
+	// 不含 * 的规则自动按子串匹配（等价于前后补 *）
+	r := PermissionRules{Deny: []string{"git push"}}
+	cases := map[string]Decision{
+		"git push":              DecisionDeny, // 完全相等
+		"git push origin main":  DecisionDeny, // 后缀有内容
+		"bash -c \"git push\"":  DecisionDeny, // 前后有包装
+		"Bash(git push origin)": DecisionDeny, // ACP 标题格式
+		"git fetch":             DecisionAsk,  // 不含子串
+		"git status":            DecisionAsk,  // 不含子串
+	}
+	for title, want := range cases {
+		if got := r.Decide(title, false); got != want {
+			t.Errorf("Decide(%q) = %d, 期望 %d", title, got, want)
+		}
 	}
 }
 
@@ -149,7 +167,7 @@ func TestPermissionModeConstants(t *testing.T) {
 func TestMergeRuleDefaults_AppendRemoveDedup(t *testing.T) {
 	defaults := []string{"*git push*", "*docker push*"}
 	user := []string{"!*docker push*", "*helm push*", "*GIT PUSH*", ""}
-	got := MergeRuleDefaults(defaults, user)
+	got := config.MergeRuleDefaults(defaults, user)
 	want := []string{"*git push*", "*helm push*"}
 	if len(got) != len(want) {
 		t.Fatalf("合并结果不符: got=%v want=%v", got, want)
@@ -159,7 +177,7 @@ func TestMergeRuleDefaults_AppendRemoveDedup(t *testing.T) {
 			t.Fatalf("合并结果不符: got=%v want=%v", got, want)
 		}
 	}
-	if MergeRuleDefaults(nil, []string{"!x", " "}) != nil {
+	if config.MergeRuleDefaults(nil, []string{"!x", " "}) != nil {
 		t.Fatalf("全部移除/空白时应返回 nil")
 	}
 }

@@ -334,7 +334,7 @@
     "archiveRetention": "Archive retention (days)",
     "archiveRetentionHint": "How many days archived tasks stay in trash before being permanently deleted (default 3).",
     "taskSettingsSaved": "Task settings saved",
-    "permissionHint": "Configure global permission lists (apply to all sessions). Rules match the tool title reported by the agent, supporting * wildcards (e.g. Bash(git status *)). Priority: deny > allow > ask. Enable YOLO per task from the task header.",
+    "permissionHint": "Configure global permission lists (apply to all sessions). Rules match the tool title reported by the agent. Rules without * auto-match as substrings (e.g. git push matches any command containing git push); rules with * use glob matching. Priority: deny > allow > ask. Enable YOLO per task from the task header.",
     "permissionMode": "Mode",
     "permissionModeNormal": "Standard: match against lists, ask when unmatched",
     "permissionModeYolo": "YOLO: auto-allow everything (except deny matches)",

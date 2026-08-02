@@ -95,9 +95,126 @@ agents:
     terminal_enabled: true
 permissions:
     mode: normal
-    allow: []
+    allow:
+        - git status
+        - git diff
+        - git log
+        - git show
+        - git branch
+        - git fetch
+        - git remote -v
+        - ls
+        - pwd
+        - cat
     ask: []
-    deny: []
+    deny:
+        # —— 远端推送 / 发布（外发不可逆）——
+        - git push
+        - git remote set-url
+        - docker push
+        - docker login
+        - crane push
+        - skopeo copy
+        - helm push
+        - npm publish
+        - pip upload
+        - twine upload
+        - mvn deploy
+        - gradle publish
+        - go mod proxy
+        - cargo publish
+        # —— 本地 Git 历史/工作区不可逆改写 ——
+        - git reset --hard
+        - git clean -f
+        - git checkout -f
+        - git checkout --force
+        - git branch -D
+        - git filter-branch
+        - git reflog expire
+        - git gc --prune=now
+        # —— 系统关机 / 重启 ——
+        - reboot
+        - shutdown
+        - poweroff
+        - halt
+        - init 0
+        - init 6
+        - systemctl reboot
+        - systemctl poweroff
+        - systemctl halt
+        # —— 磁盘 / 文件系统破坏 ——
+        - mkfs
+        - fdisk
+        - parted
+        - dd if=
+        - dd of=/dev/sd
+        - dd of=/dev/nvme
+        - dd of=/dev/disk
+        - swapoff
+        - umount /
+        - mount -o remount
+        - fsck
+        - badblocks
+        # —— 删除命令（一律拦截，按需在 allow 放行特定子命令）——
+        - rm
+        - shred
+        # —— 系统文件篡改 ——
+        - /etc/passwd
+        - /etc/shadow
+        - /etc/sudoers
+        - /etc/hosts
+        - /etc/fstab
+        - /etc/resolv.conf
+        - visudo
+        - chmod 777 /
+        - chmod 777 /etc
+        - chmod 777 /root
+        - chmod -R 777 /
+        # —— 用户 / 权限管理 ——
+        - userdel
+        - usermod
+        - adduser
+        - groupdel
+        - passwd
+        - chage
+        - sudo su
+        - sudo -i
+        - su root
+        - su -
+        # —— 进程强杀 ——
+        # —— 网络防火墙篡改 ——
+        - iptables -F
+        - iptables -X
+        - iptables -P
+        - firewall-cmd
+        - ufw disable
+        - ufw allow
+        - nft flush
+        # —— 系统服务破坏 ——
+        - systemctl stop
+        - systemctl disable
+        - systemctl mask
+        - systemctl daemon-reload
+        - service stop
+        # —— 内核模块 ——
+        - rmmod
+        - modprobe -r
+        - insmod
+        # —— 定时任务篡改 ——
+        - crontab -r
+        - crontab -l
+        - /etc/cron
+        - at -f
+        # —— 数据库危险操作 ——
+        - DROP TABLE
+        - DROP DATABASE
+        - TRUNCATE
+        - DROP SCHEMA
+        - DROP INDEX
+        - DROP VIEW
+        - DELETE FROM
+        - pg_dropdatabase
+        - mysqladmin drop
 # agent 进程 OS 级沙箱（macOS sandbox-exec / Linux bwrap）：
 # 文件系统整体只读、仅工作区等白名单目录可写、剥离凭证类环境变量。
 # mode: auto=平台沙箱不可用时降级直通并告警；enforce=不可用时拒绝启动 agent。
