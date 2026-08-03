@@ -57,6 +57,20 @@ RUN apt-get update \
     && echo "Asia/Shanghai" > /etc/timezone \
     && rm -rf /var/lib/apt/lists/*
 
+# 安装新版 docker CLI（docker-ce-cli，阿里云镜像源）。
+# 背景：宿主机 Docker Server 29.x（API>=1.44），Debian 12 的 docker.io(20.10，API 1.41) 过旧，
+# 连宿主机 socket 会报 "client version too old"。故从 docker-ce 官方仓库（阿里云加速）安装
+# 最新 docker-ce-cli。容器内经挂载的宿主机 /var/run/docker.sock 管理宿主容器（供 agent 使用）。
+RUN install -m 0755 -d /etc/apt/keyrings \
+    && curl -fsSL https://mirrors.aliyun.com/docker-ce/linux/debian/gpg -o /etc/apt/keyrings/docker.asc \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://mirrors.aliyun.com/docker-ce/linux/debian bookworm stable" > /etc/apt/sources.list.d/docker.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends docker-ce-cli \
+    && rm -rf /var/lib/apt/lists/* \
+    # 创建 docker 组（gid 与宿主机 122 对齐），使 compose 的 group_add: docker 能生效；
+    # 不依赖 adduser/passwd 包，直接写入 /etc/group（幂等：已存在则跳过）
+    && (grep -q '^docker:' /etc/group || echo 'docker:x:122:' >> /etc/group)
+
 # 复制后端二进制
 COPY --from=go-builder /out/opennexus /app/opennexus
 

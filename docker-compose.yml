@@ -21,6 +21,12 @@ services:
       - ${HOME}/.config:${HOME}/.config
       # 挂载本地 ~/.local：使 agent 子进程能使用 ~/.local/bin 下的工具及 ~/.local/share 下的配置/数据。
       - ${HOME}/.local:${HOME}/.local
+      # 挂载宿主机 docker socket：容器内 docker CLI 直接管理宿主机容器（agent 使用）。
+      # 容器内进程以 root 运行，可读写该 socket；谨慎暴露，仅用于受信任的环境。
+      - /var/run/docker.sock:/var/run/docker.sock
+    group_add:
+      # 将容器进程加入宿主机的 docker 组，保证对 docker.sock 的访问权限
+      - docker
     environment:
       # 关键：容器内 HOME 注入为宿主机 HOME，让 ~/.openNexus / ~/src 等 ~ 路径
       # 与挂载点完全一致，消除工作区绝对路径在容器/宿主机之间的错位。
