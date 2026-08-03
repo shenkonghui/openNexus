@@ -6,7 +6,8 @@ import { sessionUrl, newTaskUrl, taskManagerUrl } from '../utils/routes'
 import type { Session, ScheduledTask } from '../types'
 import { listScheduledTasks } from '../api/scheduledTasks'
 import { listSessions, listRunningSessions } from '../api/sessions'
-import { getTaskManager, getTaskStatus, startTaskManager, subscribeTaskEvents, listArchivedTasks, type TaskManagerTask } from '../api/taskmanager'
+import { getTaskManager, getTaskStatus, startTaskManager, listArchivedTasks, type TaskManagerTask } from '../api/taskmanager'
+import { useTaskEventsChanged } from '../context/TaskEventsContext'
 import { PanelLeftClose, Star, Pencil, X, Check, SquarePlus, FileText, Calendar, Settings, Zap, Loader2, CheckCircle2, XCircle, Clock3, CircleDashed, Network, Layers, History, Trash2, MessagesSquare } from 'lucide-react'
 import styles from './SessionSidebar.module.css'
 import NexusLogoIcon from './NexusLogoIcon'
@@ -140,14 +141,15 @@ export default function SessionSidebar({ sessions, workspaceId, currentId, onDel
     return () => { alive = false }
   }, [workspaceId, location.pathname, sessions])
 
-  // 订阅 tasks.json 变更事件（SSE）：任务助手 MCP 工具/编排页增删任务时实时刷新。
+  // 订阅 tasks.json 变更事件：通过 TaskEventsContext 统一消费 SSE（AppLayout 层唯一订阅），
+  // 避免与 TaskManagerView 各自建立到 /taskmanager/events 的重复长连接。
   // 删除任务会连带删除其关联会话，因此除刷新 tmTasks 外还需通过 onWorkspaceRefresh
   // 重拉会话列表，否则左侧「任务」分组仍展示已删任务的会话条目，与任务列表不同步。
+  const taskEventsCtx = useTaskEventsChanged()
   useEffect(() => {
-    if (!workspaceId) return
-    const ac = new AbortController()
+    if (!workspaceId || !taskEventsCtx) return
     let timer: ReturnType<typeof setTimeout> | null = null
-    subscribeTaskEvents(workspaceId, () => {
+    const unregister = taskEventsCtx.onChanged(() => {
       if (timer) clearTimeout(timer)
       timer = setTimeout(() => {
         timer = null
@@ -162,10 +164,10 @@ export default function SessionSidebar({ sessions, workspaceId, currentId, onDel
           .catch(() => {})
         onWorkspaceRefreshRef.current?.()
       }, 300)
-    }, ac.signal).catch(() => {})
-    return () => { ac.abort(); if (timer) clearTimeout(timer) }
+    })
+    return () => { unregister(); if (timer) clearTimeout(timer) }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [workspaceId])
+  }, [workspaceId, taskEventsCtx])
 
   useEffect(() => {
     let alive = true

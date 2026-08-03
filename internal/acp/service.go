@@ -2116,11 +2116,19 @@ func (s *Service) LastRunStatus(dbSessionID uint) string {
 	return t.Status
 }
 
+// maxStreamCatchup 是 /stream 端点补齐遗漏消息的上限。
+// 客户端未传 Last-Event-ID（首次连接/刷新页面）时，仅补发最近 N 条而非全量历史，
+// 避免长会话全量回放拖慢建连；完整历史由 /messages 接口分页加载。
+const maxStreamCatchup = defaultMessagePageSize
+
 // SubscribeSession 订阅指定会话当前进行中的 prompt 流，用于断点续传。
 // lastSeq 为客户端最后收到的 message sequence；返回值：
 //   - missed: DB 中 sequence > lastSeq 的遗漏消息（需先补发给客户端）
 //   - ch: 实时消息 channel（若无进行中的 prompt 则为 nil）
 //   - 若会话当前无活跃 prompt，返回 missed（补齐尾部）+ nil channel
+//
+// 当 lastSeq <= 0（客户端未传 Last-Event-ID）时，missed 限制为最近 maxStreamCatchup 条，
+// 避免长会话全量回放拖慢建连。完整历史应由客户端通过 /messages 接口分页加载。
 func (s *Service) SubscribeSession(sessionID string, lastSeq int) (missed []models.Message, ch <-chan models.Message, err error) {
 	session, err := s.GetSession(sessionID)
 	if err != nil {
@@ -2134,7 +2142,7 @@ func (s *Service) SubscribeSession(sessionID string, lastSeq int) (missed []mode
 
 	if !ok || bc == nil {
 		// 无活跃 prompt：仅返回仓库补齐的消息，channel 为 nil
-		missed, dbErr := s.messages.FindBySessionIDAfter(session.SessionID, lastSeq)
+		missed, dbErr := s.catchupMessages(session.SessionID, lastSeq)
 		if dbErr != nil {
 			return nil, nil, dbErr
 		}
@@ -2150,7 +2158,7 @@ func (s *Service) SubscribeSession(sessionID string, lastSeq int) (missed []mode
 	if bc.persister != nil {
 		bc.persister.barrier()
 	}
-	missed, dbErr := s.messages.FindBySessionIDAfter(session.SessionID, lastSeq)
+	missed, dbErr := s.catchupMessages(session.SessionID, lastSeq)
 	if dbErr != nil {
 		return nil, nil, dbErr
 	}
@@ -2168,6 +2176,17 @@ func (s *Service) SubscribeSession(sessionID string, lastSeq int) (missed []mode
 	}
 
 	return missed, subCh, nil
+}
+
+// catchupMessages 返回断点续传需补齐的消息。
+// lastSeq > 0 时返回 sequence > lastSeq 的全部消息（断连期间遗漏通常较少）；
+// lastSeq <= 0（客户端未传 Last-Event-ID）时仅返回最近 maxStreamCatchup 条，
+// 避免长会话全量回放拖慢建连——完整历史由 /messages 接口分页加载。
+func (s *Service) catchupMessages(sessionID string, lastSeq int) ([]models.Message, error) {
+	if lastSeq > 0 {
+		return s.messages.FindBySessionIDAfter(sessionID, lastSeq)
+	}
+	return s.messages.FindBySessionIDLastN(sessionID, maxStreamCatchup)
 }
 
 // HasActivePrompt 判断指定会话是否有进行中的 prompt。

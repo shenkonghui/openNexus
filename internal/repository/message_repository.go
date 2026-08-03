@@ -236,6 +236,54 @@ func (r *MessageRepository) loadSessionFiles(sessionID string) ([]models.Message
 	return msgs, nil
 }
 
+// loadLastNFromFilesLocked 按需从磁盘读取最近 n 条消息，不触发全量缓存加载。
+// 调用方需持有 st.mu 且 st 未加载（loaded=false）。
+//
+// 策略：枚举会话目录下的 .jsonl 分片 + 旧版单文件，按文件名倒序排列
+// （e10 > e2 > e0 > legacy），逐个解析并累积消息。当累积量 >= n 时停止读取更早分片。
+// 最终按 sequence 升序排序并截取最近 n 条。分片内消息本就按 sequence 追加写入，
+// 倒序读分片能以最少的 IO 覆盖最新消息。
+func (r *MessageRepository) loadLastNFromFilesLocked(sessionID string, n int) ([]models.Message, error) {
+	// 收集所有分片路径（旧版单文件 + 分片目录）
+	var paths []string
+	legacy := r.legacyPath(sessionID)
+	if _, err := os.Stat(legacy); err == nil {
+		paths = append(paths, legacy)
+	}
+	entries, err := os.ReadDir(r.sessionDir(sessionID))
+	if err != nil && !os.IsNotExist(err) {
+		return nil, err
+	}
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") {
+			continue
+		}
+		paths = append(paths, filepath.Join(r.sessionDir(sessionID), e.Name()))
+	}
+	// 按文件名倒序：分片名 e{N}.jsonl，N 越大越新；旧版单文件排在最前（最旧）
+	sort.Sort(sort.Reverse(sort.StringSlice(paths)))
+
+	var collected []models.Message
+	for _, p := range paths {
+		part, err := readMessagesFile(p)
+		if err != nil {
+			return nil, err
+		}
+		collected = append(collected, part...)
+		if len(collected) >= n {
+			break
+		}
+	}
+	// 按 sequence 升序排序后截取最近 n 条
+	sort.SliceStable(collected, func(i, j int) bool {
+		return collected[i].Sequence < collected[j].Sequence
+	})
+	if n < len(collected) {
+		collected = collected[len(collected)-n:]
+	}
+	return r.rehydrateAll(collected), nil
+}
+
 func readMessagesFile(path string) ([]models.Message, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -549,18 +597,28 @@ func (r *MessageRepository) FindBySessionIDPaged(sessionID string, limit, offset
 }
 
 // FindBySessionIDLastN 返回最近 n 条（升序）。n<=0 返回空切片。
+//
+// 冷缓存优化：若会话缓存尚未加载，不触发全量加载，而是按分片文件名倒序读取，
+// 累积到 >= n 条即停止，避免长会话全量解析所有 JSONL 分片。
+// 热缓存（已加载）仍走 snapshotSession 内存切片，O(1) 无 IO。
 func (r *MessageRepository) FindBySessionIDLastN(sessionID string, n int) ([]models.Message, error) {
 	if n <= 0 {
 		return []models.Message{}, nil
 	}
-	msgs, err := r.snapshotSession(sessionID)
-	if err != nil {
-		return nil, err
+	st := r.store(sessionID)
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	// 热缓存：已加载则直接切片
+	if st.loaded {
+		st.lastUsed = time.Now()
+		msgs := st.msgs
+		if n < len(msgs) {
+			msgs = msgs[len(msgs)-n:]
+		}
+		return r.rehydrateAll(msgs), nil
 	}
-	if n < len(msgs) {
-		msgs = msgs[len(msgs)-n:]
-	}
-	return r.rehydrateAll(msgs), nil
+	// 冷缓存：按需从最新分片倒序读取，避免全量加载
+	return r.loadLastNFromFilesLocked(sessionID, n)
 }
 
 // FindBySessionIDBeforeLastN 返回 sequence < beforeSeq 的最近 n 条（升序）。

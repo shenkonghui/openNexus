@@ -1037,6 +1037,12 @@ func (h *SessionHandler) Stream(c *gin.Context) {
 	c.Header("X-Accel-Buffering", "no")
 	c.Status(http.StatusOK)
 
+	// 客户端未传 Last-Event-ID 时，补齐仅含最近 maxStreamCatchup 条（非全量历史）。
+	// 发送提示事件，前端可据此决定是否需要通过 /messages 接口加载更早消息。
+	if lastSeq <= 0 {
+		_, _ = fmt.Fprintf(c.Writer, "data: {\"type\":\"catchup_truncated\"}\n\n")
+	}
+
 	// 先发送 DB 补齐的遗漏消息（每条带 id: sequence）
 	for _, msg := range missed {
 		b, _ := json.Marshal(msg)

@@ -4,9 +4,10 @@ import { useTranslation } from 'react-i18next'
 import {
   getTaskManager, getTaskStatus, getTaskGitStatus, initTaskGitRepo,
   upsertTask, deleteTask, startTaskManager, stopTaskManager, saveTaskManager,
-  setTaskMaxParallel, subscribeTaskEvents, genTaskId,
+  setTaskMaxParallel, genTaskId,
   type TaskManagerDef, type TaskManagerTask, type TaskPriority,
 } from '../api/taskmanager'
+import { useTaskEventsChanged } from '../context/TaskEventsContext'
 import { sessionUrl, newTaskUrl } from '../utils/routes'
 import type { Agent } from '../types'
 import LoadingSpinner from './LoadingSpinner'
@@ -110,14 +111,15 @@ export default function TaskManagerView({ workspaceId, cwd, agents, restoreSessi
     }
   }, [def.tasks, workspaceId])
 
-  // 订阅后端 tasks.json 变更事件：任意来源（左侧操作、任务助手 MCP 工具、定时调度器）
-  // 写入后都会推送，收到即防抖刷新列表——保证两侧操作后左栏自动同步，
-  // 不再依赖前端对工具调用的正则检测或轮询兼容。
+  // 订阅后端 tasks.json 变更事件：通过 TaskEventsContext 统一消费 SSE（AppLayout 层唯一订阅），
+  // 避免与 SessionSidebar 各自建立到 /taskmanager/events 的重复长连接。
+  // 任意来源（左侧操作、任务助手 MCP 工具、定时调度器）写入后都会推送，
+  // 收到即防抖刷新列表——保证两侧操作后左栏自动同步。
+  const taskEventsCtx = useTaskEventsChanged()
   useEffect(() => {
-    if (!workspaceId) return
-    const ac = new AbortController()
+    if (!workspaceId || !taskEventsCtx) return
     let timer: ReturnType<typeof setTimeout> | null = null
-    subscribeTaskEvents(workspaceId, () => {
+    const unregister = taskEventsCtx.onChanged(() => {
       if (timer) clearTimeout(timer)
       timer = setTimeout(() => {
         timer = null
@@ -125,12 +127,12 @@ export default function TaskManagerView({ workspaceId, cwd, agents, restoreSessi
           .then((r) => setDef(normalizeDef(r.data)))
           .catch(() => {})
       }, 300)
-    }, ac.signal)
+    })
     return () => {
-      ac.abort()
+      unregister()
       if (timer) clearTimeout(timer)
     }
-  }, [workspaceId])
+  }, [workspaceId, taskEventsCtx])
 
   async function reloadStatus() {
     if (!workspaceId) return

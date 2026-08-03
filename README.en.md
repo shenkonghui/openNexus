@@ -420,6 +420,15 @@ The Notes page (`/notes`) supports quick capture, tag filtering, Markdown previe
 - **Log Panel**: Real-time backend log streaming in the UI (SSE-based)
 - **ACP Debug Logs**: When `debug.acp.enabled` is `true`, raw ACP communication is recorded to `~/.openNexus/acp-debug/` for offline analysis
 
+## Performance Optimizations
+
+For long sessions and high-concurrency scenarios, openNexus includes targeted optimizations:
+
+- **On-demand shard loading for message repository**: `FindBySessionIDLastN` (recent N messages query) no longer reads all JSONL shards on cold cache — it reads shards in reverse filename order, stopping once N messages are accumulated, avoiding full-disk parsing on first access to long sessions
+- **SSE catchup limit for stream resumption**: The `/sessions/:id/stream` endpoint, when the client does not send `Last-Event-ID`, only replays the most recent 500 messages instead of full history, preventing slow first-packet on long sessions; full history is loaded via the `/messages` API with pagination
+- **In-memory cache for tasks.json**: `TaskStore` caches the most recent parsed result; the 2-second active-task polling hits the cache with zero file IO, avoiding frequent full reads of `tasks.json` + JSON parsing
+- **Frontend SSE subscription deduplication**: `TaskEventsContext` establishes a single `/taskmanager/events` SSE subscription at the `AppLayout` top level; `TaskManagerView` and `SessionSidebar` consume it via context, eliminating duplicate long-lived connections per workspace
+
 ## Release Builds
 
 Pushing a `v*` tag (e.g. `v1.0.0`) triggers GitHub Actions to build and publish a Release with:

@@ -9,6 +9,7 @@ import SettingsDialog, { parseSettingsTab } from './SettingsDialog'
 import { getPermissionSettings, updatePermissionSettings } from '../api/permissions'
 import type { PermissionSettings } from '../types'
 import { useFileViewer } from '../context/FileViewerContext'
+import { TaskEventsProvider } from '../context/TaskEventsContext'
 import { newTaskUrl, taskManagerUrl } from '../utils/routes'
 import NexusLogoIcon from './NexusLogoIcon'
 import styles from './AppLayout.module.css'
@@ -204,6 +205,7 @@ export default function AppLayout({ sidebarProps, children }: AppLayoutProps) {
 
   return (
     <SidebarContext.Provider value={{ collapsed, toggle }}>
+      <TaskEventsProvider workspaceId={workspaceId}>
       <StartupWarmup />
       <div className={styles.layout}>
         {!collapsed && (
@@ -243,6 +245,7 @@ export default function AppLayout({ sidebarProps, children }: AppLayoutProps) {
         </div>
       </div>
       {settingsOpen && <SettingsDialog key={settingsTab} initialTab={settingsTab} onClose={closeSettings} />}
+      </TaskEventsProvider>
     </SidebarContext.Provider>
   )
 }

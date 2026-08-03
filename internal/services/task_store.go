@@ -29,11 +29,18 @@ const (
 // 数据落在工作区的管理数据目录（workspacemeta.DirFor(cwd)）下，与 agent 工作目录分离；
 // 首次访问时自动把旧版落在 cwd 内的数据搬迁过去。
 // 所有写操作通过 mutex 序列化，避免同一进程内并发改写；文件级并发由调用方保证。
+//
+// 内存缓存：Load 首次读取后缓存解析结果，后续 Load 直接返回缓存副本，
+// 避免活跃任务轮询（2 秒一次）频繁全量读文件 + JSON 解析。
+// Save 写入后同步更新缓存，保证读一致性。所有读写均经 mu 序列化，无需额外失效机制。
 type TaskStore struct {
 	cwd         string // agent 工作目录（旧版数据位置，仅用于迁移）
 	dir         string // 管理数据目录；root 未设置时等于 cwd（旧行为）
 	mu          sync.Mutex
 	migrateOnce sync.Once
+	// cache 缓存最近一次 Load/Save 的解析结果（深拷贝副本），nil 表示未缓存。
+	// 轮询场景（TaskManagerView 每 2 秒 getTaskStatus）命中缓存后零文件 IO。
+	cache *models.TaskManagerDef
 }
 
 // NewTaskStore 创建基于 cwd 的 TaskStore，数据实际落在对应的管理数据目录。
@@ -119,8 +126,30 @@ func copyFile(src, dst string) error {
 }
 
 // Load 读取 tasks.json；不存在时返回空定义。
+// 命中内存缓存时直接返回深拷贝副本，避免频繁全量读文件 + JSON 解析（轮询场景）。
 func (s *TaskStore) Load() (*models.TaskManagerDef, error) {
 	s.ensureMigrated()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.loadLocked()
+}
+
+// loadLocked 读取 tasks.json（优先命中缓存），调用方需持有 s.mu。
+func (s *TaskStore) loadLocked() (*models.TaskManagerDef, error) {
+	s.ensureMigrated()
+	if s.cache != nil {
+		return cloneDef(s.cache), nil
+	}
+	def, err := s.loadFromFileLocked()
+	if err != nil {
+		return nil, err
+	}
+	s.cache = def
+	return cloneDef(def), nil
+}
+
+// loadFromFileLocked 从磁盘读取并解析 tasks.json，调用方需持有 s.mu。
+func (s *TaskStore) loadFromFileLocked() (*models.TaskManagerDef, error) {
 	data, err := os.ReadFile(s.tasksPath())
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -146,8 +175,30 @@ func (s *TaskStore) Load() (*models.TaskManagerDef, error) {
 	return &def, nil
 }
 
-// Save 原子写回 tasks.json，成功后广播变更事件（驱动前端自动刷新）。
+// cloneDef 返回 def 的深拷贝（独立 Tasks 切片），避免调用方修改污染缓存。
+func cloneDef(def *models.TaskManagerDef) *models.TaskManagerDef {
+	if def == nil {
+		return nil
+	}
+	cp := *def
+	if def.Tasks != nil {
+		cp.Tasks = make([]models.TaskManagerTask, len(def.Tasks))
+		copy(cp.Tasks, def.Tasks)
+	}
+	return &cp
+}
+
+// Save 原子写回 tasks.json，成功后更新内存缓存并广播变更事件（驱动前端自动刷新）。
+// 调用方未持有 s.mu 时使用此方法；已持有 s.mu 的内部方法应调用 saveLocked。
 func (s *TaskStore) Save(def *models.TaskManagerDef) error {
+	s.ensureMigrated()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.saveLocked(def)
+}
+
+// saveLocked 写回 tasks.json 并更新缓存，调用方需持有 s.mu。
+func (s *TaskStore) saveLocked(def *models.TaskManagerDef) error {
 	s.ensureMigrated()
 	if def == nil {
 		def = &models.TaskManagerDef{}
@@ -172,6 +223,8 @@ func (s *TaskStore) Save(def *models.TaskManagerDef) error {
 	if err := os.Rename(tmp, s.tasksPath()); err != nil {
 		return err
 	}
+	// 更新内存缓存（存归一化后的副本，供后续 Load 命中）
+	s.cache = cloneDef(def)
 	// 所有写路径（REST/MCP/编排器/调度器）都汇聚到此处落盘，统一在这里通知订阅者。
 	notifyTaskChanged(s.cwd)
 	return nil
@@ -182,7 +235,7 @@ func (s *TaskStore) UpsertTask(task models.TaskManagerTask) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	def, err := s.Load()
+	def, err := s.loadLocked()
 	if err != nil {
 		return err
 	}
@@ -219,13 +272,13 @@ func (s *TaskStore) UpsertTask(task models.TaskManagerTask) error {
 		task.Priority = models.NormalizeTaskPriority(incomingPri)
 		def.Tasks = append(def.Tasks, task)
 	}
-	return s.Save(def)
+	return s.saveLocked(def)
 }
 
 // DeleteTask 删除指定任务。
 func (s *TaskStore) DeleteTask(taskID string) error {
 	s.mu.Lock()
-	def, err := s.Load()
+	def, err := s.loadLocked()
 	if err != nil {
 		s.mu.Unlock()
 		return err
@@ -242,7 +295,7 @@ func (s *TaskStore) DeleteTask(taskID string) error {
 		return fmt.Errorf("任务 %s 不存在", taskID)
 	}
 	def.Tasks = append(def.Tasks[:idx], def.Tasks[idx+1:]...)
-	err = s.Save(def)
+	err = s.saveLocked(def)
 	s.mu.Unlock()
 	return err
 }
@@ -305,7 +358,7 @@ func (s *TaskStore) saveArchived(list []models.ArchivedTask) error {
 func (s *TaskStore) ArchiveTask(taskID string) (*models.ArchivedTask, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	def, err := s.Load()
+	def, err := s.loadLocked()
 	if err != nil {
 		return nil, err
 	}
@@ -336,7 +389,7 @@ func (s *TaskStore) ArchiveTask(taskID string) (*models.ArchivedTask, error) {
 		return nil, err
 	}
 	def.Tasks = append(def.Tasks[:idx], def.Tasks[idx+1:]...)
-	if err := s.Save(def); err != nil {
+	if err := s.saveLocked(def); err != nil {
 		return nil, err
 	}
 	return &entry, nil
@@ -374,7 +427,7 @@ func (s *TaskStore) RestoreArchived(taskID string) (*models.TaskManagerTask, err
 	if idx < 0 {
 		return nil, fmt.Errorf("归档任务 %s 不存在", taskID)
 	}
-	def, err := s.Load()
+	def, err := s.loadLocked()
 	if err != nil {
 		return nil, err
 	}
@@ -385,7 +438,7 @@ func (s *TaskStore) RestoreArchived(taskID string) (*models.TaskManagerTask, err
 	}
 	task := list[idx].TaskManagerTask
 	def.Tasks = append(def.Tasks, task)
-	if err := s.Save(def); err != nil {
+	if err := s.saveLocked(def); err != nil {
 		return nil, err
 	}
 	list = append(list[:idx], list[idx+1:]...)
@@ -478,7 +531,7 @@ func (s *TaskStore) ListScheduledTasks() ([]models.TaskManagerTask, error) {
 func (s *TaskStore) SetMaxParallel(maxParallel int) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	def, err := s.Load()
+	def, err := s.loadLocked()
 	if err != nil {
 		return err
 	}
@@ -486,21 +539,21 @@ func (s *TaskStore) SetMaxParallel(maxParallel int) error {
 		maxParallel = 1
 	}
 	def.MaxParallel = maxParallel
-	return s.Save(def)
+	return s.saveLocked(def)
 }
 
 // UpdateTaskStatus 更新指定任务的运行时字段与最近执行记录。
 func (s *TaskStore) UpdateTaskStatus(taskID string, mutate func(*models.TaskManagerTask)) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	def, err := s.Load()
+	def, err := s.loadLocked()
 	if err != nil {
 		return err
 	}
 	for i := range def.Tasks {
 		if def.Tasks[i].ID == taskID {
 			mutate(&def.Tasks[i])
-			return s.Save(def)
+			return s.saveLocked(def)
 		}
 	}
 	return fmt.Errorf("任务 %s 不存在", taskID)
@@ -512,7 +565,7 @@ func (s *TaskStore) AppendExecution(taskID string, rec models.TaskExecutionRecor
 	defer s.mu.Unlock()
 
 	rec.TaskID = taskID
-	def, err := s.Load()
+	def, err := s.loadLocked()
 	if err != nil {
 		return err
 	}
@@ -537,7 +590,7 @@ func (s *TaskStore) AppendExecution(taskID string, rec models.TaskExecutionRecor
 	if len(task.Executions) > maxInlinedExecutions {
 		task.Executions = task.Executions[len(task.Executions)-maxInlinedExecutions:]
 	}
-	return s.Save(def)
+	return s.saveLocked(def)
 }
 
 func (s *TaskStore) appendExecutionJSONLLocked(rec models.TaskExecutionRecord) error {

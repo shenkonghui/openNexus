@@ -420,6 +420,15 @@ MCP 服务自动配置同步——已生成令牌的笔记自动写入全局 `mc
 - **日志面板**：后端日志实时推送到前端（基于 SSE）
 - **ACP 调试日志**：当 `debug.acp.enabled` 为 `true` 时，原始 ACP 通信记录到 `~/.openNexus/acp-debug/`，供离线分析
 
+## 性能优化
+
+针对长会话与高并发场景，openNexus 在以下层面做了针对性优化：
+
+- **消息仓库按需分片加载**：`FindBySessionIDLastN`（最近 N 条消息查询）在冷缓存时不再全量读取所有 JSONL 分片，而是按分片文件名倒序读取，累积到 N 条即停止，避免长会话首次访问全量解析磁盘文件
+- **SSE 断点续传补齐限制**：`/sessions/:id/stream` 端点在客户端未传 `Last-Event-ID` 时，仅补发最近 500 条消息而非全量历史，避免长会话建连时全量回放拖慢首包；完整历史由 `/messages` 接口分页加载
+- **tasks.json 内存缓存**：`TaskStore` 缓存最近一次读取/写入的解析结果，活跃任务 2 秒轮询命中缓存后零文件 IO，避免频繁全量读 `tasks.json` + JSON 解析
+- **前端 SSE 订阅去重**：`TaskEventsContext` 在 `AppLayout` 顶层建立唯一一条 `/taskmanager/events` SSE 订阅，`TaskManagerView` 与 `SessionSidebar` 通过 context 共享消费，避免同一工作区重复长连接
+
 ## 发布构建
 
 推送 `v*` 格式 tag（如 `v1.0.0`）后，GitHub Actions 会自动构建并创建 Release，包含：
