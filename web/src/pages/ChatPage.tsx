@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useParams, useNavigate, useLocation } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { useRequireAuth } from '../hooks/useRequireAuth'
@@ -25,8 +25,20 @@ import { PanelRightClose, PanelRightOpen } from 'lucide-react'
 import { saveLastDoc, LAST_DOC_KEY_PREFIX, type DocTarget } from '../utils/docs'
 import LayoutRenderer from '../modes/LayoutRenderer'
 import { getMode } from '../modes/registry'
-import type { PanelCtx } from '../modes/types'
+import type { LayoutNode, PanelCtx } from '../modes/types'
 import styles from './ChatPage.module.css'
+
+/** 收集布局树中所有 leaf 面板 id（用于判断「缩进右侧窗口」要隐藏的面板集合） */
+function collectAllPanelIds(node: LayoutNode): string[] {
+  switch (node.kind) {
+    case 'leaf':
+      return [node.panel]
+    case 'tabs':
+      return [...node.panels, ...(node.optional ?? [])]
+    case 'split':
+      return node.children.flatMap(collectAllPanelIds)
+  }
+}
 
 // navigate 时携带的 state：initialPrompt/createdSession 用于新建会话跳转；
 // doc 用于侧边栏点击文档时打开指定文档（右侧「文档预览」标签）。
@@ -63,7 +75,12 @@ export default function ChatPage() {
   useEffect(() => {
     localStorage.setItem(LEFT_PANELS_HIDDEN_KEY, leftHidden ? '1' : '0')
   }, [leftHidden])
-  const sidePanels = ['files', 'terminal', 'changes', 'git', 'debug', 'browser', 'doc-preview']
+  // 从当前模式布局动态推导「缩进右侧窗口」要隐藏的面板集合：布局内除对话(chat)外
+  // 的其余工具面板全部隐藏。相比硬编码列表，新增面板也不会漏掉导致收起失效。
+  const sidePanels = useMemo(
+    () => collectAllPanelIds(getMode(null).layout).filter((id) => id !== 'chat'),
+    [],
+  )
   const hiddenPanels = leftHidden ? new Set(sidePanels) : undefined
 
   // 当前打开的文档（右侧「文档预览」标签）。侧边栏点击文档时通过 navigate state 传入；否则读 localStorage 上次打开的。
