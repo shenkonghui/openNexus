@@ -1,7 +1,41 @@
+.DEFAULT_GOAL := menu
+
+.PHONY: help menu
+help:
+	@awk ' \
+		/^\.PHONY:/ { for (i = 2; i <= NF; i++) phony[$$i] = 1 } \
+		/^#/ { \
+			d = $$0; sub(/^#[ \t]*/, "", d); \
+			if (d != "") { \
+				if (d ~ /^用法/) usage = d; \
+				else desc = d; \
+			} \
+		} \
+		/^[^ \t#].*:/ { \
+			t = $$0; sub(/[ \t]*:.*$$/, "", t); \
+			if (phony[t] && t != "menu" && t != "help") { \
+				d = desc; if (d == "") d = usage; \
+				if (d != "") printf "%-28s%s\n", t, d; else print t; \
+			} \
+			desc = ""; usage = ""; \
+		} \
+	' $(MAKEFILE_LIST) | sort -u
+
+menu:
+	@if [ -t 1 ] && command -v fzf >/dev/null 2>&1; then \
+		opt=$$($(MAKE) -s help | fzf --height 40% --layout reverse --prompt="选择 Makefile 目标: " | awk '{print $$1}'); \
+		if [ -z "$$opt" ]; then echo "已取消。"; exit 0; fi; \
+		echo "==> 正在执行: make $$opt"; \
+		$(MAKE) $$opt; \
+	else \
+		$(MAKE) help; \
+	fi
+
+
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 LDFLAGS := -ldflags="-s -w -X main.version=$(VERSION)"
 
-.PHONY: dev backend frontend build run run-bg stop logs test clean release release-dry docker-build docker-up docker-down docker-logs electron-dev electron-dist electron-install electron-uninstall
+.PHONY: dev backend frontend build run run-bg stop logs test clean release release-dry docker-build docker-up docker-down docker-logs docker-dev-build docker-dev-up docker-dev-up-d docker-dev-down docker-dev-logs electron-dev electron-dist electron-install electron-uninstall
 
 # 一键启动前后端开发服务器
 # 用法: make dev
@@ -10,10 +44,10 @@ dev: backend-stop
 	@bash -c 'trap "kill 0 2>/dev/null" INT TERM; \
 		go run ./cmd/server </dev/null & \
 		BACKEND_PID=$$!; \
-		echo "==> 等待后端 :8080 就绪 (最多 60s)..."; \
+		echo "==> 等待后端 :8008 就绪 (最多 60s)..."; \
 		READY=0; \
 		for i in $$(seq 1 60); do \
-			if curl -sf http://127.0.0.1:8080/health >/dev/null 2>&1; then \
+			if curl -sf http://127.0.0.1:8008/health >/dev/null 2>&1; then \
 				echo "✅ 后端就绪 (耗时 $${i}s)"; READY=1; break; \
 			fi; \
 			sleep 1; \
@@ -25,9 +59,9 @@ dev: backend-stop
 		(cd web && npm run dev) </dev/null & \
 		wait'
 
-# 启动后端 (Go, :8080)
+# 启动后端 (Go, :8008)
 backend:
-	@echo "==> 启动后端 http://localhost:8080"
+	@echo "==> 启动后端 http://localhost:8008"
 	@go run ./cmd/server
 
 # 启动前端 (Vite, :3000)
@@ -37,7 +71,7 @@ frontend:
 
 # 尝试停止已运行的后端进程（避免端口占用）
 backend-stop:
-	@-lsof -ti:8080 | xargs kill -9 2>/dev/null || true
+	@-lsof -ti:8008 | xargs kill -9 2>/dev/null || true
 	@-lsof -ti:3000 | xargs kill -9 2>/dev/null || true
 
 # 构建前后端
@@ -64,7 +98,7 @@ gateway:
 # 开发模式：构建后以 release 模式启动并打开浏览器
 # 用法: make run-desktop
 run-desktop: build
-	@echo "==> 单端口模式启动 http://localhost:8080"
+	@echo "==> 单端口模式启动 http://localhost:8008"
 	@SERVER_MODE=release ./opennexus --open
 
 # 单端口运行：先构建前端，再以 release 模式启动后端（前端 + API 同端口）
@@ -72,8 +106,8 @@ run-desktop: build
 # 用法: make run BG=1     后台运行（日志: opennexus.log, 停止: make stop）
 run: build
 ifeq ($(BG),1)
-	@-lsof -ti:8080 | xargs kill -9 2>/dev/null || true
-	@echo "==> 后台启动 http://localhost:8080 (日志: opennexus.log)"
+	@-lsof -ti:8008 | xargs kill -9 2>/dev/null || true
+	@echo "==> 后台启动 http://localhost:8008 (日志: opennexus.log)"
 	@SERVER_MODE=release nohup ./opennexus > opennexus.log 2>&1 & echo $$! > opennexus.pid
 	@sleep 1
 	@if kill -0 $$(cat opennexus.pid) 2>/dev/null; then \
@@ -82,15 +116,15 @@ ifeq ($(BG),1)
 		echo "❌ 启动失败，日志如下:"; tail -20 opennexus.log; rm -f opennexus.pid; exit 1; \
 	fi
 else
-	@echo "==> 单端口启动 http://localhost:8080"
+	@echo "==> 单端口启动 http://localhost:8008"
 	@SERVER_MODE=release ./opennexus
 endif
 
 # 单端口后台运行：构建后以 release 模式后台启动，日志写入 opennexus.log
 # 用法: make run-bg   停止: make stop
 run-bg: build
-	@-lsof -ti:8080 | xargs kill -9 2>/dev/null || true
-	@echo "==> 后台启动 http://localhost:8080 (日志: opennexus.log)"
+	@-lsof -ti:8008 | xargs kill -9 2>/dev/null || true
+	@echo "==> 后台启动 http://localhost:8008 (日志: opennexus.log)"
 	@SERVER_MODE=release nohup ./opennexus > opennexus.log 2>&1 & echo $$! > opennexus.pid
 	@sleep 1
 	@if kill -0 $$(cat opennexus.pid) 2>/dev/null; then \
@@ -106,7 +140,7 @@ stop:
 		kill $$(cat opennexus.pid) 2>/dev/null && echo "✅ 已停止 (PID: $$(cat opennexus.pid))" || echo "ℹ️  进程已不存在"; \
 		rm -f opennexus.pid; \
 	else \
-		lsof -ti:8080 | xargs kill 2>/dev/null && echo "✅ 已停止 8080 端口进程" || echo "ℹ️  无运行中的服务"; \
+		lsof -ti:8008 | xargs kill 2>/dev/null && echo "✅ 已停止 8008 端口进程" || echo "ℹ️  无运行中的服务"; \
 	fi
 
 # 查看后台进程日志（实时跟踪）
@@ -154,13 +188,13 @@ docker-build:
 # 启动 docker-compose（前台，Ctrl+C 停止）
 # 用法: make docker-up
 docker-up: docker-build
-	@echo "==> 启动容器 http://localhost:8080"
+	@echo "==> 启动容器 http://localhost:8008"
 	@docker compose up
 
 # 后台启动 docker-compose
 # 用法: make docker-up-d
 docker-up-d: docker-build
-	@echo "==> 后台启动容器 http://localhost:8080"
+	@echo "==> 后台启动容器 http://localhost:8008"
 	@docker compose up -d
 	@docker compose ps
 
@@ -174,6 +208,36 @@ docker-down:
 # 用法: make docker-logs
 docker-logs:
 	@docker compose logs -f
+
+# 构建 dev 容器镜像（含 Go 工具链，供容器内 coding agent 编译/运行 Go 代码）
+# 用法: make docker-dev-build
+docker-dev-build:
+	@echo "==> 构建 dev 镜像 opennexus:dev"
+	@docker compose -f docker-compose.dev.yml build
+
+# 启动 dev 容器（前台，Ctrl+C 停止）
+# 用法: make docker-dev-up
+docker-dev-up: docker-dev-build
+	@echo "==> 启动 dev 容器 http://localhost:8008"
+	@docker compose -f docker-compose.dev.yml up
+
+# 后台启动 dev 容器
+# 用法: make docker-dev-up-d
+docker-dev-up-d: docker-dev-build
+	@echo "==> 后台启动 dev 容器 http://localhost:8008"
+	@docker compose -f docker-compose.dev.yml up -d
+	@docker compose -f docker-compose.dev.yml ps
+
+# 停止并清理 dev 容器（保留数据卷）
+# 用法: make docker-dev-down
+docker-dev-down:
+	@echo "==> 停止 dev 容器"
+	@docker compose -f docker-compose.dev.yml down
+
+# 查看 dev 容器日志（实时跟踪）
+# 用法: make docker-dev-logs
+docker-dev-logs:
+	@docker compose -f docker-compose.dev.yml logs -f
 
 # ============================================================================
 # Electron 桌面客户端

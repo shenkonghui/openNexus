@@ -85,7 +85,7 @@ openNexus/
 ### 本地开发
 
 ```bash
-# 一键启动前后端开发服务器（后端 :8080，前端 :3000）
+# 一键启动前后端开发服务器（后端 :8008，前端 :3000）
 make dev
 ```
 
@@ -94,7 +94,7 @@ make dev
 如需单独启动：
 
 ```bash
-make backend    # 仅启动后端 http://localhost:8080
+make backend    # 仅启动后端 http://localhost:8008
 make frontend   # 仅启动前端 http://localhost:3000
 ```
 
@@ -105,7 +105,7 @@ make frontend   # 仅启动前端 http://localhost:3000
 make run
 ```
 
-访问 http://localhost:8080。
+访问 http://localhost:8008。
 
 ### Docker 部署
 
@@ -117,13 +117,23 @@ make docker-up
 make docker-up-d
 ```
 
+开发容器（含 Go 工具链，便于容器内 coding agent 编译/运行 Go 代码）：
+
+```bash
+# 启动 dev 容器（前台）
+make docker-dev-up
+
+# 或后台启动
+make docker-dev-up-d
+```
+
 如需配置 `ANTHROPIC_API_KEY` 等环境变量，在启动前设置：
 
 ```bash
 ANTHROPIC_API_KEY=sk-xxx make docker-up-d
 ```
 
-**数据与配置持久化**：`docker-compose.yml` 将本地 `~/.openNexus` 挂载到容器 `/root/.openNexus`，容器与宿主机共享同一份数据库、会话、agent 二进制缓存和 `config.yaml`。修改 `~/.openNexus/config.yaml` 后 `docker compose restart` 即可生效，无需重建镜像。首次使用可从项目根目录复制示例配置：
+**数据与配置持久化**：`docker-compose.yml` 将本地 `~/.openNexus` 挂载到容器 `/root/.openNexus`，容器与宿主机共享同一份数据库、会话、agent 二进制缓存和 `config.yaml`。同时 `~/.local` 被挂载到容器的 `/root/.local`，使 agent 子进程能使用宿主机的本地工具（如 `~/.local/bin`）及相关配置/数据。容器内 `npm install -g` 会安装到 `/root/.npm-global`，并通过命名卷 `opennexus-npm-global` 持久化，容器重建或重启后无需重复安装。修改 `~/.openNexus/config.yaml` 后 `docker compose restart` 即可生效，无需重建镜像。首次使用可从项目根目录复制示例配置：
 
 ```bash
 mkdir -p ~/.openNexus
@@ -148,7 +158,7 @@ make electron-run     # 启动已安装的应用
 
 | 配置项 | 环境变量 | 说明 |
 |--------|---------|------|
-| `server.port` | `SERVER_PORT` | 服务端口，默认 `8080` |
+| `server.port` | `SERVER_PORT` | 服务端口，默认 `8008` |
 | `server.mode` | `SERVER_MODE` | `debug` / `release` |
 | `server.web_dist` | `WEB_DIST` | 前端构建产物目录，默认 `./web/dist` |
 | `server.public_base_url` | `PUBLIC_BASE_URL` | MCP 端点公网基础 URL |
@@ -359,7 +369,7 @@ MCP 服务自动配置同步——已生成令牌的笔记自动写入全局 `mc
 | 命令 | 说明 |
 |------|------|
 | `make dev` | 一键启动前后端开发服务器 |
-| `make backend` | 仅启动后端（http://localhost:8080） |
+| `make backend` | 仅启动后端（http://localhost:8008） |
 | `make frontend` | 仅启动前端（http://localhost:3000） |
 | `make run` | 单端口启动（构建 + release 模式） |
 | `make run-desktop` | 构建 + 启动并自动打开浏览器 |
@@ -376,8 +386,14 @@ MCP 服务自动配置同步——已生成令牌的笔记自动写入全局 `mc
 | **Docker** | |
 | `make docker-build` | 仅构建 Docker 镜像 |
 | `make docker-up` | 构建 Docker 镜像并前台启动 |
+| `make docker-up-d` | 构建 Docker 镜像并后台启动 |
 | `make docker-down` | 停止并清理 Docker 容器 |
 | `make docker-logs` | 查看 Docker 容器日志 |
+| `make docker-dev-build` | 仅构建 dev 镜像（含 Go 工具链） |
+| `make docker-dev-up` | 构建 dev 镜像并前台启动 |
+| `make docker-dev-up-d` | 构建 dev 镜像并后台启动 |
+| `make docker-dev-down` | 停止并清理 dev 容器 |
+| `make docker-dev-logs` | 查看 dev 容器日志 |
 
 ## 调试与日志
 

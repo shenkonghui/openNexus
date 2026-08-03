@@ -7,22 +7,27 @@ services:
     container_name: opennexus
     restart: unless-stopped
     ports:
-      - "8080:8080"
+      - "8008:8008"
     volumes:
       # 挂载本地 ~/.openNexus：容器与宿主机共享同一份数据（db、会话、agent 二进制缓存、config.yaml），
       # 本地直接运行 opennexus 和容器运行的数据完全一致。
       - ${HOME}/.openNexus:/root/.openNexus
       - opennexus-npm-cache:/root/.npm
+      # 持久化 npm install -g 全局安装目录，容器重建后无需重新安装
+      - opennexus-npm-global:/root/.npm-global
       - ${HOME}/src:${HOME}/src
       - ${HOME}/.config:${HOME}/.config
+      # 挂载本地 ~/.local：容器内 root 用户的 ~/.local 指向宿主机，
+      # 使 agent 子进程能使用 ~/.local/bin 下的工具及 ~/.local/share 下的配置/数据。
+      - ${HOME}/.local:/root/.local
     environment:
       - SERVER_MODE=release
-      - SERVER_PORT=8080
+      - SERVER_PORT=8008
       - JWT_SECRET=${JWT_SECRET:-nexusagent-dev-secret-key-32+bytes!}
       # 默认时区
       - TZ=Asia/Shanghai
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/health"]
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8008/health"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -30,3 +35,4 @@ services:
 
 volumes:
   opennexus-npm-cache:
+  opennexus-npm-global:

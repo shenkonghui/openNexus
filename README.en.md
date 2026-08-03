@@ -85,7 +85,7 @@ openNexus/
 ### Local Development
 
 ```bash
-# Start both frontend and backend dev servers (backend :8080, frontend :3000)
+# Start both frontend and backend dev servers (backend :8008, frontend :3000)
 make dev
 ```
 
@@ -94,7 +94,7 @@ Visit http://localhost:3000. Register an account to get started.
 To start individually:
 
 ```bash
-make backend    # Start backend only on http://localhost:8080
+make backend    # Start backend only on http://localhost:8008
 make frontend   # Start frontend only on http://localhost:3000
 ```
 
@@ -105,7 +105,7 @@ make frontend   # Start frontend only on http://localhost:3000
 make run
 ```
 
-Visit http://localhost:8080.
+Visit http://localhost:8008.
 
 ### Docker Deployment
 
@@ -117,13 +117,23 @@ make docker-up
 make docker-up-d
 ```
 
+Dev container (includes the Go toolchain, useful for coding agents that compile/run Go code inside the container):
+
+```bash
+# Start the dev container (foreground)
+make docker-dev-up
+
+# Or run in background
+make docker-dev-up-d
+```
+
 Set environment variables like `ANTHROPIC_API_KEY` before starting:
 
 ```bash
 ANTHROPIC_API_KEY=sk-xxx make docker-up-d
 ```
 
-**Data & Config Persistence**: `docker-compose.yml` mounts the local `~/.openNexus` directory into the container at `/root/.openNexus`, sharing the same database, sessions, agent binary cache, and `config.yaml` between host and container. After modifying `~/.openNexus/config.yaml`, run `docker compose restart` to apply changes—no image rebuild needed. For first-time setup, copy the example config from the project root:
+**Data & Config Persistence**: `docker-compose.yml` mounts the local `~/.openNexus` directory into the container at `/root/.openNexus`, sharing the same database, sessions, agent binary cache, and `config.yaml` between host and container. It also mounts `~/.local` to `/root/.local` so agent subprocesses can use host-local tools (e.g. `~/.local/bin`) and their related configuration/data. Inside the container, `npm install -g` installs packages to `/root/.npm-global`, which is persisted via the `opennexus-npm-global` named volume so they survive container restarts or rebuilds. After modifying `~/.openNexus/config.yaml`, run `docker compose restart` to apply changes—no image rebuild needed. For first-time setup, copy the example config from the project root:
 
 ```bash
 mkdir -p ~/.openNexus
@@ -148,7 +158,7 @@ The configuration file is `config.yaml`. Environment variable overrides:
 
 | Config | Env Var | Description |
 |--------|---------|-------------|
-| `server.port` | `SERVER_PORT` | Server port (default: `8080`) |
+| `server.port` | `SERVER_PORT` | Server port (default: `8008`) |
 | `server.mode` | `SERVER_MODE` | `debug` / `release` |
 | `server.web_dist` | `WEB_DIST` | Frontend build directory (default: `./web/dist`) |
 | `server.public_base_url` | `PUBLIC_BASE_URL` | Public base URL for MCP endpoints |
@@ -359,7 +369,7 @@ The Notes page (`/notes`) supports quick capture, tag filtering, Markdown previe
 | Command | Description |
 |---------|-------------|
 | `make dev` | Start frontend + backend dev servers |
-| `make backend` | Start backend only (http://localhost:8080) |
+| `make backend` | Start backend only (http://localhost:8008) |
 | `make frontend` | Start frontend only (http://localhost:3000) |
 | `make run` | Single-port production mode (build + serve) |
 | `make run-desktop` | Build + launch with browser auto-open |
@@ -376,8 +386,14 @@ The Notes page (`/notes`) supports quick capture, tag filtering, Markdown previe
 | **Docker** | |
 | `make docker-build` | Build Docker image only |
 | `make docker-up` | Build Docker image and start |
+| `make docker-up-d` | Build Docker image and start in background |
 | `make docker-down` | Stop and clean Docker containers |
 | `make docker-logs` | View Docker container logs |
+| `make docker-dev-build` | Build dev image only (with Go toolchain) |
+| `make docker-dev-up` | Build dev image and start |
+| `make docker-dev-up-d` | Build dev image and start in background |
+| `make docker-dev-down` | Stop and clean dev containers |
+| `make docker-dev-logs` | View dev container logs |
 
 ## Debugging & Logs
 

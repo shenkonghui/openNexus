@@ -48,10 +48,11 @@ RUN sed -i 's#deb.debian.org#mirrors.aliyun.com#g' /etc/apt/sources.list.d/debia
     sed -i 's#deb.debian.org#mirrors.aliyun.com#g' /etc/apt/sources.list 2>/dev/null || true
 
 # 安装运行时依赖：bash（部分 agent / 脚本依赖 bash）、sqlite、ca-cert、git、
-# wget（HEALTHCHECK 使用）、tzdata（时区）、bubblewrap（agent OS 沙箱，sandbox.enabled 时使用）
+# wget（HEALTHCHECK 使用）、curl、make、vim（常见工具）、tzdata（时区）、
+# bubblewrap（agent OS 沙箱，sandbox.enabled 时使用）
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-        bash ca-certificates libsqlite3-0 git wget tzdata bubblewrap \
+        bash ca-certificates libsqlite3-0 git wget curl make vim tzdata bubblewrap \
     && ln -sf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime \
     && echo "Asia/Shanghai" > /etc/timezone \
     && rm -rf /var/lib/apt/lists/*
@@ -79,25 +80,27 @@ exec /app/opennexus\n' > /app/entrypoint.sh && chmod +x /app/entrypoint.sh
 
 # 数据持久化目录：统一使用默认 ~/.openNexus（root 用户即 /root/.openNexus），
 # 数据库、会话、ACP 二进制缓存、调试目录全部落在此目录，挂载单个卷即可全量持久化。
-RUN mkdir -p /root/.openNexus/session
+RUN mkdir -p /root/.openNexus/session /root/.npm-global/bin
 VOLUME ["/root/.openNexus"]
 
-# 显式指定 npm 缓存目录，便于通过 docker volume 持久化。
+# 显式指定 npm 缓存与全局安装目录，便于通过 docker volume 持久化。
 # npx 调用 claude-agent-acp 时下载的包会缓存在 /root/.npm/_npx，
-# 持久化后容器重启无需重新从网络下载。
+# npm install -g 安装的包会落到 /root/.npm-global，持久化后无需重复安装。
 # 不再设置 DATABASE_PATH / AGENTS_WORKSPACE_SESSION_DIR，让程序走默认 ~/.openNexus 路径。
 # LANG/LC_ALL 设为 C.UTF-8（Debian 内置），保证终端及子进程正确处理中文等多字节字符。
 ENV NPM_CONFIG_CACHE=/root/.npm \
+    NPM_CONFIG_PREFIX=/root/.npm-global \
+    PATH="/root/.npm-global/bin:${PATH}" \
     SERVER_MODE=release \
-    SERVER_PORT=8080 \
+    SERVER_PORT=8008 \
     WEB_DIST=/app/web/dist \
     NODE_ENV=production \
     LANG=C.UTF-8 \
     LC_ALL=C.UTF-8
 
-EXPOSE 8080
+EXPOSE 8008
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD wget -qO- http://127.0.0.1:8080/health >/dev/null 2>&1 || exit 1
+    CMD wget -qO- http://127.0.0.1:8008/health >/dev/null 2>&1 || exit 1
 
 ENTRYPOINT ["/app/entrypoint.sh"]

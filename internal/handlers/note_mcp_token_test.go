@@ -29,7 +29,7 @@ func setupNoteMCPRouter(t *testing.T, userID uint, mcpPath string) *gin.Engine {
 		repository.NewNoteSettingsRepository(db),
 		nil,
 		mcpPath,
-		"http://127.0.0.1:8080",
+		"http://127.0.0.1:8008",
 	)
 	r := gin.New()
 	r.Use(func(c *gin.Context) {
@@ -53,7 +53,7 @@ func newNoteHandlerForTest(t *testing.T, mcpPath string) (*NoteHandler, *reposit
 	db.Exec("DELETE FROM note_settings")
 	db.Exec("DELETE FROM notes")
 	settingsRepo := repository.NewNoteSettingsRepository(db)
-	h := NewNoteHandler(repository.NewNoteRepository(db), settingsRepo, nil, mcpPath, "http://127.0.0.1:8080")
+	h := NewNoteHandler(repository.NewNoteRepository(db), settingsRepo, nil, mcpPath, "http://127.0.0.1:8008")
 	return h, settingsRepo
 }
 
@@ -97,7 +97,7 @@ func TestGenerateMCPToken_Once(t *testing.T) {
 	if entry.Type != "http" {
 		t.Errorf("entry.Type = %q, 期望 http", entry.Type)
 	}
-	if entry.Url != "http://127.0.0.1:8080/mcp/notes" {
+	if entry.Url != "http://127.0.0.1:8008/mcp/notes" {
 		t.Errorf("entry.Url = %q", entry.Url)
 	}
 	if entry.Headers["Authorization"] != "Bearer "+resp1.Data.McpToken {
@@ -223,7 +223,7 @@ func TestSyncAllNotesMCP_UpdatesWhenStale(t *testing.T) {
   "mcpServers": {
     "opennexus-notes": {
       "type": "http",
-      "url": "http://127.0.0.1:8080/mcp/notes",
+      "url": "http://127.0.0.1:8008/mcp/notes",
       "headers": { "Authorization": "Bearer stale-and-wrong" }
     }
   }

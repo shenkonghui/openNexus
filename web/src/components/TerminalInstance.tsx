@@ -93,7 +93,7 @@ export function startTerminal(
     if (!connected) {
       term.clear()
       term.writeln('\x1b[31m连接超时，请检查：\x1b[0m')
-      term.writeln('  1. 后端服务是否已启动 (默认 :8080)')
+      term.writeln('  1. 后端服务是否已启动 (默认 :8008)')
       term.writeln('  2. 会话工作目录是否存在')
       term.writeln('  3. 认证令牌是否有效')
       term.writeln('')

@@ -25,15 +25,21 @@ COPY --from=web-builder /app/web/dist ./web/dist
 RUN CGO_ENABLED=1 GOOS=linux go build -ldflags="-s -w" -o /out/opennexus ./cmd/server
 
 # ===== Stage 3: 运行时（含 Go 工具链）=====
-FROM docker.linkos.org/library/node:20-slim AS runtime
+# 使用 Debian 版 node 镜像（glibc），因为 agents 通过 npx 调用 claude-agent-acp，
+# 且 cursor 等 agent 捆绑的是 glibc 预编译 node，Alpine(musl) 下无法执行。
+# 选用 node:22-slim：@agentclientprotocol/claude-agent-acp@0.64.0 要求 node>=22。
+FROM docker.linkos.org/library/node:22-slim AS runtime
 WORKDIR /app
 
 RUN sed -i 's#deb.debian.org#mirrors.aliyun.com#g' /etc/apt/sources.list.d/debian.sources 2>/dev/null || true; \
     sed -i 's#deb.debian.org#mirrors.aliyun.com#g' /etc/apt/sources.list 2>/dev/null || true
 
+# 安装运行时依赖：bash（部分 agent / 脚本依赖 bash）、sqlite、ca-cert、git、
+# wget（HEALTHCHECK 使用）、curl、make、vim（常见工具）、tzdata（时区）、
+# bubblewrap（agent OS 沙箱，sandbox.enabled 时使用）
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-        bash ca-certificates libsqlite3-0 git wget tzdata \
+        bash ca-certificates libsqlite3-0 git wget curl make vim tzdata bubblewrap \
     && ln -sf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime \
     && echo "Asia/Shanghai" > /etc/timezone \
     && rm -rf /var/lib/apt/lists/*
@@ -47,20 +53,34 @@ COPY --from=go-builder /out/opennexus /app/opennexus
 COPY --from=web-builder /app/web/dist /app/web/dist
 COPY config.yaml /app/config.yaml
 
-RUN mkdir -p /root/.openNexus/session
+# 创建 entrypoint 脚本：在主程序启动前清理 npx 残留并串行预热缓存。
+# 背景：npx 安装包时先下载到临时目录（以 . 开头），再 rename 到最终位置。
+# 如果容器被 kill（如 docker compose down），rename 中断会留下残留临时目录，
+# 下次 npx 运行时 rename 目标非空 → ENOTEMPTY → agent 握手失败。
+# 预热后 npx 命中缓存不再下载，从根源消除并发竞争。
+RUN printf '#!/bin/sh\n\
+# 清理 npx 缓存中 npm rename 失败残留的临时目录（以 . 开头）\n\
+find /root/.npm/_npx -mindepth 1 -name ".*" -type d -exec rm -rf {} + 2>/dev/null || true\n\
+# 串行预热 npx 缓存（stdin 关闭后 agent 进程会快速退出）\n\
+npx -y @agentclientprotocol/claude-agent-acp@latest < /dev/null > /dev/null 2>&1 || true\n\
+exec /app/opennexus\n' > /app/entrypoint.sh && chmod +x /app/entrypoint.sh
+
+RUN mkdir -p /root/.openNexus/session /root/.npm-global/bin
 VOLUME ["/root/.openNexus"]
 
 ENV NPM_CONFIG_CACHE=/root/.npm \
+    NPM_CONFIG_PREFIX=/root/.npm-global \
+    PATH="/root/.npm-global/bin:${PATH}" \
     SERVER_MODE=release \
-    SERVER_PORT=8080 \
+    SERVER_PORT=8008 \
     WEB_DIST=/app/web/dist \
     NODE_ENV=production \
     LANG=C.UTF-8 \
     LC_ALL=C.UTF-8
 
-EXPOSE 8080
+EXPOSE 8008
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD wget -qO- http://127.0.0.1:8080/health >/dev/null 2>&1 || exit 1
+    CMD wget -qO- http://127.0.0.1:8008/health >/dev/null 2>&1 || exit 1
 
-ENTRYPOINT ["/app/opennexus"]
+ENTRYPOINT ["/app/entrypoint.sh"]

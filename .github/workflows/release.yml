@@ -316,7 +316,7 @@ jobs:
             echo "- **Electron macOS**：下载 \`.dmg\`，拖拽安装到 Applications 后启动"
             echo "- **Electron Windows**：下载 \`.exe\`，按安装向导完成"
             echo "- **Electron Linux**：下载 \`.AppImage\`，\`chmod +x\` 后运行"
-            echo "- **命令行版**：解压后执行 \`./opennexus\`，浏览器访问 http://127.0.0.1:8080"
+            echo "- **命令行版**：解压后执行 \`./opennexus\`，浏览器访问 http://127.0.0.1:8008"
           } > release-notes.md
 
       - name: Create Release

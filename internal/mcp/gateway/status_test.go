@@ -14,7 +14,7 @@ func TestGateway_EnableDisableEntry(t *testing.T) {
 		"alpha": map[string]any{"type": "http", "url": alphaURL},
 	})
 	_, token, gw := setupGateway(t, configPath)
-	gw.SetPublicBaseURL("http://127.0.0.1:8080")
+	gw.SetPublicBaseURL("http://127.0.0.1:8008")
 
 	if gw.Status(t.Context(), 1).Enabled {
 		t.Fatal("默认不应启用")
@@ -27,7 +27,7 @@ func TestGateway_EnableDisableEntry(t *testing.T) {
 	if entry == nil {
 		t.Fatal("启用后 mcp.json 应含网关条目")
 	}
-	if entry.Url != "http://127.0.0.1:8080/mcp/gateway" {
+	if entry.Url != "http://127.0.0.1:8008/mcp/gateway" {
 		t.Errorf("endpoint = %q", entry.Url)
 	}
 	if entry.Headers["Authorization"] != "Bearer "+token {
@@ -58,7 +58,7 @@ func TestGateway_EnableWithoutToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New 失败: %v", err)
 	}
-	gw.SetPublicBaseURL("http://127.0.0.1:8080")
+	gw.SetPublicBaseURL("http://127.0.0.1:8008")
 	if err := gw.EnableEntry(); err == nil {
 		t.Fatal("无 token 时应拒绝启用（写了也连不上）")
 	}
@@ -67,7 +67,7 @@ func TestGateway_EnableWithoutToken(t *testing.T) {
 func TestGateway_SyncEntryOnlyHealsExisting(t *testing.T) {
 	configPath := writeMCPConfig(t, map[string]any{})
 	_, token, gw := setupGateway(t, configPath)
-	gw.SetPublicBaseURL("http://127.0.0.1:8080")
+	gw.SetPublicBaseURL("http://127.0.0.1:8008")
 
 	// 条目不存在：自愈不应主动写入（启用必须由用户显式触发）
 	gw.SyncEntry()
@@ -86,7 +86,7 @@ func TestGateway_SyncEntryOnlyHealsExisting(t *testing.T) {
 	}
 	gw.SyncEntry()
 	entry := gw.findEntry()
-	if entry == nil || entry.Url != "http://127.0.0.1:8080/mcp/gateway" {
+	if entry == nil || entry.Url != "http://127.0.0.1:8008/mcp/gateway" {
 		t.Fatalf("自愈后 entry = %+v", entry)
 	}
 	if entry.Headers["Authorization"] != "Bearer "+token {
@@ -103,7 +103,7 @@ func TestGateway_StatusReportsUpstreamsAndSkipped(t *testing.T) {
 		"local-fs": map[string]any{"command": "fs-server"},
 	})
 	_, _, gw := setupGateway(t, configPath)
-	gw.SetPublicBaseURL("http://127.0.0.1:8080")
+	gw.SetPublicBaseURL("http://127.0.0.1:8008")
 
 	st := gw.Status(t.Context(), 1)
 	if st.ToolCount != 1 {

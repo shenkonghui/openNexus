@@ -9,11 +9,11 @@ export default defineConfig({
     port: 3000,
     proxy: {
       '/api': {
-        target: 'http://127.0.0.1:8080', // 用 IP 避免 localhost DNS 解析延迟（macOS IPv6 优先）
+        target: 'http://127.0.0.1:8008', // 用 IP 避免 localhost DNS 解析延迟（macOS IPv6 优先）
         ws: true, // 启用 WebSocket 代理（终端需要）
       },
       '/mcp': {
-        target: 'http://127.0.0.1:8080',
+        target: 'http://127.0.0.1:8008',
         ws: true,
       },
     },

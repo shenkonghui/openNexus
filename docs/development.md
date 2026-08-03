@@ -17,7 +17,7 @@
 make dev
 ```
 
-- 后端：http://localhost:8080
+- 后端：http://localhost:8008
 - 前端：http://localhost:3000
 
 首次使用需注册账号。
@@ -27,7 +27,7 @@ make dev
 | 命令 | 说明 |
 |------|------|
 | `make dev` | 同时启动前后端开发服务器 |
-| `make backend` | 仅启动后端（http://localhost:8080） |
+| `make backend` | 仅启动后端（http://localhost:8008） |
 | `make frontend` | 仅启动前端（http://localhost:3000） |
 | `make run` | 构建并以单端口生产模式运行 |
 | `make build` | 构建前端和后端 |
@@ -43,6 +43,11 @@ make dev
 | `make docker-up-d` | 构建并启动容器（后台） |
 | `make docker-down` | 停止容器 |
 | `make docker-logs` | 跟踪容器日志 |
+| `make docker-dev-build` | 构建 dev 镜像（含 Go 工具链） |
+| `make docker-dev-up` | 构建并启动 dev 容器（前台） |
+| `make docker-dev-up-d` | 构建并启动 dev 容器（后台） |
+| `make docker-dev-down` | 停止 dev 容器 |
+| `make docker-dev-logs` | 跟踪 dev 容器日志 |
 
 ### 桌面端
 
@@ -94,7 +99,7 @@ openNexus/
 
 | 变量 | 说明 |
 |------|------|
-| `SERVER_PORT` | 服务端口（默认 `8080`） |
+| `SERVER_PORT` | 服务端口（默认 `8008`） |
 | `SERVER_MODE` | `debug` 或 `release` |
 | `DATABASE_PATH` | SQLite 数据库路径 |
 | `JWT_SECRET` | JWT 签名密钥 |
@@ -151,7 +156,7 @@ SKIP_DATA_MIGRATION=1 ./opennexus
 
 | 问题 | 解决方案 |
 |------|----------|
-| 8080/3000 端口被占用 | 运行 `make backend-stop` 或手动结束进程 |
+| 8008/3000 端口被占用 | 运行 `make backend-stop` 或手动结束进程 |
 | Agent 显示断开 | 检查 API Key 环境变量和后端 stderr 日志 |
 | Alpine Docker 中 binary Agent 无法运行 | 使用 `npx` 分发方式，或选择基于 glibc 的基础镜像 |
 | 前端无法访问后端 | 确认前后端开发服务器均启动，且 Vite 代理已配置 |

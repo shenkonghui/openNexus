@@ -11,19 +11,28 @@ services:
     container_name: opennexus-dev
     restart: unless-stopped
     ports:
-      - "8080:8080"
+      - "8008:8008"
     volumes:
+      # dev 数据目录放在项目根目录 data/，便于开发时查看/清理
       - ./data:/root/.openNexus
       - opennexus-npm-cache:/root/.npm
+      # 持久化 npm install -g 全局安装目录，容器重建后无需重新安装
+      - opennexus-npm-global:/root/.npm-global
       # Go module / build 缓存持久化，避免容器重启后重新拉取依赖
       - opennexus-go-cache:/root/go
       # 挂载宿主机 root/home：容器内 agent 可直接访问宿主机用户目录，工作区路径与宿主机一致
       # （更具体的 /root/.openNexus、/root/.npm、/root/go 挂载会叠加在其上，互不影响）
       - /root:/root
       - /home:/home
+      # 以下与 docker-compose.yml 保持一致，确保关键用户目录在 dev 容器中也可用
+      - ${HOME}/src:${HOME}/src
+      - ${HOME}/.config:${HOME}/.config
+      # 挂载本地 ~/.local：容器内 root 用户的 ~/.local 指向宿主机，
+      # 使 agent 子进程能使用 ~/.local/bin 下的工具及 ~/.local/share 下的配置/数据。
+      - ${HOME}/.local:/root/.local
     environment:
       - SERVER_MODE=release
-      - SERVER_PORT=8080
+      - SERVER_PORT=8008
       - JWT_SECRET=${JWT_SECRET:-nexusagent-dev-secret-key-32+bytes!}
       # 默认时区
       - TZ=Asia/Shanghai
@@ -31,7 +40,7 @@ services:
       - GOPATH=/root/go
       - GOFLAGS=
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/health"]
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8008/health"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -39,4 +48,5 @@ services:
 
 volumes:
   opennexus-npm-cache:
+  opennexus-npm-global:
   opennexus-go-cache:

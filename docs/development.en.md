@@ -18,7 +18,7 @@ This guide covers how to set up a local development environment, common commands
 make dev
 ```
 
-- Backend: http://localhost:8080
+- Backend: http://localhost:8008
 - Frontend: http://localhost:3000
 
 Register an account on first use.
@@ -28,7 +28,7 @@ Register an account on first use.
 | Command | Description |
 |---------|-------------|
 | `make dev` | Start frontend + backend dev servers |
-| `make backend` | Start backend only (http://localhost:8080) |
+| `make backend` | Start backend only (http://localhost:8008) |
 | `make frontend` | Start frontend only (http://localhost:3000) |
 | `make run` | Build and run in single-port production mode |
 | `make build` | Build frontend and backend |
@@ -44,6 +44,11 @@ Register an account on first use.
 | `make docker-up-d` | Build and start containers (background) |
 | `make docker-down` | Stop containers |
 | `make docker-logs` | Tail container logs |
+| `make docker-dev-build` | Build the dev image (with Go toolchain) |
+| `make docker-dev-up` | Build and start dev containers (foreground) |
+| `make docker-dev-up-d` | Build and start dev containers (background) |
+| `make docker-dev-down` | Stop dev containers |
+| `make docker-dev-logs` | Tail dev container logs |
 
 ### Desktop
 
@@ -95,7 +100,7 @@ Common environment overrides:
 
 | Variable | Description |
 |----------|-------------|
-| `SERVER_PORT` | Server port (default: `8080`) |
+| `SERVER_PORT` | Server port (default: `8008`) |
 | `SERVER_MODE` | `debug` or `release` |
 | `DATABASE_PATH` | SQLite database path |
 | `JWT_SECRET` | JWT signing secret |
@@ -152,7 +157,7 @@ SKIP_DATA_MIGRATION=1 ./opennexus
 
 | Issue | Solution |
 |-------|----------|
-| Port 8080/3000 already in use | Run `make backend-stop` or kill the process manually |
+| Port 8008/3000 already in use | Run `make backend-stop` or kill the process manually |
 | Agent shows disconnected | Verify the API key env var and check backend stderr logs |
 | Binary agent fails to run on Alpine Docker | Use `npx` distribution or a glibc-based base image |
 | Frontend cannot reach backend | Confirm both dev servers are running and Vite proxy is configured |
