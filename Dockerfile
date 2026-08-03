@@ -66,13 +66,15 @@ COPY --from=web-builder /app/web/dist /app/web/dist
 # 复制默认配置
 # COPY config.yaml /app/config.yaml
 
-# 创建 entrypoint 脚本：在主程序启动前按运行时 HOME 重定位目录、清理 npx 残留并预热缓存。
+# 创建 entrypoint 脚本：在主程序启动前按运行时 HOME 重定位目录、清理 npx 残留。
 # 背景：容器内 HOME 由 docker-compose 注入为宿主机 HOME（如 /Users/xxx），与镜像构建期的 /root 不同。
 # 该 HOME 在纯净镜像里通常不存在，必须在运行时按 $HOME 现场创建。
 # 平台隔离：容器用 *.npm-linux / *.npm-global-linux 缓存（与宿主机 macOS 的 ~/.npm 物理隔离），
 # 否则 npx（claude-agent-acp → claude-code 捆绑的原生二进制）跨平台复用会导致 agent 崩溃无法启动。
-# 同时清理 npx rename 失败残留（背景：npx 先下载到 . 开头临时目录再 rename，容器被 kill 会留残骸，
-# 下次 rename 目标非空 → ENOTEMPTY → agent 握手失败），预热后命中缓存从根源消除并发竞争。
+# 清理 npx rename 失败残留（背景：npx 先下载到 . 开头临时目录再 rename，容器被 kill 会留残骸，
+# 下次 rename 目标非空 → ENOTEMPTY → agent 握手失败）。
+# 注意：不再在主程序前串行预热 npx 缓存。此前 npx -y 下载 @agentclientprotocol/claude-agent-acp
+# 在部分环境（registry 不可达/网络受限）会挂起不退出，阻塞后续 exec 导致应用无法启动。改为按需懒加载。
 RUN printf '#!/bin/sh\n\
 set -e\n\
 # 运行时 HOME（由 compose 注入）可能不存在，现场创建关键子目录\n\
@@ -83,8 +85,6 @@ export NPM_CONFIG_PREFIX="$HOME/.npm-global-linux"\n\
 export PATH="$HOME/.npm-global-linux/bin:$PATH"\n\
 # 清理 npx 缓存中 npm rename 失败残留的临时目录（以 . 开头）\n\
 find "$HOME/.npm-linux/_npx" -mindepth 1 -name ".*" -type d -exec rm -rf {} + 2>/dev/null || true\n\
-# 串行预热 npx 缓存（stdin 关闭后 agent 进程会快速退出）\n\
-npx -y @agentclientprotocol/claude-agent-acp@latest < /dev/null > /dev/null 2>&1 || true\n\
 exec /app/opennexus\n' > /app/entrypoint.sh && chmod +x /app/entrypoint.sh
 
 # 构建期仍以 /root 为兜底主目录（纯净镜像默认 HOME=/root）。
