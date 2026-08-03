@@ -127,6 +127,8 @@ make docker-dev-up
 make docker-dev-up-d
 ```
 
+Docker builds use Go module mode and fetch dependencies with `go mod download`; a local `vendor/` directory is not required.
+
 Set environment variables like `ANTHROPIC_API_KEY` before starting:
 
 ```bash

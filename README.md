@@ -127,6 +127,8 @@ make docker-dev-up
 make docker-dev-up-d
 ```
 
+Docker 构建使用 Go module 模式，通过 `go mod download` 获取依赖，不要求本地存在 `vendor/` 目录。
+
 如需配置 `ANTHROPIC_API_KEY` 等环境变量，在启动前设置：
 
 ```bash
