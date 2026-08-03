@@ -190,6 +190,9 @@ func main() {
 	// 注入单轮 prompt 最大存活时间：prompt 的 ctx 与 HTTP/SSE 请求解耦，
 	// 此超时兜底防 agent 卡死导致 goroutine 永久泄漏（超时标记 interrupted）。
 	acpSvc.SetPromptMaxDuration(cfg.Agents.PromptMaxDuration)
+	// 空闲 agent 连接自动回收：超过此时长未活动的连接杀进程释放内存，下次使用时按需重建。
+	// 默认 30min；负数关闭。避免常驻 agent 进程无限堆积占内存。
+	acpSvc.SetIdleTimeout(cfg.Agents.IdleTimeout)
 	// 失败任务自动重试一次：agent 运行中崩溃时 ResumeSession（断连则重连）并重发 prompt。
 	acpSvc.SetFailedTaskAutoRetryOnce(cfg.Agents.FailedTaskAutoRetryOnceEnabled())
 	// ACP terminal 能力：开启后 agent 的 shell 由本服务代执行并在网页终端面板展示。

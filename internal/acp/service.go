@@ -58,6 +58,11 @@ type reconnectInfo struct {
 // 此超时兜底防止 agent 卡死导致 goroutine 永久泄漏。超时后标记 interrupted。
 const defaultPromptMaxDuration = 30 * time.Minute
 
+// defaultIdleTimeout 是空闲 agent 连接的默认存活上限。
+// 超过此时长未发 prompt 的连接将被自动回收（杀进程、释放内存），下次使用时按需重建。
+// 见 effectiveIdleTimeout()：0/未配置→此默认；负数→关闭回收。
+const defaultIdleTimeout = 30 * time.Minute
+
 // Service 是 ACP 客户端高层服务，串联后端、连接、工作区与持久化。
 //
 // 连接池模型：每个 agent 类型 + 工作目录共享一条 ACP 连接（一个 agent 进程），
@@ -168,6 +173,11 @@ type Service struct {
 	// 并挂此超时，使 prompt 生命周期独立于发起它的 HTTP/SSE 请求（SSE 断开不再误杀 agent），
 	// 同时兜底防 agent 卡死导致 goroutine 永久泄漏。SetPromptMaxDuration 注入；0=默认 30min。
 	promptMaxDuration time.Duration
+
+	// idleTimeout 空闲连接存活上限：超过此时长未发 prompt 的连接自动回收（杀进程、释放内存），
+	// 下次使用时按需重建。SetIdleTimeout 注入；0=默认 30min；负数=关闭回收。
+	// 见 effectiveIdleTimeout()。
+	idleTimeout time.Duration
 
 	// failedTaskAutoRetryOnce 运行中 agent 崩溃时是否自动重连并重发同一 prompt（仅一次）。
 	// 默认 true；由 SetFailedTaskAutoRetryOnce 注入。
@@ -539,6 +549,24 @@ func (s *Service) effectivePromptMaxDuration() time.Duration {
 		return s.promptMaxDuration
 	}
 	return defaultPromptMaxDuration
+}
+
+// SetIdleTimeout 注入空闲连接回收阈值。
+// 正数=按此时长回收；0=恢复默认 30min；负数=关闭回收。
+func (s *Service) SetIdleTimeout(d time.Duration) {
+	s.idleTimeout = d
+}
+
+// effectiveIdleTimeout 返回生效的空闲回收阈值。
+// 正数→配置值；0→默认 30min；负数→0（关闭回收，调用方据此跳过扫描）。
+func (s *Service) effectiveIdleTimeout() time.Duration {
+	if s.idleTimeout > 0 {
+		return s.idleTimeout
+	}
+	if s.idleTimeout < 0 {
+		return 0 // 关闭
+	}
+	return defaultIdleTimeout
 }
 
 // applyRulesToConnection 把当前生效的权限规则与 YOLO 查询下发到指定连接的 broker。
@@ -1228,6 +1256,10 @@ func (s *Service) ReattachPersistentConnections() {
 // watchdog 据此判断主程序是否存活：若 heartbeat 持续超过 watchdogHBStale 未更新，视为主程序已死。
 const heartbeatInterval = 30 * time.Second
 
+// idleReapInterval 是空闲连接回收扫描的周期。回收阈值本身由 idleTimeout 决定；
+// 此常量仅决定多久扫一次。过短增加 DB 查询频率，过长则回收不够及时。
+const idleReapInterval = 1 * time.Minute
+
 // StartHealthCheck 启动后台健康检查与自动重连 goroutine。
 // 定期检查所有已注册 backend 的连接状态，断开的自动重连（带指数退避）。
 // 必须在所有 backend 注册完成后调用。
@@ -1241,6 +1273,9 @@ func (s *Service) StartHealthCheck() {
 		// 独立的心跳续约 goroutine：供 watchdog 判活；与 healthCheckLoop 共享 hcCtx/hcWG 生命周期
 		s.hcWG.Add(1)
 		go s.heartbeatLoop()
+		// 空闲连接回收 goroutine：超过 idleTimeout 未活动的连接自动回收，释放内存
+		s.hcWG.Add(1)
+		go s.idleReapLoop()
 	})
 }
 
@@ -1261,6 +1296,107 @@ func (s *Service) heartbeatLoop() {
 			s.heartbeatAllConnections()
 		}
 	}
+}
+
+// idleReapLoop 周期性扫描 acp_connections 心跳表，回收超过 idleTimeout 未活动的 agent 连接。
+// 主程序退出（hcCtx 取消）即停止。无 repo / 关闭回收时此循环空转。
+//
+// 设计要点：被回收的连接从 s.pool 与 s.states 同步移除——若只置 disconnected，
+// healthCheckLoop 会立刻按 states 自动重连救活进程，回收失效。故必须像 detachAndReleaseConn
+// 那样删除 states 条目，彻底断绝重连路径。
+func (s *Service) idleReapLoop() {
+	defer s.hcWG.Done()
+	ticker := time.NewTicker(idleReapInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-s.hcCtx.Done():
+			return
+		case <-ticker.C:
+			s.reapIdleConnections()
+		}
+	}
+}
+
+// reapIdleConnections 执行一次空闲连接回收扫描。
+// idleTimeout<=0（含关闭语义）或 acpConnRepo 未注入时直接返回。
+func (s *Service) reapIdleConnections() {
+	if s.shuttingDown.Load() {
+		return
+	}
+	timeout := s.effectiveIdleTimeout()
+	if timeout <= 0 { // 关闭回收
+		return
+	}
+	if s.acpConnRepo == nil {
+		return
+	}
+	cutoff := time.Now().Add(-timeout)
+	rows, err := s.acpConnRepo.FindIdle(cutoff)
+	if err != nil {
+		slog.Warn("查询空闲 agent 连接失败", "err", err)
+		return
+	}
+	for _, row := range rows {
+		// hcCtx 仅在 StartHealthCheck 后初始化；单元测试直接调用本方法时为 nil，
+		// 此时无法判停，跳过检查（测试场景下不会并发取消）。
+		if s.hcCtx != nil && s.hcCtx.Err() != nil {
+			return
+		}
+		s.reapOneIdleConnection(row)
+	}
+}
+
+// reapOneIdleConnection 回收单个空闲连接。
+// 跳过仍有活跃 prompt 的连接（正在生成响应不能杀）。
+// 池中已无该连接（可能已被其他路径清理）时，仅删除残留的心跳表行。
+func (s *Service) reapOneIdleConnection(row models.ACPConnection) {
+	poolKey := row.PoolKey
+
+	// 跳过正在生成响应的连接
+	if s.hasActivePromptForPoolKey(poolKey) {
+		return
+	}
+
+	s.mu.Lock()
+	conn, ok := s.pool[poolKey]
+	if !ok {
+		// 池中已无此连接：清掉残留心跳表行后返回
+		s.mu.Unlock()
+		s.recordConnectionDelete(poolKey)
+		return
+	}
+	delete(s.pool, poolKey)
+	// 关键：删除 states 条目，否则 healthCheckLoop 会按 disconnected 自动重连救活进程
+	delete(s.states, poolKey)
+	// 解绑该连接下的所有会话路由，并把会话标记为 error（历史消息保留）
+	s.markSessionsErrorForPoolKeyLocked(poolKey, conn)
+	s.mu.Unlock()
+
+	_ = conn.Close() // 统一入口：direct 杀进程组；bridge 连 bridge 一并终止
+	s.recordConnectionDelete(poolKey)
+
+	agentType, cwd := splitConnectionKey(poolKey)
+	slog.Info("回收空闲 agent 连接",
+		"agent", agentType, "cwd", cwd,
+		"lastActiveAt", row.LastActiveAt.Format(time.RFC3339))
+}
+
+// hasActivePromptForPoolKey 判断该连接池键下是否存在进行中的 prompt。
+// 遍历 sessionPoolKey 路由，找到任意一个映射到该 poolKey 且在 activePrompts 中的会话即返回 true。
+// 调用方不持锁；内部自行加 s.mu.RLock。
+func (s *Service) hasActivePromptForPoolKey(poolKey string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for sid, key := range s.sessionPoolKey {
+		if key != poolKey {
+			continue
+		}
+		if _, active := s.activePrompts[sid]; active {
+			return true
+		}
+	}
+	return false
 }
 
 // StopHealthCheck 停止健康检查 goroutine 并关闭所有共享连接。

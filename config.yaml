@@ -89,6 +89,10 @@ agents:
     # （SSE 断开不再误杀 agent），此超时兜底防 agent 卡死导致 goroutine 永久泄漏——
     # 超时后强制结束本轮并标记 interrupted，前端提示用户重发。默认 30m。
     prompt_max_duration: 30m
+    # 空闲 agent 连接的存活上限：超过此时长未发 prompt 的连接自动回收（杀进程、释放内存），
+    # 下次在该工作区发消息时按需重建。避免常驻 agent 进程无限堆积占用内存。
+    # 默认 30m；正数=该时长；负数=关闭回收。
+    idle_timeout: 30m
     # 运行中 agent 崩溃/断连时，是否自动重新连接并重发同一 prompt（仅一次）。
     # true=开启（默认）；false=直接标记 interrupted，由用户手动重发。
     failed_task_auto_retry_once: true

@@ -159,6 +159,9 @@ type AgentsConfig struct {
 	// PromptMaxDuration 单轮 prompt 的最大存活时间，超时强制结束并标记 interrupted，
 	// 防 agent 卡死导致 goroutine 永久泄漏。0 或负值=默认 30min。
 	PromptMaxDuration time.Duration `yaml:"prompt_max_duration"`
+	// IdleTimeout 空闲 agent 连接的存活上限：超过此时长未发 prompt 的连接将被自动回收
+	// （杀进程、释放内存），下次使用时自动重建。0=默认 30min；正数=该时长；负数=关闭回收。
+	IdleTimeout time.Duration `yaml:"idle_timeout"`
 	// FailedTaskAutoRetryOnce 运行中 agent 崩溃/断连时，是否自动 ResumeSession（重建连接）
 	// 并重发同一 prompt，仅一次。nil=默认 true（与历史硬编码行为一致）；显式 false 可关闭。
 	FailedTaskAutoRetryOnce *bool `yaml:"failed_task_auto_retry_once"`

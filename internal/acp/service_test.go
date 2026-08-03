@@ -770,3 +770,133 @@ func TestSessionCwd(t *testing.T) {
 		}
 	})
 }
+
+// TestEffectiveIdleTimeout 验证 SetIdleTimeout 三态语义：正数=配置值；0=默认 30m；负数=关闭(0)。
+func TestEffectiveIdleTimeout(t *testing.T) {
+	s := newTestService(t)
+
+	// 默认（未设置）= 30m
+	if got := s.effectiveIdleTimeout(); got != 30*time.Minute {
+		t.Errorf("默认 effectiveIdleTimeout = %v, 期望 30m", got)
+	}
+
+	// 正数=配置值
+	s.SetIdleTimeout(5 * time.Minute)
+	if got := s.effectiveIdleTimeout(); got != 5*time.Minute {
+		t.Errorf("配置 5m 时 effectiveIdleTimeout = %v, 期望 5m", got)
+	}
+
+	// 负数=关闭（返回 0）
+	s.SetIdleTimeout(-1)
+	if got := s.effectiveIdleTimeout(); got != 0 {
+		t.Errorf("关闭(-1)时 effectiveIdleTimeout = %v, 期望 0", got)
+	}
+
+	// 0=恢复默认
+	s.SetIdleTimeout(0)
+	if got := s.effectiveIdleTimeout(); got != 30*time.Minute {
+		t.Errorf("置 0 后 effectiveIdleTimeout = %v, 期望 30m", got)
+	}
+}
+
+// TestHasActivePromptForPoolKey 验证 poolKey 下存在活跃 prompt 的判定。
+func TestHasActivePromptForPoolKey(t *testing.T) {
+	s := newTestService(t)
+	const pk = "codebuddy\x00/tmp/proj"
+
+	s.mu.Lock()
+	s.sessionPoolKey["sess-active"] = pk
+	s.sessionPoolKey["sess-idle"] = pk
+	s.activePrompts["sess-active"] = newMsgBroadcaster(0)
+	s.mu.Unlock()
+
+	if !s.hasActivePromptForPoolKey(pk) {
+		t.Errorf("存在活跃 prompt 时 hasActivePromptForPoolKey=false, 期望 true")
+	}
+
+	// 清掉活跃 prompt 后应返回 false
+	s.mu.Lock()
+	delete(s.activePrompts, "sess-active")
+	s.mu.Unlock()
+	if s.hasActivePromptForPoolKey(pk) {
+		t.Errorf("无活跃 prompt 时 hasActivePromptForPoolKey=true, 期望 false")
+	}
+
+	// 不相关的 poolKey 应返回 false
+	if s.hasActivePromptForPoolKey("other\x00/x") {
+		t.Errorf("无关 poolKey 时 hasActivePromptForPoolKey=true, 期望 false")
+	}
+}
+
+// TestReapIdleConnections_NoRepo 验证 acpConnRepo 为 nil 时回收扫描不 panic（短路返回）。
+func TestReapIdleConnections_NoRepo(t *testing.T) {
+	s := newTestService(t)
+	// acpConnRepo 默认为 nil（newTestService 不注入）
+	s.reapIdleConnections() // 不应 panic
+}
+
+// TestReapIdleConnections_Disabled 验证 idleTimeout<=0（关闭）时不执行回收。
+func TestReapIdleConnections_Disabled(t *testing.T) {
+	s := newTestService(t)
+	s.SetACPConnectionRepo(repository.NewACPConnectionRepository(setupACPTestDB(t)))
+	s.SetIdleTimeout(-1) // 关闭回收
+	s.reapIdleConnections() // 应在 effectiveIdleTimeout<=0 处短路，不查 DB
+}
+
+// TestReapIdleConnections_StaleRowCleaned 验证：DB 存在超时空闲行、但 pool 已无对应连接时，
+// 回收扫描会清除该残留心跳表行（防止 PID 失效后行永久残留）。
+func TestReapIdleConnections_StaleRowCleaned(t *testing.T) {
+	db := setupACPTestDB(t)
+	// setupACPTestDB 未清 acp_connections 表，这里手动清
+	db.Exec("DELETE FROM acp_connections")
+	repo := repository.NewACPConnectionRepository(db)
+	s := newTestService(t)
+	s.SetACPConnectionRepo(repo)
+	s.SetIdleTimeout(30 * time.Minute)
+
+	const poolKey = "codebuddy\x00/tmp/proj"
+	// 直接用 gorm 插入一条 last_active_at 已过期的行（绕过 Upsert 的 now 语义）
+	stale := models.ACPConnection{
+		PoolKey: poolKey, AgentType: "codebuddy", Cwd: "/tmp/proj", Pid: 99999,
+		LastActiveAt: time.Now().Add(-2 * time.Hour), // 远超 30m 阈值
+	}
+	if err := db.Create(&stale).Error; err != nil {
+		t.Fatalf("插入空闲行失败: %v", err)
+	}
+
+	// 此时 pool 为空（无对应连接），扫描应清掉该残留行
+	s.reapIdleConnections()
+
+	var count int64
+	db.Model(&models.ACPConnection{}).Count(&count)
+	if count != 0 {
+		t.Errorf("回收后 acp_connections 仍有 %d 行残留, 期望 0", count)
+	}
+}
+
+// TestReapIdleConnections_RecentRowKept 验证：活动时间未超阈值的行不会被回收。
+func TestReapIdleConnections_RecentRowKept(t *testing.T) {
+	db := setupACPTestDB(t)
+	db.Exec("DELETE FROM acp_connections")
+	repo := repository.NewACPConnectionRepository(db)
+	s := newTestService(t)
+	s.SetACPConnectionRepo(repo)
+	s.SetIdleTimeout(30 * time.Minute)
+
+	// 活动时间在阈值内（5 分钟前，阈值 30 分钟）
+	recent := models.ACPConnection{
+		PoolKey: "codebuddy\x00/tmp/recent", AgentType: "codebuddy", Cwd: "/tmp/recent", Pid: 12345,
+		LastActiveAt: time.Now().Add(-5 * time.Minute),
+	}
+	if err := db.Create(&recent).Error; err != nil {
+		t.Fatalf("插入近期行失败: %v", err)
+	}
+
+	s.reapIdleConnections()
+
+	var count int64
+	db.Model(&models.ACPConnection{}).Count(&count)
+	if count != 1 {
+		t.Errorf("近期活动行被误删, 剩余 %d 行, 期望 1", count)
+	}
+}

@@ -191,6 +191,7 @@ make electron-run     # 启动已安装的应用
 | `agents.workspace.default_cwd` | `AGENTS_WORKSPACE_DEFAULT_CWD` | 默认工作区（persistent）的固定文件路径，默认 `~/.openNexus/workspaces/default` |
 | `agents.workspace.default_mode` | - | 工作区模式：`temporary` / `persistent` |
 | `agents.mcp.config_path` | `AGENTS_MCP_CONFIG_PATH` | 全局 MCP 配置路径，默认 `~/.agents/mcp.json` |
+| `agents.idle_timeout` | - | 空闲 agent 连接存活上限，超时自动回收进程释放内存，下次使用时按需重建。默认 `30m`；负数关闭 |
 
 配置文件查找顺序：`CONFIG_PATH` → `~/.openNexus/config.yaml` → `./config.yaml`。数据库与会话数据默认均在 `~/.openNexus/`。
 

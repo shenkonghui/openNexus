@@ -191,6 +191,7 @@ The configuration file is `config.yaml`. Environment variable overrides:
 | `agents.workspace.default_cwd` | `AGENTS_WORKSPACE_DEFAULT_CWD` | Fixed file path for the default (persistent) workspace (default: `~/.openNexus/workspaces/default`) |
 | `agents.workspace.default_mode` | - | Default workspace mode: `temporary` / `persistent` |
 | `agents.mcp.config_path` | `AGENTS_MCP_CONFIG_PATH` | Global MCP servers config path (default: `~/.agents/mcp.json`) |
+| `agents.idle_timeout` | - | Idle agent connection TTL — idle connections are reaped (process killed, memory freed) and rebuilt on next use. Default `30m`; negative disables |
 
 Config file lookup: `CONFIG_PATH` → `~/.openNexus/config.yaml` → `./config.yaml`. Database and session data default to `~/.openNexus/`.
 
