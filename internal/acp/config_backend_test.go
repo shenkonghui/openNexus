@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -198,5 +199,90 @@ func TestFindBinaryInPath(t *testing.T) {
 	}
 	if got := findBinaryInPath("./"); got != "" {
 		t.Errorf("无效 cmd ./ 应返回空串，实际 %s", got)
+	}
+}
+
+// TestIsExecutableForCurrentPlatform 校验异平台原生二进制会被识别为不兼容。
+// 这是修复「容器挂载宿主机 ~/.local，PATH 命中 macOS Mach-O，Linux 容器内 Exec format error」
+// 的关键防线：无法运行的二进制必须被 findBinaryInPath 拒绝。
+func TestIsExecutableForCurrentPlatform(t *testing.T) {
+	tmp := t.TempDir()
+
+	// --- 当前平台原生二进制：应放行 ---
+	// 用当前进程自身二进制（始终是当前平台原生格式）
+	if self, err := os.Executable(); err == nil {
+		if !isExecutableForCurrentPlatform(self) {
+			t.Errorf("当前进程二进制应判定为当前平台兼容，实际拒绝")
+		}
+	}
+
+	// --- 脚本（shebang）：应放行（测试 fixture 与 shell 脚本型 binary 走这里）---
+	scriptPath := filepath.Join(tmp, "my-script")
+	if err := os.WriteFile(scriptPath, []byte("#!/bin/sh\necho hi\n"), 0o755); err != nil {
+		t.Fatalf("写入脚本失败: %v", err)
+	}
+	if !isExecutableForCurrentPlatform(scriptPath) {
+		t.Errorf("shebang 脚本应放行，实际拒绝")
+	}
+
+	// --- Mach-O 二进制（macOS LE arm64 magic: CF FA ED FE）---
+	machoPath := filepath.Join(tmp, "macos-bin")
+	if err := os.WriteFile(machoPath, []byte{0xcf, 0xfa, 0xed, 0xfe, 0, 0, 0, 0}, 0o755); err != nil {
+		t.Fatalf("写入 Mach-O 失败: %v", err)
+	}
+	// --- ELF 二进制（Linux magic: 7F 45 4C 46）---
+	elfPath := filepath.Join(tmp, "linux-bin")
+	if err := os.WriteFile(elfPath, []byte{0x7f, 0x45, 0x4c, 0x46, 0, 0, 0, 0}, 0o755); err != nil {
+		t.Fatalf("写入 ELF 失败: %v", err)
+	}
+
+	// 当前平台只能接受自己的原生格式；另一个平台的二进制必须被拒绝。
+	// 这样无论测试在哪个平台跑，都能验证「异平台二进制被拒绝」这一核心不变量。
+	switch runtime.GOOS {
+	case "darwin", "ios":
+		if !isExecutableForCurrentPlatform(machoPath) {
+			t.Errorf("darwin 上 Mach-O 应放行，实际拒绝")
+		}
+		if isExecutableForCurrentPlatform(elfPath) {
+			t.Errorf("darwin 上 ELF 应拒绝（异平台原生二进制），实际放行")
+		}
+	case "linux", "android", "freebsd", "netbsd", "openbsd", "dragonfly", "solaris":
+		if !isExecutableForCurrentPlatform(elfPath) {
+			t.Errorf("%s 上 ELF 应放行，实际拒绝", runtime.GOOS)
+		}
+		if isExecutableForCurrentPlatform(machoPath) {
+			t.Errorf("%s 上 Mach-O 应拒绝（异平台原生二进制），实际放行", runtime.GOOS)
+		}
+	}
+
+	// --- 太短的文件（<4字节）：放行（保守，不拦截）---
+	shortPath := filepath.Join(tmp, "short")
+	if err := os.WriteFile(shortPath, []byte{0x7f, 0x45}, 0o755); err != nil {
+		t.Fatalf("写入短文件失败: %v", err)
+	}
+	if !isExecutableForCurrentPlatform(shortPath) {
+		t.Errorf("过短文件应放行（保守不拦截），实际拒绝")
+	}
+}
+
+// TestFindBinaryInPath_RejectsForeignBinary 校验：当 PATH 命中的二进制是异平台原生二进制时，
+// findBinaryInPath 必须返回空串（让其降级走下载），而不是命中一个跑不了的二进制。
+func TestFindBinaryInPath_RejectsForeignBinary(t *testing.T) {
+	tmp := t.TempDir()
+	// 构造一个异平台二进制：当前是 darwin 就用 ELF，当前是 *nix 就用 Mach-O
+	var content []byte
+	if runtime.GOOS == "darwin" || runtime.GOOS == "ios" {
+		content = []byte{0x7f, 0x45, 0x4c, 0x46} // ELF，在 darwin 上不可执行
+	} else {
+		content = []byte{0xcf, 0xfa, 0xed, 0xfe} // Mach-O arm64，在非 darwin 上不可执行
+	}
+	binPath := filepath.Join(tmp, "foreign-cli-x")
+	if err := os.WriteFile(binPath, content, 0o755); err != nil {
+		t.Fatalf("写入异平台二进制失败: %v", err)
+	}
+	t.Setenv("PATH", tmp)
+
+	if got := findBinaryInPath("./foreign-cli-x"); got != "" {
+		t.Errorf("异平台二进制应被拒绝（返回空串走下载），实际命中 %s", got)
 	}
 }

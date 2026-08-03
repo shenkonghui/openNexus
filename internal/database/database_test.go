@@ -7,7 +7,7 @@ import (
 )
 
 func TestConnect_MigratesTables(t *testing.T) {
-	db, err := Connect("file::memory:?cache=shared")
+	db, err := Connect("file::memory:?cache=shared", "")
 	if err != nil {
 		t.Fatalf("Connect 返回错误: %v", err)
 	}
@@ -21,7 +21,7 @@ func TestConnect_MigratesTables(t *testing.T) {
 }
 
 func TestConnect_MigratesSessionsTable(t *testing.T) {
-	db, err := Connect("file::memory:?cache=shared")
+	db, err := Connect("file::memory:?cache=shared", "")
 	if err != nil {
 		t.Fatalf("Connect 返回错误: %v", err)
 	}
@@ -34,7 +34,7 @@ func TestConnect_MigratesSessionsTable(t *testing.T) {
 }
 
 func TestConnect_MigrateAgentSessionID(t *testing.T) {
-	db, err := Connect("file:migrate-agent-sid?mode=memory&cache=shared")
+	db, err := Connect("file:migrate-agent-sid?mode=memory&cache=shared", "")
 	if err != nil {
 		t.Fatalf("Connect 返回错误: %v", err)
 	}
@@ -79,7 +79,7 @@ func TestConnect_MigrateAgentSessionID(t *testing.T) {
 }
 
 func TestMigrateLegacyWorkspacePaths(t *testing.T) {
-	db, err := Connect("file:migrate-legacy-paths?mode=memory&cache=shared")
+	db, err := Connect("file:migrate-legacy-paths?mode=memory&cache=shared", "")
 	if err != nil {
 		t.Fatalf("Connect: %v", err)
 	}
@@ -140,5 +140,71 @@ func TestMigrateLegacyWorkspacePaths(t *testing.T) {
 	_ = db.First(&gotWS2, ws.ID).Error
 	if gotWS2.Cwd != "/home/u/.openNexus/session/nexus-123" {
 		t.Errorf("二次执行后 workspace.cwd = %q, 期望不变", gotWS2.Cwd)
+	}
+}
+
+// TestMigrateDefaultWorkspacesToPersistent 验证旧的 temporary 默认工作区被迁移为
+// persistent + 固定 defaultCwd，且已是 persistent 的同名工作区不受影响（幂等）。
+func TestMigrateDefaultWorkspacesToPersistent(t *testing.T) {
+	db, err := Connect("file:migrate-default-ws?mode=memory&cache=shared", "")
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	const defaultCwd = "/home/u/.openNexus/workspaces/default"
+
+	// 旧默认工作区：temporary + 随机临时目录
+	old := &models.Workspace{
+		UserID: 1, Name: "默认工作区",
+		Cwd:     "/home/u/.openNexus/session/opennexus-abc",
+		TempDir: "/home/u/.openNexus/session/opennexus-abc",
+		Mode:    models.WorkspaceModeTemporary,
+	}
+	if err := db.Create(old).Error; err != nil {
+		t.Fatalf("Create old default workspace: %v", err)
+	}
+	// 另一个用户的普通 persistent 工作区（同名但已是 persistent），不应被改动
+	other := &models.Workspace{
+		UserID: 2, Name: "默认工作区",
+		Cwd:  "/home/u/.openNexus/workspaces/preset",
+		Mode: models.WorkspaceModePersistent,
+	}
+	if err := db.Create(other).Error; err != nil {
+		t.Fatalf("Create persistent workspace: %v", err)
+	}
+
+	if err := migrateDefaultWorkspacesToPersistent(db, defaultCwd); err != nil {
+		t.Fatalf("migrateDefaultWorkspacesToPersistent: %v", err)
+	}
+
+	var got models.Workspace
+	if err := db.First(&got, old.ID).Error; err != nil {
+		t.Fatalf("First old: %v", err)
+	}
+	if got.Mode != models.WorkspaceModePersistent {
+		t.Errorf("mode = %q, 期望 persistent", got.Mode)
+	}
+	if got.Cwd != defaultCwd {
+		t.Errorf("cwd = %q, 期望 %q", got.Cwd, defaultCwd)
+	}
+	if got.TempDir != "" {
+		t.Errorf("temp_dir = %q, 期望清空", got.TempDir)
+	}
+
+	var gotOther models.Workspace
+	if err := db.First(&gotOther, other.ID).Error; err != nil {
+		t.Fatalf("First other: %v", err)
+	}
+	if gotOther.Cwd != "/home/u/.openNexus/workspaces/preset" {
+		t.Errorf("已是 persistent 的记录被误改: cwd = %q", gotOther.Cwd)
+	}
+
+	// 幂等：再跑一次，old 记录已为 persistent，不应再被命中
+	if err := migrateDefaultWorkspacesToPersistent(db, defaultCwd); err != nil {
+		t.Fatalf("二次 migrate: %v", err)
+	}
+	var got2 models.Workspace
+	_ = db.First(&got2, old.ID).Error
+	if got2.Cwd != defaultCwd {
+		t.Errorf("二次执行后 cwd = %q, 期望不变", got2.Cwd)
 	}
 }

@@ -166,7 +166,7 @@ func main() {
 		}
 	}
 
-	db, err := database.Connect(cfg.Database.Path)
+	db, err := database.Connect(cfg.Database.Path, cfg.Agents.Workspace.DefaultCwd)
 	if err != nil {
 		log.Fatalf("连接数据库失败: %v", err)
 	}

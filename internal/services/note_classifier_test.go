@@ -94,7 +94,7 @@ func (f *fakeClassifyExecutor) RunSubAgent(_ context.Context, cfg acp.SubAgentRu
 // setupClassifierTest 用内存 SQLite 初始化笔记/设置仓库，返回 classifier + fake executor。
 func setupClassifierTest(t *testing.T) (*NoteClassifier, *fakeClassifyExecutor, *repository.NoteSettingsRepository, *repository.NoteRepository) {
 	t.Helper()
-	db, err := database.Connect("file::memory:?cache=shared")
+	db, err := database.Connect("file::memory:?cache=shared", "")
 	if err != nil {
 		t.Fatalf("连接测试库失败: %v", err)
 	}
@@ -237,7 +237,7 @@ func TestProcessPendingAgentUnavailable(t *testing.T) {
 		t.Fatalf("创建笔记失败: %v", err)
 	}
 	// 回退 UpdatedAt 使其超过分类间隔（共享内存库，重连即同库）
-	db, err := database.Connect("file::memory:?cache=shared")
+	db, err := database.Connect("file::memory:?cache=shared", "")
 	if err != nil {
 		t.Fatalf("连接测试库失败: %v", err)
 	}

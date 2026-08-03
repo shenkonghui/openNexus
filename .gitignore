@@ -23,6 +23,10 @@ electron/node_modules/
 electron/dist/
 electron/out/
 
+# dev container external Linux CLI binaries (k3d, kubectl, helm, etc.)
+/bin/*
+.bin/
+
 # tools & system files
 .DS_Store
 .superpowers/

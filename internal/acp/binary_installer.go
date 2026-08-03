@@ -25,12 +25,16 @@ const binaryDownloadRetries = 3
 var versionsMutex sync.Mutex
 
 // binariesCacheDir 是二进制分发 agent 的下载缓存根目录。
+// 按平台（os-arch，如 darwin-arm64 / linux-aarch64）分子目录：
+// 容器与宿主机可能共享同一份 ~/.openNexus（HOME 对齐挂载），但二进制是平台特定的，
+// 若不隔离，macOS 下载的 Mach-O 会被 Linux 容器复用导致 Exec format error。
+// 平台 key 复用 registry 的 platformKey()，保证下载与缓存目录判定一致。
 func binariesCacheDir() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("获取用户目录: %w", err)
 	}
-	return filepath.Join(home, ".openNexus", "binaries"), nil
+	return filepath.Join(home, ".openNexus", "binaries", platformKey()), nil
 }
 
 // VersionRecord 记录单个 agent 当前激活的版本信息，持久化到 versions.json。

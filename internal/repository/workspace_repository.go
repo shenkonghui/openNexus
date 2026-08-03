@@ -66,10 +66,11 @@ func (r *WorkspaceRepository) Delete(id uint) error {
 	return r.db.Delete(&models.Workspace{}, id).Error
 }
 
-// FindDefaultByUserID 查找用户的默认 temporary workspace。
+// FindDefaultByUserID 查找用户的默认工作区（按名称"默认工作区"匹配，与 mode 解耦）。
+// 默认工作区现为 persistent + 固定 cwd，故不再以 mode 作为筛选条件。
 func (r *WorkspaceRepository) FindDefaultByUserID(userID uint) (*models.Workspace, error) {
 	var ws models.Workspace
-	err := r.db.Where("user_id = ? AND mode = ?", userID, models.WorkspaceModeTemporary).First(&ws).Error
+	err := r.db.Where("user_id = ? AND name = ?", userID, "默认工作区").Order("created_at ASC").First(&ws).Error
 	if err != nil {
 		return nil, err
 	}

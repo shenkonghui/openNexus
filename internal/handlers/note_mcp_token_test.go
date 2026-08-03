@@ -18,7 +18,7 @@ import (
 func setupNoteMCPRouter(t *testing.T, userID uint, mcpPath string) *gin.Engine {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
-	db, err := database.Connect("file::memory:?cache=shared")
+	db, err := database.Connect("file::memory:?cache=shared", "")
 	if err != nil {
 		t.Fatalf("连接测试库失败: %v", err)
 	}
@@ -46,7 +46,7 @@ func setupNoteMCPRouter(t *testing.T, userID uint, mcpPath string) *gin.Engine {
 func newNoteHandlerForTest(t *testing.T, mcpPath string) (*NoteHandler, *repository.NoteSettingsRepository) {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
-	db, err := database.Connect("file::memory:?cache=shared")
+	db, err := database.Connect("file::memory:?cache=shared", "")
 	if err != nil {
 		t.Fatalf("连接测试库失败: %v", err)
 	}

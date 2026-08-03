@@ -15,7 +15,7 @@ import (
 func setupAgentPrefsRouter(t *testing.T, userID uint) *gin.Engine {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
-	db, err := database.Connect("file::memory:?cache=shared")
+	db, err := database.Connect("file::memory:?cache=shared", "")
 	if err != nil {
 		t.Fatalf("连接测试库失败: %v", err)
 	}

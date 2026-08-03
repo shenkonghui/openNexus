@@ -66,31 +66,38 @@ COPY --from=web-builder /app/web/dist /app/web/dist
 # 复制默认配置
 # COPY config.yaml /app/config.yaml
 
-# 创建 entrypoint 脚本：在主程序启动前清理 npx 残留并串行预热缓存。
-# 背景：npx 安装包时先下载到临时目录（以 . 开头），再 rename 到最终位置。
-# 如果容器被 kill（如 docker compose down），rename 中断会留下残留临时目录，
-# 下次 npx 运行时 rename 目标非空 → ENOTEMPTY → agent 握手失败。
-# 预热后 npx 命中缓存不再下载，从根源消除并发竞争。
+# 创建 entrypoint 脚本：在主程序启动前按运行时 HOME 重定位目录、清理 npx 残留并预热缓存。
+# 背景：容器内 HOME 由 docker-compose 注入为宿主机 HOME（如 /Users/xxx），与镜像构建期的 /root 不同。
+# 该 HOME 在纯净镜像里通常不存在，必须在运行时按 $HOME 现场创建。
+# 平台隔离：容器用 *.npm-linux / *.npm-global-linux 缓存（与宿主机 macOS 的 ~/.npm 物理隔离），
+# 否则 npx（claude-agent-acp → claude-code 捆绑的原生二进制）跨平台复用会导致 agent 崩溃无法启动。
+# 同时清理 npx rename 失败残留（背景：npx 先下载到 . 开头临时目录再 rename，容器被 kill 会留残骸，
+# 下次 rename 目标非空 → ENOTEMPTY → agent 握手失败），预热后命中缓存从根源消除并发竞争。
 RUN printf '#!/bin/sh\n\
+set -e\n\
+# 运行时 HOME（由 compose 注入）可能不存在，现场创建关键子目录\n\
+mkdir -p "$HOME/.openNexus/session" "$HOME/.npm-global-linux/bin" "$HOME/.npm-linux/_npx" 2>/dev/null || true\n\
+# 运行时重定位 npm 缓存/全局目录与 PATH 到真实 $HOME 的 *-linux 隔离目录（覆盖镜像里 /root 的默认值）\n\
+export NPM_CONFIG_CACHE="$HOME/.npm-linux"\n\
+export NPM_CONFIG_PREFIX="$HOME/.npm-global-linux"\n\
+export PATH="$HOME/.npm-global-linux/bin:$PATH"\n\
 # 清理 npx 缓存中 npm rename 失败残留的临时目录（以 . 开头）\n\
-find /root/.npm/_npx -mindepth 1 -name ".*" -type d -exec rm -rf {} + 2>/dev/null || true\n\
+find "$HOME/.npm-linux/_npx" -mindepth 1 -name ".*" -type d -exec rm -rf {} + 2>/dev/null || true\n\
 # 串行预热 npx 缓存（stdin 关闭后 agent 进程会快速退出）\n\
 npx -y @agentclientprotocol/claude-agent-acp@latest < /dev/null > /dev/null 2>&1 || true\n\
 exec /app/opennexus\n' > /app/entrypoint.sh && chmod +x /app/entrypoint.sh
 
-# 数据持久化目录：统一使用默认 ~/.openNexus（root 用户即 /root/.openNexus），
-# 数据库、会话、ACP 二进制缓存、调试目录全部落在此目录，挂载单个卷即可全量持久化。
-RUN mkdir -p /root/.openNexus/session /root/.npm-global/bin
+# 构建期仍以 /root 为兜底主目录（纯净镜像默认 HOME=/root）。
+# VOLUME 仅声明匿名卷挂载点，实际路径以 compose 中 ${HOME} 挂载为准；
+# 关键子目录由 entrypoint 在运行时按真实 HOME 现场创建。
+RUN mkdir -p /root/.openNexus/session /root/.npm-global-linux/bin
 VOLUME ["/root/.openNexus"]
 
-# 显式指定 npm 缓存与全局安装目录，便于通过 docker volume 持久化。
-# npx 调用 claude-agent-acp 时下载的包会缓存在 /root/.npm/_npx，
-# npm install -g 安装的包会落到 /root/.npm-global，持久化后无需重复安装。
-# 不再设置 DATABASE_PATH / AGENTS_WORKSPACE_SESSION_DIR，让程序走默认 ~/.openNexus 路径。
-# LANG/LC_ALL 设为 C.UTF-8（Debian 内置），保证终端及子进程正确处理中文等多字节字符。
-ENV NPM_CONFIG_CACHE=/root/.npm \
-    NPM_CONFIG_PREFIX=/root/.npm-global \
-    PATH="/root/.npm-global/bin:${PATH}" \
+# 镜像默认值以 /root 为基准；运行时由 entrypoint 按真实 $HOME 重置 NPM_CONFIG_CACHE /
+# NPM_CONFIG_PREFIX / PATH 到 *-linux 隔离目录。LANG/LC_ALL=C.UTF-8（Debian 内置）保证多字节字符正确。
+ENV NPM_CONFIG_CACHE=/root/.npm-linux \
+    NPM_CONFIG_PREFIX=/root/.npm-global-linux \
+    PATH="/root/.npm-global-linux/bin:${PATH}" \
     SERVER_MODE=release \
     SERVER_PORT=8008 \
     WEB_DIST=/app/web/dist \

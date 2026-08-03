@@ -30,6 +30,9 @@ agents:
         # temporary 模式会话工作区的存放根目录，默认 ~/.openNexus/session。
         # 由程序在删除会话时清理，不依赖操作系统清理临时目录。
         session_dir: ~/.openNexus/session
+        # 默认工作区（persistent）的固定文件路径，留空则使用 ~/.openNexus/workspaces/default。
+        # 用户首次发起会话且未指定 workspace 时，自动创建的默认工作区即指向此目录，跨会话持久保留。
+        default_cwd: ~/.openNexus/workspaces/default
     skills:
         # 用户级 skills 根目录（agentskills.io：递归扫描子目录中的 SKILL.md）
         user_dirs:

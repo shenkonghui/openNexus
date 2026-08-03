@@ -9,18 +9,22 @@ services:
     ports:
       - "8008:8008"
     volumes:
-      # 挂载本地 ~/.openNexus：容器与宿主机共享同一份数据（db、会话、agent 二进制缓存、config.yaml），
-      # 本地直接运行 opennexus 和容器运行的数据完全一致。
-      - ${HOME}/.openNexus:/root/.openNexus
-      - opennexus-npm-cache:/root/.npm
-      # 持久化 npm install -g 全局安装目录，容器重建后无需重新安装
-      - opennexus-npm-global:/root/.npm-global
+      # 容器内 HOME 与宿主机对齐（见 environment.HOME），因此所有挂载点都用 ${HOME}：
+      # 容器内外绝对路径完全相同，DB / 会话工作区里存储的路径两边都可达，
+      # 不会出现「容器建的会话宿主机打不开、宿主机建的会话容器打不开」的目录混乱。
+      - ${HOME}/.openNexus:${HOME}/.openNexus
+      # 容器用 *.npm-linux / *.npm-global-linux 与宿主机 macOS 的 npm 缓存物理隔离：
+      # npx 调用的 claude-agent-acp 依赖原生二进制，跨 macOS/Linux 共享会崩溃。
+      - ${HOME}/.npm-linux:${HOME}/.npm-linux
+      - ${HOME}/.npm-global-linux:${HOME}/.npm-global-linux
       - ${HOME}/src:${HOME}/src
       - ${HOME}/.config:${HOME}/.config
-      # 挂载本地 ~/.local：容器内 root 用户的 ~/.local 指向宿主机，
-      # 使 agent 子进程能使用 ~/.local/bin 下的工具及 ~/.local/share 下的配置/数据。
-      - ${HOME}/.local:/root/.local
+      # 挂载本地 ~/.local：使 agent 子进程能使用 ~/.local/bin 下的工具及 ~/.local/share 下的配置/数据。
+      - ${HOME}/.local:${HOME}/.local
     environment:
+      # 关键：容器内 HOME 注入为宿主机 HOME，让 ~/.openNexus / ~/src 等 ~ 路径
+      # 与挂载点完全一致，消除工作区绝对路径在容器/宿主机之间的错位。
+      - HOME=${HOME}
       - SERVER_MODE=release
       - SERVER_PORT=8008
       - JWT_SECRET=${JWT_SECRET:-nexusagent-dev-secret-key-32+bytes!}
@@ -32,7 +36,3 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
-
-volumes:
-  opennexus-npm-cache:
-  opennexus-npm-global:

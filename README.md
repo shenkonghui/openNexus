@@ -119,6 +119,15 @@ make docker-up-d
 
 开发容器（含 Go 工具链，便于容器内 coding agent 编译/运行 Go 代码）：
 
+开发容器会将项目根目录的 `bin/` 以只读方式挂载到 `/opt/opennexus/bin`，并自动加入 `PATH`。可将外部下载的 **Linux** 版本 `k3d`、`kubectl`、`helm` 放入该目录（不能放 macOS 版本）：
+
+```bash
+mkdir -p bin
+# 将 linux/arm64 或 linux/amd64 版本的 k3d、kubectl、helm 放入 bin/
+chmod +x bin/k3d bin/kubectl bin/helm
+```
+
+
 ```bash
 # 启动 dev 容器（前台）
 make docker-dev-up
@@ -135,7 +144,13 @@ Docker 构建使用 Go module 模式，通过 `go mod download` 获取依赖，�
 ANTHROPIC_API_KEY=sk-xxx make docker-up-d
 ```
 
-**数据与配置持久化**：`docker-compose.yml` 将本地 `~/.openNexus` 挂载到容器 `/root/.openNexus`，容器与宿主机共享同一份数据库、会话、agent 二进制缓存和 `config.yaml`。同时 `~/.local` 被挂载到容器的 `/root/.local`，使 agent 子进程能使用宿主机的本地工具（如 `~/.local/bin`）及相关配置/数据。容器内 `npm install -g` 会安装到 `/root/.npm-global`，并通过命名卷 `opennexus-npm-global` 持久化，容器重建或重启后无需重复安装。修改 `~/.openNexus/config.yaml` 后 `docker compose restart` 即可生效，无需重建镜像。首次使用可从项目根目录复制示例配置：
+**数据与配置持久化**：`docker-compose.yml` 将本地 `~/.openNexus`、`~/.local`、`~/src` 等目录以**同路径**挂载进容器（如 `~/.openNexus` → 容器内 `~/.openNexus`），并向容器注入 `HOME`（= 宿主机 HOME）。这样容器内外的 `~` 解析到同一绝对路径，数据库与会话工作区里存储的路径（如 `…/.openNexus/session/xxx`、git worktree 路径）在两边都可达——**避免「容器建的会话宿主机打不开、宿主机建的会话容器打不开」的工作区目录混乱**。
+
+**平台隔离**：agent 二进制与 npm 缓存按平台分开，避免 macOS / Linux 互相污染导致 agent 无法启动：
+- binary agent 缓存自动按平台分目录（如 `~/.openNexus/binaries/darwin-arm64/`、`~/.openNexus/binaries/linux-aarch64/`），容器和宿主机各存各的二进制，macOS 下载的 Mach-O 不会被 Linux 容器误用。
+- 容器使用独立的 npm 缓存（`~/.npm-linux` / `~/.npm-global-linux`，与宿主机 macOS 的 `~/.npm` 物理隔离），因为 npx 调用的 `claude-agent-acp` 依赖原生二进制，跨平台共享会崩溃。
+
+entrypoint 会在运行时按真实 `$HOME` 现场创建上述子目录并重定位 npm 缓存/全局目录，容器重建或重启后无需重复下载依赖或安装全局包；开发容器还复用宿主机的 `~/go` Go 缓存。修改 `~/.openNexus/config.yaml` 后 `docker compose restart` 即可生效，无需重建镜像。首次使用可从项目根目录复制示例配置：
 
 ```bash
 mkdir -p ~/.openNexus
@@ -173,6 +188,7 @@ make electron-run     # 启动已安装的应用
 | `debug.acp.enabled` | `DEBUG_ACP_ENABLED` | 启用 ACP 调试日志，默认 `true` |
 | `debug.acp.dir` | `DEBUG_ACP_DIR` | ACP 调试日志存储目录 |
 | `agents.workspace.session_dir` | `AGENTS_WORKSPACE_SESSION_DIR` | 会话工作区根目录，默认 `~/.openNexus/session` |
+| `agents.workspace.default_cwd` | `AGENTS_WORKSPACE_DEFAULT_CWD` | 默认工作区（persistent）的固定文件路径，默认 `~/.openNexus/workspaces/default` |
 | `agents.workspace.default_mode` | - | 工作区模式：`temporary` / `persistent` |
 | `agents.mcp.config_path` | `AGENTS_MCP_CONFIG_PATH` | 全局 MCP 配置路径，默认 `~/.agents/mcp.json` |
 
@@ -268,6 +284,7 @@ npm exec --include=optional --yes @agentclientprotocol/claude-agent-acp@latest -
 
 工作区目录策略：
 
+- **默认工作区**：用户首次发起会话且未指定 workspace 时，自动创建的默认工作区为 **persistent 模式**，固定指向 `agents.workspace.default_cwd`（默认 `~/.openNexus/workspaces/default`），跨会话持久保留内容
 - **temporary**：临时工作区，仅在删除整个工作区时清理目录；删除单个会话不会删除共享目录；目录被误删时恢复会话会自动重建
 - **persistent**：持久工作区，目录需事先存在，删除工作区时才会清理关联记录
 

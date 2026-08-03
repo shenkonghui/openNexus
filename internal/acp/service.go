@@ -1509,23 +1509,23 @@ func (s *Service) createSessionFull(ctx context.Context, agentType string, works
 		var err error
 		dbWS, err = s.workspaces.FindDefaultByUserID(userID)
 		if err != nil {
-			tempWs, tErr := NewTemporaryWorkspace(s.wsConfig.SessionDir, s.wsConfig.TempDirPrefix)
-			if tErr != nil {
-				return nil, tErr
+			// 默认工作区为 persistent + 固定 cwd（由 config 解析，默认 ~/.openNexus/workspaces/default），
+			// 跨会话持久保留。此处仅确保目录存在。
+			defaultCwd := s.wsConfig.DefaultCwd
+			if err := os.MkdirAll(defaultCwd, 0o755); err != nil {
+				return nil, fmt.Errorf("创建默认工作区目录: %w", err)
 			}
 			newWS := &models.Workspace{
-				UserID:  userID,
-				Name:    "默认工作区",
-				Cwd:     tempWs.Cwd,
-				Mode:    models.WorkspaceModeTemporary,
-				TempDir: tempWs.TempDir,
+				UserID: userID,
+				Name:   "默认工作区",
+				Cwd:    defaultCwd,
+				Mode:   models.WorkspaceModePersistent,
 			}
 			if cErr := s.workspaces.Create(newWS); cErr != nil {
-				_ = tempWs.Cleanup()
 				return nil, fmt.Errorf("创建默认工作区: %w", cErr)
 			}
 			dbWS = newWS
-			ws = tempWs
+			ws = &Workspace{Mode: newWS.Mode, Cwd: newWS.Cwd}
 			createdDefaultWS = true
 		} else {
 			ws = &Workspace{Mode: dbWS.Mode, Cwd: dbWS.Cwd, TempDir: dbWS.TempDir, Directories: dbWS.Directories}

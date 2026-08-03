@@ -16,7 +16,7 @@ import (
 
 func setupNotesMCP(t *testing.T) (http.Handler, *repository.NoteRepository, *repository.NoteSettingsRepository) {
 	t.Helper()
-	db, err := database.Connect("file::memory:?cache=shared")
+	db, err := database.Connect("file::memory:?cache=shared", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +88,7 @@ func TestTools_ListAndGet(t *testing.T) {
 }
 
 func TestListNotes_RequiresTag(t *testing.T) {
-	db, _ := database.Connect("file::memory:?cache=shared")
+	db, _ := database.Connect("file::memory:?cache=shared", "")
 	repo := repository.NewNoteRepository(db)
 	_, _, err := handleListNotes(withUserID(t.Context(), 1), repo, listNotesIn{})
 	if err == nil || !strings.Contains(err.Error(), "tag") {

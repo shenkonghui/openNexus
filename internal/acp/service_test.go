@@ -19,7 +19,7 @@ import (
 
 func setupACPTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
-	db, err := database.Connect("file::memory:?cache=shared")
+	db, err := database.Connect("file::memory:?cache=shared", "")
 	if err != nil {
 		t.Fatalf("连接测试库失败: %v", err)
 	}

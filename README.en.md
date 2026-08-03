@@ -119,6 +119,15 @@ make docker-up-d
 
 Dev container (includes the Go toolchain, useful for coding agents that compile/run Go code inside the container):
 
+The dev container mounts the project's `bin/` directory read-only at `/opt/opennexus/bin` and adds it to `PATH`. Place externally downloaded **Linux** builds of `k3d`, `kubectl`, and `helm` in this directory (do not use macOS builds):
+
+```bash
+mkdir -p bin
+# Put linux/arm64 or linux/amd64 builds of k3d, kubectl, and helm in bin/
+chmod +x bin/k3d bin/kubectl bin/helm
+```
+
+
 ```bash
 # Start the dev container (foreground)
 make docker-dev-up
@@ -135,7 +144,13 @@ Set environment variables like `ANTHROPIC_API_KEY` before starting:
 ANTHROPIC_API_KEY=sk-xxx make docker-up-d
 ```
 
-**Data & Config Persistence**: `docker-compose.yml` mounts the local `~/.openNexus` directory into the container at `/root/.openNexus`, sharing the same database, sessions, agent binary cache, and `config.yaml` between host and container. It also mounts `~/.local` to `/root/.local` so agent subprocesses can use host-local tools (e.g. `~/.local/bin`) and their related configuration/data. Inside the container, `npm install -g` installs packages to `/root/.npm-global`, which is persisted via the `opennexus-npm-global` named volume so they survive container restarts or rebuilds. After modifying `~/.openNexus/config.yaml`, run `docker compose restart` to apply changes—no image rebuild needed. For first-time setup, copy the example config from the project root:
+**Data & Config Persistence**: `docker-compose.yml` mounts local directories (`~/.openNexus`, `~/.local`, `~/src`) into the container **at the same path** (e.g. host `~/.openNexus` → in-container `~/.openNexus`) and injects `HOME` (= host HOME). This makes `~` resolve to the same absolute path on both sides, so paths stored in the database and session workspaces (e.g. `…/.openNexus/session/xxx`, git worktree paths) are reachable from both sides—**avoiding the "session created in the container can't be opened on the host (and vice versa)" workspace-path mismatch**.
+
+**Platform isolation**: agent binaries and npm caches are separated by platform, preventing macOS/Linux cross-contamination that would leave agents unable to start:
+- The binary-agent cache is automatically split by platform subdirectory (e.g. `~/.openNexus/binaries/darwin-arm64/`, `~/.openNexus/binaries/linux-aarch64/`), so the container and host each keep their own binaries—a macOS Mach-O build is never mistakenly executed inside the Linux container.
+- The container uses dedicated npm caches (`~/.npm-linux` / `~/.npm-global-linux`, physically isolated from the host macOS `~/.npm`), because `claude-agent-acp` invoked via npx depends on native binaries that would crash if shared across platforms.
+
+The entrypoint creates these subdirectories at runtime under the real `$HOME` and relocates the npm cache/global dirs, so dependencies and global packages do not need to be re-downloaded or reinstalled after container restarts or rebuilds; the dev container also reuses the host's `~/go` Go cache. After modifying `~/.openNexus/config.yaml`, run `docker compose restart` to apply changes—no image rebuild needed. For first-time setup, copy the example config from the project root:
 
 ```bash
 mkdir -p ~/.openNexus
@@ -173,6 +188,7 @@ The configuration file is `config.yaml`. Environment variable overrides:
 | `debug.acp.enabled` | `DEBUG_ACP_ENABLED` | Enable ACP debug logging (default: `true`) |
 | `debug.acp.dir` | `DEBUG_ACP_DIR` | ACP debug log directory |
 | `agents.workspace.session_dir` | `AGENTS_WORKSPACE_SESSION_DIR` | Session workspace root (default: `~/.openNexus/session`) |
+| `agents.workspace.default_cwd` | `AGENTS_WORKSPACE_DEFAULT_CWD` | Fixed file path for the default (persistent) workspace (default: `~/.openNexus/workspaces/default`) |
 | `agents.workspace.default_mode` | - | Default workspace mode: `temporary` / `persistent` |
 | `agents.mcp.config_path` | `AGENTS_MCP_CONFIG_PATH` | Global MCP servers config path (default: `~/.agents/mcp.json`) |
 
@@ -268,6 +284,7 @@ npm exec --include=optional --yes @agentclientprotocol/claude-agent-acp@latest -
 
 Workspace directory policy:
 
+- **Default workspace**: When a user starts a session without specifying a workspace, the auto-created default workspace is **persistent** and points to a fixed path `agents.workspace.default_cwd` (default `~/.openNexus/workspaces/default`); its contents persist across sessions
 - **temporary**: Cleaned up only when the entire workspace is deleted; deleting a single session does not remove the shared directory; missing dirs are recreated on session resume
 - **persistent**: Directory must exist beforehand; cleanup happens when the workspace is deleted
 

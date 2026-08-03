@@ -37,7 +37,7 @@ func (noopSchedulerMgr) RemoveTask(string, string) error                  { retu
 func (noopSchedulerMgr) RunTask(string, string) error                     { return nil }
 
 func TestSetup_RegistersP5Routes(t *testing.T) {
-	db, err := database.Connect("file::memory:?cache=shared")
+	db, err := database.Connect("file::memory:?cache=shared", "")
 	if err != nil {
 		t.Fatalf("连接测试库失败: %v", err)
 	}

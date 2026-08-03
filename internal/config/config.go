@@ -262,6 +262,10 @@ type WorkspaceConfig struct {
 	// MetaDir 是各工作区管理数据（tasks.json、执行记录、上传文件等）的存放根目录，
 	// 与 agent 工作目录（cwd）分离，避免污染用户代码仓库。默认 ~/.openNexus/workspaces。
 	MetaDir string `yaml:"meta_dir"`
+	// DefaultCwd 是默认工作区（persistent）的固定文件路径，留空则使用
+	// ~/.openNexus/workspaces/default。用户首次发起会话且未指定 workspace 时，
+	// 自动创建的默认工作区即指向此目录，跨会话持久保留。
+	DefaultCwd string `yaml:"default_cwd"`
 }
 
 type ClaudeCodeConfig struct {
@@ -321,6 +325,9 @@ func (c *Config) applyEnv() {
 	}
 	if v := os.Getenv("AGENTS_WORKSPACE_META_DIR"); v != "" {
 		c.Agents.Workspace.MetaDir = v
+	}
+	if v := os.Getenv("AGENTS_WORKSPACE_DEFAULT_CWD"); v != "" {
+		c.Agents.Workspace.DefaultCwd = v
 	}
 	if v := os.Getenv("AGENTS_SKILLS_USER_DIRS"); v != "" {
 		c.Agents.Skills.UserDirs = splitCommaList(v)
@@ -473,6 +480,15 @@ func (c *Config) resolveDataPaths() error {
 			return fmt.Errorf("meta_dir 无效: %w", err)
 		}
 		c.Agents.Workspace.MetaDir = abs
+	}
+	if c.Agents.Workspace.DefaultCwd == "" {
+		c.Agents.Workspace.DefaultCwd = filepath.Join(home, ".openNexus", "workspaces", "default")
+	} else {
+		abs, err := expandPath(c.Agents.Workspace.DefaultCwd)
+		if err != nil {
+			return fmt.Errorf("default_cwd 无效: %w", err)
+		}
+		c.Agents.Workspace.DefaultCwd = abs
 	}
 	return nil
 }

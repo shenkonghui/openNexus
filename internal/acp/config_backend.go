@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -158,6 +159,10 @@ func NewBinaryBackend(cfg models.AgentConfig, info BinaryInstallInfo) *BinaryBac
 // binaryCmd 是 registry 中的相对路径（如 "./crow-cli"、"./bin/devin"），取其 basename
 // （如 "crow-cli"、"devin"）用 exec.LookPath 查找——用户可能已通过 npm install -g / brew 等全局安装。
 // 找到返回解析后的绝对路径；找不到返回空串（调用方据此降级为下载）。
+//
+// 平台过滤：若命中的文件是「其他平台」的原生二进制（如容器内通过挂载拿到宿主机的 macOS
+// Mach-O），isExecutableForCurrentPlatform 会判定不兼容并跳过——避免免下载命中一个在当前
+// 平台 Exec format error、根本跑不起来的二进制。脚本（shebang）与当前平台原生格式放行。
 func findBinaryInPath(binaryCmd string) string {
 	base := filepath.Base(strings.TrimPrefix(binaryCmd, "./"))
 	base = strings.TrimSuffix(base, ".exe") // Windows: LookPath 自动处理 PATHEXT，去掉 .exe 更稳
@@ -165,9 +170,53 @@ func findBinaryInPath(binaryCmd string) string {
 		return ""
 	}
 	if path, err := exec.LookPath(base); err == nil {
+		if !isExecutableForCurrentPlatform(path) {
+			slog.Info("PATH 命中的 binary 与当前平台不兼容，跳过走下载",
+				"cmd", binaryCmd, "path", path, "goos", runtime.GOOS, "goarch", runtime.GOARCH)
+			return ""
+		}
 		return path
 	}
 	return ""
+}
+
+// isExecutableForCurrentPlatform 判断 path 指向的可执行文件能否在当前平台运行。
+// 只拒绝「明确属于其他平台原生二进制」的文件；脚本（shebang，magic 0x23 21 '#!'）和
+// 当前平台原生格式放行。设计为保守式过滤：无法判定时返回 true（不阻断），仅在确认为
+// 异平台原生二进制时返回 false。
+//
+// 触发场景：容器挂载宿主机 ~/.local 等目录后，PATH 命中宿主机的 macOS Mach-O 二进制，
+// 在 Linux 容器内执行会得到 "Exec format error"（exit 126），导致 agent 永远连不上。
+func isExecutableForCurrentPlatform(path string) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return true // 打不开不在此函数职责内，交给后续 exec 报错
+	}
+	defer f.Close()
+	var magic [4]byte
+	n, _ := f.Read(magic[:])
+	if n < 4 {
+		return true // 太短，可能是脚本片段或空文件，不拦截
+	}
+	m := string(magic[:])
+	// 脚本（#!shebang）放行——测试 fixture 与 shell 脚本型 binary 都走这里
+	if strings.HasPrefix(m, "#!") {
+		return true
+	}
+	switch runtime.GOOS {
+	case "darwin", "ios":
+		// Mach-O magic：BE 0xFEEDFACE/0xFEEDFACF，LE 0xCEFAEDFE/0xCFFAEDFE
+		return m == "\xca\xfe\xba\xbe" || m == "\xfe\xed\xfa\xce" || m == "\xfe\xed\xfa\xcf" ||
+			m == "\xce\xfa\xed\xfe" || m == "\xcf\xfa\xed\xfe"
+	case "linux", "android", "freebsd", "netbsd", "openbsd", "dragonfly", "solaris":
+		// ELF magic：0x7F 'E' 'L' 'F'
+		return m == "\x7fELF"
+	case "windows":
+		// PE：DOS MZ header；真实 PE 校验需读 PE 头偏移，MZ 足够用于过滤 Mach-O/ELF
+		return m == "MZ"
+	default:
+		return true // 未知平台，不拦截
+	}
 }
 
 // Prepare 确保二进制 agent 可启动：优先复用 PATH 中已安装的同名二进制，

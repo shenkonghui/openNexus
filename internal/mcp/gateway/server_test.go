@@ -57,7 +57,7 @@ func writeMCPConfig(t *testing.T, servers map[string]any) string {
 // emptySettingsRepo 返回一个没有任何 MCP token 的设置仓库。
 func emptySettingsRepo(t *testing.T) *repository.NoteSettingsRepository {
 	t.Helper()
-	db, err := database.Connect("file::memory:?cache=shared")
+	db, err := database.Connect("file::memory:?cache=shared", "")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -31,7 +31,7 @@ func tuneDSN(dsn string) string {
 	return dsn + "?" + pragmas
 }
 
-func Connect(dsn string) (*gorm.DB, error) {
+func Connect(dsn string, defaultCwd string) (*gorm.DB, error) {
 	db, err := gorm.Open(sqlite.Open(tuneDSN(dsn)), &gorm.Config{})
 	if err != nil {
 		return nil, fmt.Errorf("打开数据库: %w", err)
@@ -40,7 +40,7 @@ func Connect(dsn string) (*gorm.DB, error) {
 		return nil, fmt.Errorf("迁移数据库: %w", err)
 	}
 	// 数据迁移：为旧 Session 创建对应 Workspace，填充 workspace_id
-	if err := migrateOldSessionsToWorkspaces(db); err != nil {
+	if err := migrateOldSessionsToWorkspaces(db, defaultCwd); err != nil {
 		return nil, fmt.Errorf("迁移旧会话数据: %w", err)
 	}
 	// 数据迁移：旧 session_id 曾是 ACP id，回填到 agent_session_id
@@ -52,6 +52,11 @@ func Connect(dsn string) (*gorm.DB, error) {
 	// 导致 persistent 工作区报"工作目录不存在"。此步幂等：无匹配行时无操作。
 	if err := migrateLegacyWorkspacePaths(db); err != nil {
 		return nil, fmt.Errorf("迁移历史工作区路径: %w", err)
+	}
+	// 数据迁移：把旧的"默认工作区"（temporary + 随机临时目录）统一改为 persistent + 固定 defaultCwd。
+	// 幂等：已是 persistent 的记录不会被 mode='temporary' 命中。
+	if err := migrateDefaultWorkspacesToPersistent(db, defaultCwd); err != nil {
+		return nil, fmt.Errorf("迁移默认工作区: %w", err)
 	}
 	return db, nil
 }
@@ -99,7 +104,7 @@ func migrateAgentSessionID(db *gorm.DB) error {
 		Update("agent_session_id", gorm.Expr("session_id")).Error
 }
 
-func migrateOldSessionsToWorkspaces(db *gorm.DB) error {
+func migrateOldSessionsToWorkspaces(db *gorm.DB, defaultCwd string) error {
 	var count int64
 	if err := db.Model(&models.Session{}).
 		Where("workspace_id IS NULL OR workspace_id = 0").
@@ -139,10 +144,13 @@ func migrateOldSessionsToWorkspaces(db *gorm.DB) error {
 		}
 	}
 
-	return createDefaultWorkspacesForEmptyUsers(db)
+	return createDefaultWorkspacesForEmptyUsers(db, defaultCwd)
 }
 
-func createDefaultWorkspacesForEmptyUsers(db *gorm.DB) error {
+// createDefaultWorkspacesForEmptyUsers 为尚无任何工作区的用户补建默认工作区。
+// 默认工作区为 persistent 模式，cwd 固定为 defaultCwd（由 config 解析，
+// 默认 ~/.openNexus/workspaces/default），跨会话持久保留，不再使用随机临时目录。
+func createDefaultWorkspacesForEmptyUsers(db *gorm.DB, defaultCwd string) error {
 	var userIDs []uint
 	if err := db.Model(&models.User{}).Pluck("id", &userIDs).Error; err != nil {
 		return err
@@ -153,24 +161,14 @@ func createDefaultWorkspacesForEmptyUsers(db *gorm.DB) error {
 			return err
 		}
 		if count == 0 {
-			home, err := os.UserHomeDir()
-			if err != nil {
-				return fmt.Errorf("获取用户主目录: %w", err)
-			}
-			baseDir := filepath.Join(home, ".openNexus", "session")
-			if err := os.MkdirAll(baseDir, 0o700); err != nil {
-				return fmt.Errorf("创建临时根目录: %w", err)
-			}
-			tempDir, err := os.MkdirTemp(baseDir, "opennexus-")
-			if err != nil {
-				return fmt.Errorf("创建临时目录: %w", err)
+			if err := os.MkdirAll(defaultCwd, 0o755); err != nil {
+				return fmt.Errorf("创建默认工作区目录: %w", err)
 			}
 			ws := &models.Workspace{
-				UserID:  uid,
-				Name:    "默认工作区",
-				Cwd:     tempDir,
-				Mode:    models.WorkspaceModeTemporary,
-				TempDir: tempDir,
+				UserID: uid,
+				Name:   "默认工作区",
+				Cwd:    defaultCwd,
+				Mode:   models.WorkspaceModePersistent,
 			}
 			if err := db.Create(ws).Error; err != nil {
 				return fmt.Errorf("保存默认 workspace: %w", err)
@@ -178,4 +176,18 @@ func createDefaultWorkspacesForEmptyUsers(db *gorm.DB) error {
 		}
 	}
 	return nil
+}
+
+// migrateDefaultWorkspacesToPersistent 把旧的"默认工作区"（temporary + 随机临时目录）
+// 统一改为 persistent + 固定 defaultCwd。与 config 解析后的固定路径保持一致，使旧用户
+// 升级后默认工作区同样落在新固定目录下。幂等：已是 persistent 的记录不受影响。
+// 旧随机临时目录不主动删除，避免误删用户文件。
+func migrateDefaultWorkspacesToPersistent(db *gorm.DB, defaultCwd string) error {
+	return db.Model(&models.Workspace{}).
+		Where("name = ? AND mode = ?", "默认工作区", models.WorkspaceModeTemporary).
+		Updates(map[string]interface{}{
+			"cwd":      defaultCwd,
+			"mode":     models.WorkspaceModePersistent,
+			"temp_dir": "",
+		}).Error
 }

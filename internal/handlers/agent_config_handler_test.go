@@ -47,7 +47,7 @@ func (r *recordingRegistrar) PreconnectAgent(agentType string) {
 func newAgentConfigTestRouter(t *testing.T) (*gin.Engine, *repository.AgentConfigRepository, *recordingRegistrar) {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
-	db, err := database.Connect("file::agentcfg?mode=memory&cache=shared")
+	db, err := database.Connect("file::agentcfg?mode=memory&cache=shared", "")
 	if err != nil {
 		t.Fatalf("连接测试库失败: %v", err)
 	}
