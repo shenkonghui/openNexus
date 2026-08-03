@@ -3,5 +3,60 @@
 data/
 
 # 本地 go mod vendor 产物：镜像内走 module 模式（go mod download），
-# 若 COPY . . 带入本地 vendor/ 会让 go 自动切回 vendor 模式，破坏一致性。
+# 若 COPY 带入本地 vendor/ 会让 go 自动切回 vendor 模式，破坏一致性。
 vendor/
+
+# 版本控制元数据，构建无需
+.git/
+.gitignore
+.github/
+
+# 前端依赖与构建产物：web-builder 阶段会重新 npm ci && npm run build，
+# 宿主机上的 node_modules / dist 不应进入构建上下文。
+web/node_modules/
+web/dist/
+
+# electron 客户端与后端镜像无关
+electron/
+
+# 发布产物 / 本地二进制
+dist/
+*.tar.gz
+*.zip
+*.exe
+*.app
+/opennexus
+/opennexus.log
+/opennexus.pid
+/server
+/registry.json
+/gateway
+nexus.db
+
+# 文档与项目元信息（运行时镜像已显式 COPY config.yaml，其余无需）
+README.md
+README.en.md
+AGENTS.md
+docs/
+assets/
+
+# IDE / 工具临时目录
+.DS_Store
+.cursorignore
+.zcode/
+.qoder/
+.superpowers/
+.worktrees/
+.acp-experiment/
+
+# 构建脚本本身无需进入镜像
+Dockerfile
+Dockerfile.dev
+docker-compose.yml
+docker-compose.dev.yml
+Makefile
+
+# 临时文件
+tasks.json
+tmp_*.png
+config.yaml.bak

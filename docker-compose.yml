@@ -9,12 +9,12 @@ services:
     ports:
       - "8080:8080"
     volumes:
-      - ./data:/root/.openNexus
+      # 挂载本地 ~/.openNexus：容器与宿主机共享同一份数据（db、会话、agent 二进制缓存、config.yaml），
+      # 本地直接运行 opennexus 和容器运行的数据完全一致。
+      - ${HOME}/.openNexus:/root/.openNexus
       - opennexus-npm-cache:/root/.npm
-      # 挂载宿主机 root/home：容器内 agent 可直接访问宿主机用户目录，工作区路径与宿主机一致
-      # （更具体的 /root/.openNexus、/root/.npm 挂载会叠加在其上，互不影响）
-      - /root:/root
-      - /home:/home
+      - ${HOME}/src:${HOME}/src
+      - ${HOME}/.config:${HOME}/.config
     environment:
       - SERVER_MODE=release
       - SERVER_PORT=8080

@@ -1,0 +1,223 @@
+server:
+    port: 8080
+    mode: debug
+    web_dist: ./web/dist
+logging:
+    # 日志等级：debug | info | warn | error
+    # debug 时会输出每次与 agent 的交互（prompt、session update、ACP 请求等）
+    level: info
+database:
+    # 默认 ~/.openNexus/opennexus.db；可用 DATABASE_PATH 或 --data-dir 覆盖
+    path: ~/.openNexus/opennexus.db
+jwt:
+    secret: "nexusagent-dev-secret-key-32+bytes!"
+    access_ttl: 15m
+    refresh_ttl: 168h
+auth:
+    # 开启后无需登录，自动使用内置 admin 用户
+    auto_login: true
+password:
+    bcrypt_cost: 12
+debug:
+    acp:
+        # 开启后记录 ACP JSON-RPC 原始报文与高层事件到本地目录，供对话页「调试」Tab 查看
+        enabled: true
+        dir: ~/.openNexus/acp-debug
+agents:
+    workspace:
+        default_mode: temporary
+        temp_dir_prefix: opennexus-
+        # temporary 模式会话工作区的存放根目录，默认 ~/.openNexus/session。
+        # 由程序在删除会话时清理，不依赖操作系统清理临时目录。
+        session_dir: ~/.openNexus/session
+    skills:
+        # 用户级 skills 根目录（agentskills.io：递归扫描子目录中的 SKILL.md）
+        user_dirs:
+            - ~/.agents/skills
+        # 相对工作区 cwd 的项目级 skills 子目录
+        project_dirs:
+            - .agents/skills
+    commands:
+        # Slash Command 目录（Claude Code 规范：递归扫描 *.md，支持子目录与符号链接目录，文件名即命令名）
+        user_dirs:
+            - ~/.agents/commands
+        project_dirs:
+            - .agents/commands
+    rules:
+        # Rule 路径：目录（递归扫描 *.mdc / *.md）或单个文件（如 CLAUDE.md）
+        # alwaysApply: true 的规则（或无 frontmatter 的独立文件）经 session/new 的 _meta.systemPrompt 注入
+        user_dirs:
+            - ~/.cursor/rules
+            - ~/.claude/CLAUDE.md
+        project_dirs:
+            - .cursor/rules
+            - CLAUDE.md
+    subagents:
+        # subagent 根目录（递归扫描 *.md：frontmatter 含 name/description/model/tools，markdown 正文当 system_prompt）
+        user_dirs:
+            - ~/.agents/agents
+        project_dirs:
+            - .agents/agents
+    mcp:
+        # 全局共享 MCP server 配置文件（标准 mcpServers JSON 格式）。
+        # 该文件中的 mcpServers 会注入给所有 agent 会话。可在设置页「MCP」Tab 编辑。
+        config_path: ~/.agents/mcp.json
+        # 聚合网关注入传输形态：
+        #   stdio（默认）：统一走 stdio 桥（协议基线，工具同步就绪，规避部分 agent http 懒加载问题）
+        #   auto：按 agent 握手能力选择，支持 http 时注入 http 网关
+        gateway_transport: stdio
+    # agent+模型 合并下拉框的显示过滤（正则列表，对 "agentType/模型值" 与 "agentType/模型显示名称" 做子串匹配，忽略大小写）。
+    # 为空则全部显示；非空时任一正则命中即显示。示例：
+    # selector:
+    #     filters:
+    #         - "^claude-code/"          # 仅显示 claude-code 的全部模型
+    #         - "sonnet"                 # 显示所有 agent 中模型含 sonnet 的组合
+    #         - "^cursor/.*gpt-5.*"      # 仅显示 cursor 下的 gpt-5 系列
+    selector:
+        filters:
+            - ^codebuddy-code/deepseek-v4-flash$
+            - ^codebuddy-code/custom-local:GLM-5\.2$
+            - ^devin/glm-5-2$
+            - ^devin/glm-5-2-1m$
+            - ^devin/swe-1-7$
+            - ^devin/swe-1-7-medium$
+            - ^qoder(/|$)
+    # 单轮 prompt 的最大存活时间。prompt 的生命周期独立于发起它的 HTTP/SSE 请求
+    # （SSE 断开不再误杀 agent），此超时兜底防 agent 卡死导致 goroutine 永久泄漏——
+    # 超时后强制结束本轮并标记 interrupted，前端提示用户重发。默认 30m。
+    prompt_max_duration: 30m
+    # 运行中 agent 崩溃/断连时，是否自动重新连接并重发同一 prompt（仅一次）。
+    # true=开启（默认）；false=直接标记 interrupted，由用户手动重发。
+    failed_task_auto_retry_once: true
+    # 是否向 agent 声明 ACP terminal 能力：开启后 agent 执行的 shell 命令由本服务
+    # 代为执行（PTY），并在网页终端面板自动展示执行情况。默认 true；
+    # 设为 false 回退为 agent 内部执行（仅聊天流展示摘要）。
+    terminal_enabled: true
+permissions:
+    mode: normal
+    allow:
+        - git status
+        - git diff
+        - git log
+        - git show
+        - git branch
+        - git fetch
+        - git remote -v
+        - ls
+        - pwd
+        - cat
+    ask: []
+    deny:
+        # —— 远端推送 / 发布（外发不可逆）——
+        - git push
+        - git remote set-url
+        - docker push
+        - docker login
+        - crane push
+        - skopeo copy
+        - helm push
+        - npm publish
+        - pip upload
+        - twine upload
+        - mvn deploy
+        - gradle publish
+        - go mod proxy
+        - cargo publish
+        # —— 本地 Git 历史/工作区不可逆改写 ——
+        - git reset --hard
+        - git clean -f
+        - git checkout -f
+        - git checkout --force
+        - git branch -D
+        - git filter-branch
+        - git reflog expire
+        - git gc --prune=now
+        # —— 系统关机 / 重启 ——
+        - reboot
+        - shutdown
+        - poweroff
+        - halt
+        - init 0
+        - init 6
+        - systemctl reboot
+        - systemctl poweroff
+        - systemctl halt
+        # —— 磁盘 / 文件系统破坏 ——
+        - mkfs
+        - fdisk
+        - parted
+        - dd if=
+        - dd of=/dev/sd
+        - dd of=/dev/nvme
+        - dd of=/dev/disk
+        - swapoff
+        - umount /
+        - mount -o remount
+        - fsck
+        - badblocks
+        # —— 删除命令（一律拦截，按需在 allow 放行特定子命令）——
+        - rm
+        - shred
+        # —— 系统文件篡改 ——
+        - /etc/passwd
+        - /etc/shadow
+        - /etc/sudoers
+        - /etc/hosts
+        - /etc/fstab
+        - /etc/resolv.conf
+        - visudo
+        - chmod 777 /
+        - chmod 777 /etc
+        - chmod 777 /root
+        - chmod -R 777 /
+        # —— 用户 / 权限管理 ——
+        - userdel
+        - usermod
+        - adduser
+        - groupdel
+        - passwd
+        - chage
+        - sudo su
+        - sudo -i
+        - su root
+        - su -
+        # —— 进程强杀 ——
+        # —— 网络防火墙篡改 ——
+        - iptables -F
+        - iptables -X
+        - iptables -P
+        - firewall-cmd
+        - ufw disable
+        - ufw allow
+        - nft flush
+        # —— 系统服务破坏 ——
+        - systemctl stop
+        - systemctl disable
+        - systemctl mask
+        - systemctl daemon-reload
+        - service stop
+        # —— 内核模块 ——
+        - rmmod
+        - modprobe -r
+        - insmod
+        # —— 定时任务篡改 ——
+        - crontab -r
+        - crontab -l
+        - /etc/cron
+        - at -f
+        # —— 数据库危险操作 ——
+        - DROP TABLE
+        - DROP DATABASE
+        - TRUNCATE
+        - DROP SCHEMA
+        - DROP INDEX
+        - DROP VIEW
+        - DELETE FROM
+        - pg_dropdatabase
+        - mysqladmin drop
+# agent 进程 OS 级沙箱（macOS sandbox-exec / Linux bwrap）：
+# 文件系统整体只读、仅工作区等白名单目录可写、剥离凭证类环境变量。
+# mode: auto=平台沙箱不可用时降级直通并告警；enforce=不可用时拒绝启动 agent。
+sandbox:
+    enabled: false
+    mode: auto

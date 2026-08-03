@@ -123,6 +123,15 @@ Set environment variables like `ANTHROPIC_API_KEY` before starting:
 ANTHROPIC_API_KEY=sk-xxx make docker-up-d
 ```
 
+**Data & Config Persistence**: `docker-compose.yml` mounts the local `~/.openNexus` directory into the container at `/root/.openNexus`, sharing the same database, sessions, agent binary cache, and `config.yaml` between host and container. After modifying `~/.openNexus/config.yaml`, run `docker compose restart` to apply changes—no image rebuild needed. For first-time setup, copy the example config from the project root:
+
+```bash
+mkdir -p ~/.openNexus
+cp config.yaml.example ~/.openNexus/config.yaml
+```
+
+> Note: Do not run the local opennexus binary and the Docker container simultaneously—both share the same SQLite database, and concurrent writes will cause lock conflicts.
+
 ### Desktop Clients
 
 ```bash

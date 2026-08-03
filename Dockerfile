@@ -27,15 +27,20 @@ ENV GOPROXY=https://goproxy.cn,direct
 COPY go.mod go.sum ./
 RUN go mod download
 
-# 复制源码并编译（CGO_ENABLED=1 以支持 SQLite）
-COPY . .
+# 仅复制 Go 编译所需源码：cmd/ 与 internal/（含 internal/acp/registry.json 的 go:embed）。
+# 不再 COPY . .，避免把 .git / web / electron / dist / data 等无关大目录带入构建层。
+# 注意：COPY 多个目录到 ./ 会平铺内容，必须分别 COPY 到对应子目录以保留包路径。
+COPY cmd/ ./cmd/
+COPY internal/ ./internal/
 COPY --from=web-builder /app/web/dist ./web/dist
 RUN CGO_ENABLED=1 GOOS=linux go build -ldflags="-s -w" -o /out/opennexus ./cmd/server
 
 # ===== Stage 3: 运行时 =====
 # 使用 Debian 版 node 镜像（glibc），因为 agents 通过 npx 调用 claude-agent-acp，
 # 且 cursor 等 agent 捆绑的是 glibc 预编译 node，Alpine(musl) 下无法执行。
-FROM docker.linkos.org/library/node:20-slim AS runtime
+# 选用 node:22-slim：@agentclientprotocol/claude-agent-acp@0.64.0 要求 node>=22，
+# node:20-slim 会导致 EBADENGINE 警告并可能握手失败。
+FROM docker.linkos.org/library/node:22-slim AS runtime
 WORKDIR /app
 
 # 换阿里云镜像源加速 apt 安装（兼容 deb822 与传统 sources.list 两种格式）
@@ -58,7 +63,19 @@ COPY --from=go-builder /out/opennexus /app/opennexus
 COPY --from=web-builder /app/web/dist /app/web/dist
 
 # 复制默认配置
-COPY config.yaml /app/config.yaml
+# COPY config.yaml /app/config.yaml
+
+# 创建 entrypoint 脚本：在主程序启动前清理 npx 残留并串行预热缓存。
+# 背景：npx 安装包时先下载到临时目录（以 . 开头），再 rename 到最终位置。
+# 如果容器被 kill（如 docker compose down），rename 中断会留下残留临时目录，
+# 下次 npx 运行时 rename 目标非空 → ENOTEMPTY → agent 握手失败。
+# 预热后 npx 命中缓存不再下载，从根源消除并发竞争。
+RUN printf '#!/bin/sh\n\
+# 清理 npx 缓存中 npm rename 失败残留的临时目录（以 . 开头）\n\
+find /root/.npm/_npx -mindepth 1 -name ".*" -type d -exec rm -rf {} + 2>/dev/null || true\n\
+# 串行预热 npx 缓存（stdin 关闭后 agent 进程会快速退出）\n\
+npx -y @agentclientprotocol/claude-agent-acp@latest < /dev/null > /dev/null 2>&1 || true\n\
+exec /app/opennexus\n' > /app/entrypoint.sh && chmod +x /app/entrypoint.sh
 
 # 数据持久化目录：统一使用默认 ~/.openNexus（root 用户即 /root/.openNexus），
 # 数据库、会话、ACP 二进制缓存、调试目录全部落在此目录，挂载单个卷即可全量持久化。
@@ -83,4 +100,4 @@ EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD wget -qO- http://127.0.0.1:8080/health >/dev/null 2>&1 || exit 1
 
-ENTRYPOINT ["/app/opennexus"]
+ENTRYPOINT ["/app/entrypoint.sh"]

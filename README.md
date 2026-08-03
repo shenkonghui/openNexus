@@ -123,6 +123,15 @@ make docker-up-d
 ANTHROPIC_API_KEY=sk-xxx make docker-up-d
 ```
 
+**数据与配置持久化**：`docker-compose.yml` 将本地 `~/.openNexus` 挂载到容器 `/root/.openNexus`，容器与宿主机共享同一份数据库、会话、agent 二进制缓存和 `config.yaml`。修改 `~/.openNexus/config.yaml` 后 `docker compose restart` 即可生效，无需重建镜像。首次使用可从项目根目录复制示例配置：
+
+```bash
+mkdir -p ~/.openNexus
+cp config.yaml.example ~/.openNexus/config.yaml
+```
+
+> 注意：不要同时运行本地 opennexus 和容器——两者共用同一个 SQLite 数据库，并发写入会锁冲突。
+
 ### 桌面客户端
 
 ```bash
