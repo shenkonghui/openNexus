@@ -150,7 +150,7 @@ ANTHROPIC_API_KEY=sk-xxx make docker-up-d
 - binary agent 缓存自动按平台分目录（如 `~/.openNexus/binaries/darwin-arm64/`、`~/.openNexus/binaries/linux-aarch64/`），容器和宿主机各存各的二进制，macOS 下载的 Mach-O 不会被 Linux 容器误用。
 - 容器使用独立的 npm 缓存（`~/.npm-linux` / `~/.npm-global-linux`，与宿主机 macOS 的 `~/.npm` 物理隔离），因为 npx 调用的 `claude-agent-acp` 依赖原生二进制，跨平台共享会崩溃。
 
-entrypoint 会在运行时按真实 `$HOME` 现场创建上述子目录并重定位 npm 缓存/全局目录，容器重建或重启后无需重复下载依赖或安装全局包；开发容器还复用宿主机的 `~/go` Go 缓存。修改 `~/.openNexus/config.yaml` 后 `docker compose restart` 即可生效，无需重建镜像。首次使用可从项目根目录复制示例配置：
+entrypoint 会在运行时按真实 `$HOME` 现场创建上述子目录并重定位 npm 缓存/全局目录，容器重建或重启后无需重复下载依赖或安装全局包；开发容器还复用宿主机的 `~/go` Go 缓存。entrypoint 还会在每次启动时校验 npx 缓存完整性——若 `node_modules/.bin` 链接缺失（`npm exec` 命中缓存时不会重建它，会导致 `cbc: not found` 之类的启动失败），自动清除该缓存目录强制下次重装。修改 `~/.openNexus/config.yaml` 后 `docker compose restart` 即可生效，无需重建镜像。首次使用可从项目根目录复制示例配置：
 
 ```bash
 mkdir -p ~/.openNexus
