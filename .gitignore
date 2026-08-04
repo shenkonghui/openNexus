@@ -52,3 +52,6 @@ config.yaml.bak
 # temporary files
 tasks.json
 tmp_*.png
+*.swp
+term_ls.png
+.playwright-cli/

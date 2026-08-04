@@ -17,7 +17,7 @@ A multi-Agent orchestration and conversation platform based on the [Agent Client
 - **Prompt Input Enhancements**: `/` completes commands, skills, and modes; `@` provides hierarchical references to commands, skills, workspace files, and notes (browse by tag).
 - **Skills & Commands Discovery**: Scans `SKILL.md` and slash command files under workspace and user directories for autocomplete.
 - **MCP Integration**: Global MCP server configuration (`mcpServers` JSON) shared across all agent sessions. Built-in MCP servers for Notes and Sub-Agents. Editable in the Settings page.
-- **Rule Scanning**: Automatically discovers and injects rules (`.mdc` / `.md`) from user and project directories into agent sessions.
+- **Rule Scanning**: Automatically discovers and injects rules (`.mdc` / `.md`) from user and project directories into agent sessions; dual-channel injection via `_meta.systemPrompt` (Claude Code et al.) and first-turn prompt prefix (universal fallback, works with all agents).
 - **Health Check & Auto-Reconnect**: Background agent connection health monitoring with automatic reconnection on failure. Real-time status badges in the sidebar.
 - **Permission System**: User approval dialog for agent tool calls — inspect parameters before allowing execution.
 - **Sandbox Effect Test**: With the global sandbox enabled and the Agent process actually running inside the OS sandbox, sends preset command prompts to the Agent and auto-approves all tool calls so commands actually execute. Verifies via tool call exit codes whether the sandbox effectively isolates dangerous operations. Refuses to run when the sandbox is disabled or degraded to passthrough. Ships with 16 built-in default test cases across 6 filesystem boundary categories (write outside/inside workdir, write system dirs, write sensitive paths, write home dir, delete external files); commands are customizable via prompt, with expected blocked/allowed behavior per case, and can be run in parallel across all agents.
@@ -197,6 +197,13 @@ The configuration file is `config.yaml`. Environment variable overrides:
 Config file lookup: `CONFIG_PATH` → `~/.openNexus/config.yaml` → `./config.yaml`. Database and session data default to `~/.openNexus/`.
 
 Agent commands, arguments, and API keys can be managed dynamically in the Settings page — changes take effect immediately. Skills, commands, rules, sub-agents, and MCP servers are also configurable via user and project directories in `config.yaml`.
+
+**Rule injection strategy**: rules with `alwaysApply: true` (or standalone files without frontmatter, e.g. `CLAUDE.md`) are injected into sessions via two independently toggleable channels:
+
+- `agents.rules.prompt_prefix` (default `true`): prepends the rule body to the **first-turn** user prompt. This is the universal fallback channel — ACP requires all agents to process prompts, so rules actually take effect even on agents that ignore `_meta.systemPrompt` (CodeBuddy / Qoder / Devin, etc.).
+- `agents.rules.meta_system_prompt` (default `true`): injects via `session/new`'s `_meta.systemPrompt`. This channel is a non-standard ACP extension honored only by agents that actively read the field (Claude Code et al.), but is cleaner for those agents (rules don't consume the user prompt).
+
+Both are enabled by default: agents that support `_meta` use the clean channel, while unsupported agents fall back to prompt prefixing. If all your agents support `_meta` and you want to save tokens, disable `prompt_prefix`.
 
 ## Data Migration (Automatic)
 

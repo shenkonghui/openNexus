@@ -254,6 +254,30 @@ type RulesConfig struct {
 	UserDirs []string `yaml:"user_dirs"`
 	// ProjectDirs 项目级 rules 相对 cwd 的路径，默认 .cursor/rules、CLAUDE.md。
 	ProjectDirs []string `yaml:"project_dirs"`
+	// PromptPrefix 控制是否在首轮 prompt 前置注入 alwaysApply 规则正文。
+	// 这是通用兜底通道：ACP 规定所有 agent 必须处理 prompt，对不认 _meta.systemPrompt 的
+	// agent（如 CodeBuddy/Qoder/Devin）也能生效。未配置时默认 true。
+	PromptPrefix *bool `yaml:"prompt_prefix"`
+	// MetaSystemPrompt 控制是否继续走 session/new 的 _meta.systemPrompt 通道注入规则。
+	// 该通道是 ACP 非标准扩展，仅 Claude Code 等主动读取该字段的 agent 生效，但对这些 agent 更干净。
+	// 未配置时默认 true（与 prompt_prefix 可同时开启）。
+	MetaSystemPrompt *bool `yaml:"meta_system_prompt"`
+}
+
+// PromptPrefixEnabled 返回是否启用首轮 prompt 前置注入 alwaysApply 规则；未配置时默认 true。
+func (r RulesConfig) PromptPrefixEnabled() bool {
+	if r.PromptPrefix == nil {
+		return true
+	}
+	return *r.PromptPrefix
+}
+
+// MetaSystemPromptEnabled 返回是否走 session/new 的 _meta.systemPrompt 通道注入规则；未配置时默认 true。
+func (r RulesConfig) MetaSystemPromptEnabled() bool {
+	if r.MetaSystemPrompt == nil {
+		return true
+	}
+	return *r.MetaSystemPrompt
 }
 
 type WorkspaceConfig struct {

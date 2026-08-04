@@ -162,7 +162,7 @@ description: openNexus 能力接入自检专用 subagent，当被要求进行能
 // <上游server>_<tool>，不带 "MCP" 字样，不给关键字模型无法辨认哪些是 MCP 工具。
 func buildCapTestPrompt(ruleMarker, skillMDPath string, mcpKeywords []string) string {
 	return fmt.Sprintf(`这是一次自动化能力自检，请严格按以下格式输出四行结果，不要输出其他内容，绝对不要编造标记：
-RULE: <如果你的系统规则/系统提示中包含形如 CAPTEST-RULE-XXXX 的标记，原样输出该标记；否则输出 NONE>
+RULE: <如果你的系统规则/系统提示/会话开头注入的项目规则中包含形如 CAPTEST-RULE-XXXX 的标记，原样输出该标记；否则输出 NONE>
 SKILL: <读取文件 %s，原样输出其中形如 CAPTEST-SKILL-XXXX 的标记；无法读取则输出 NONE>
 MCP: %s
 AGENT: <如果你能调用名为 %s 的 subagent/子代理（如 Task/Agent 工具），调用它并原样输出它返回的形如 CAPTEST-SUBAGENT-XXXX 的标记；无法调用则输出 NONE>
@@ -401,7 +401,7 @@ func (s *Service) TestAgentCapabilities(ctx context.Context, agentType string, u
 	if !e2e {
 		// 静态级：session/new 未报错即认为注入被接受；rule/skill/subagent 无协议回执，标记 injected。
 		report.Items = []CapabilityTestItem{
-			{ID: "rule", Status: CapTestInjected, Detail: "Meta.systemPrompt 注入已被 session/new 接受（非标准字段，agent 可能静默忽略）"},
+			{ID: "rule", Status: CapTestInjected, Detail: "规则已注入：_meta.systemPrompt（session/new，非标准字段）+ 首轮 prompt 前置（e2e 兜底通道，所有 agent 生效）"},
 			{ID: "skill", Status: CapTestInjected, Detail: "AdditionalDirectories 注入已被 session/new 接受（是否扫描 skill 取决于 agent）"},
 			{ID: "mcp", Status: CapTestInjected, Detail: mcpDetail},
 			{ID: "subagent", Status: CapTestInjected, Detail: subDetail + "（是否扫描定义取决于 agent）"},
@@ -422,7 +422,13 @@ func (s *Service) TestAgentCapabilities(ctx context.Context, agentType string, u
 	go autoApprovePermissions(conn, permCh)
 
 	mcpKeywords := s.mcpAcceptNames(mcpServers)
-	updates, err := conn.Prompt(ctx, sessionID, buildCapTestPrompt(ruleMarker, skillMD, mcpKeywords))
+	// e2e 验证 prompt 同时通过 prompt 前置注入测试规则 rulePrompt（用 <project_rules> 包裹）。
+	// 这是通用兜底通道：_meta.systemPrompt 是 ACP 非标准字段，CodeBuddy/Qoder/Devin 等 agent
+	// 会静默忽略，单走该通道会让 rule 项在这些 agent 上必然假阴性。前置注入后 ruleMarker
+	// 进入 agent 必然处理的 prompt，能力测试才能真实反映"规则注入是否生效"。
+	verifyPrompt := wrapRulePrompt(rulePrompt) + "\n" + buildCapTestPrompt(ruleMarker, skillMD, mcpKeywords)
+	slog.Info("能力测试发送验证 prompt", "agent", agentType, "rule_meta_chars", len(rulePrompt), "verify_chars", len(verifyPrompt), "rule_injected_via", "prompt_prefix+meta")
+	updates, err := conn.Prompt(ctx, sessionID, verifyPrompt)
 	if err != nil {
 		return fail("发送验证 prompt", err)
 	}

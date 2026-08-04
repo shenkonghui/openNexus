@@ -130,6 +130,10 @@ type Service struct {
 	commandProjectDirs  []string
 	ruleUserDirs        []string
 	ruleProjectDirs     []string
+	// rulePromptPrefix 控制是否在首轮 prompt 前置注入 alwaysApply 规则（通用兜底通道）。
+	rulePromptPrefix bool
+	// ruleMetaSystemPrompt 控制是否走 session/new 的 _meta.systemPrompt 注入规则（仅部分 agent 生效）。
+	ruleMetaSystemPrompt bool
 	subAgentUserDirs    []string
 	subAgentProjectDirs []string
 	// goalRoleUserDirs/goalRoleProjectDirs goal 评估角色扫描目录（SetGoalRoleDirs 注入）。
@@ -285,6 +289,8 @@ func NewService(db *gorm.DB, messagesDir string, wsConfig config.WorkspaceConfig
 		commandProjectDirs:      append([]string(nil), commandsConfig.ProjectDirs...),
 		ruleUserDirs:            append([]string(nil), rulesConfig.UserDirs...),
 		ruleProjectDirs:         append([]string(nil), rulesConfig.ProjectDirs...),
+		rulePromptPrefix:        rulesConfig.PromptPrefixEnabled(),
+		ruleMetaSystemPrompt:    rulesConfig.MetaSystemPromptEnabled(),
 		subAgentUserDirs:        append([]string(nil), subAgentsConfig.UserDirs...),
 		subAgentProjectDirs:     append([]string(nil), subAgentsConfig.ProjectDirs...),
 		failedTaskAutoRetryOnce: true, // 默认开启；可由 SetFailedTaskAutoRetryOnce 覆盖
@@ -391,6 +397,8 @@ func (s *Service) SetScanDirs(skills config.SkillsConfig, commands config.Comman
 	s.commandProjectDirs = append([]string(nil), commands.ProjectDirs...)
 	s.ruleUserDirs = append([]string(nil), rules.UserDirs...)
 	s.ruleProjectDirs = append([]string(nil), rules.ProjectDirs...)
+	s.rulePromptPrefix = rules.PromptPrefixEnabled()
+	s.ruleMetaSystemPrompt = rules.MetaSystemPromptEnabled()
 	s.subAgentUserDirs = append([]string(nil), subAgents.UserDirs...)
 	s.subAgentProjectDirs = append([]string(nil), subAgents.ProjectDirs...)
 	// 清缓存：让下次 probe / list commands / list modes 重新扫描
@@ -1847,7 +1855,7 @@ func (s *Service) PromptWithExecution(ctx context.Context, sessionID, prompt str
 			return nil, fmt.Errorf("激活会话-建立连接: %w", actErr)
 		}
 		s.debugBindPending(session.AgentType, session.ID)
-		newAgentSID, configOptions, modes, actErr := conn.NewSession(ctx, cwd, s.sessionAdditionalDirs(session, cwd), s.sessionMCPServers(session.UserID, conn.McpCapabilities()), s.rulesSystemPrompt(cwd))
+		newAgentSID, configOptions, modes, actErr := conn.NewSession(ctx, cwd, s.sessionAdditionalDirs(session, cwd), s.sessionMCPServers(session.UserID, conn.McpCapabilities()), s.rulesSystemPromptForMeta(cwd))
 		s.debugClearPending(session.AgentType)
 		if actErr != nil {
 			return nil, fmt.Errorf("激活会话-创建 ACP 会话: %w", actErr)
@@ -1923,6 +1931,19 @@ func (s *Service) PromptWithExecution(ctx context.Context, sessionID, prompt str
 	// 注入工作区附加目录上下文，让 AI 知晓可访问的额外目录
 	if dirCtx := s.workspaceDirContext(session); dirCtx != "" {
 		agentPrompt = dirCtx + "\n" + agentPrompt
+	}
+	// 首轮兜底注入 alwaysApply 规则：把规则正文前置拼到用户 prompt 前。
+	// 这是通用通道——ACP 规定所有 agent 必须处理 prompt，对不认 _meta.systemPrompt 的
+	// agent（CodeBuddy/Qoder/Devin 等）也能让规则真正生效。仅首轮注入以省 token：
+	// 首轮注入的规则通常会被 agent 写进自身的 system 记忆。
+	// 用 session.LastPrompt == "" 判定首轮：该字段只在下方 UpdateLastPrompt 写入，
+	// 发前的 setConfigOption/切模式/自动恢复都不会触碰，是最干净的物理首轮信号。
+	if s.rulePromptPrefix && session.LastPrompt == "" {
+		if ruleBody := s.rulesSystemPrompt(sessionCwd(session, s.workspaces)); ruleBody != "" {
+			wrapped := wrapRulePrompt(ruleBody)
+			agentPrompt = wrapped + "\n" + agentPrompt
+			slog.Info("首轮 prompt 前置注入规则", "session", sessionID, "agent", session.AgentType, "rule_chars", len(ruleBody), "wrapped_chars", len(wrapped))
+		}
 	}
 	slog.Debug("发送 agent prompt",
 		"session", sessionID,
@@ -2867,6 +2888,21 @@ func (s *Service) rulesSystemPrompt(cwd string) string {
 	return AlwaysApplySystemPrompt(cwd, s.ruleUserDirs, s.ruleProjectDirs)
 }
 
+// rulesSystemPromptForMeta 返回用于 session/new _meta.systemPrompt 通道的规则正文。
+// 受 ruleMetaSystemPrompt 配置控制：关闭时返回空串（不走该通道，仅靠首轮 prompt 前置兜底）。
+func (s *Service) rulesSystemPromptForMeta(cwd string) string {
+	if !s.ruleMetaSystemPrompt {
+		return ""
+	}
+	return s.rulesSystemPrompt(cwd)
+}
+
+// wrapRulePrompt 把规则正文包成结构化标签块，供首轮 prompt 前置注入。
+// 沿用 workspaceDirContext 的 <tag>...</tag> 约定，让 agent 区分系统注入与用户原话。
+func wrapRulePrompt(body string) string {
+	return "<project_rules>\n以下规则适用于本次会话，请严格遵守：\n\n" + body + "\n</project_rules>"
+}
+
 func (s *Service) mergeCommands(agentCmds []acp.AvailableCommand, cwd string) []acp.AvailableCommand {
 	configured := SlashCommandsToAvailable(ScanSlashCommands(cwd, s.commandUserDirs, s.commandProjectDirs))
 	return MergeAvailableCommands(agentCmds, configured)
@@ -3267,7 +3303,7 @@ func (s *Service) ResumeSession(ctx context.Context, sessionID string) (*models.
 		conn.Client().CancelPermissions(acp.SessionId(oldAgentSID))
 	}
 	s.debugBindPending(session.AgentType, session.ID)
-	newAgentSID, configOptions, modes, err := conn.NewSession(ctx, cwd, s.sessionAdditionalDirs(session, cwd), s.sessionMCPServers(session.UserID, conn.McpCapabilities()), s.rulesSystemPrompt(cwd))
+	newAgentSID, configOptions, modes, err := conn.NewSession(ctx, cwd, s.sessionAdditionalDirs(session, cwd), s.sessionMCPServers(session.UserID, conn.McpCapabilities()), s.rulesSystemPromptForMeta(cwd))
 	s.debugClearPending(session.AgentType)
 	if err != nil {
 		return nil, fmt.Errorf("恢复会话-创建 ACP 会话: %w", err)
@@ -3361,7 +3397,7 @@ func (s *Service) ClearContext(ctx context.Context, sessionID string) (*models.S
 
 	oldAgentSID := session.AgentSessionID
 	s.debugBindPending(session.AgentType, session.ID)
-	newAgentSID, configOptions, modes, err := conn.NewSession(ctx, cwd, s.sessionAdditionalDirs(session, cwd), s.sessionMCPServers(session.UserID, conn.McpCapabilities()), s.rulesSystemPrompt(cwd))
+	newAgentSID, configOptions, modes, err := conn.NewSession(ctx, cwd, s.sessionAdditionalDirs(session, cwd), s.sessionMCPServers(session.UserID, conn.McpCapabilities()), s.rulesSystemPromptForMeta(cwd))
 	s.debugClearPending(session.AgentType)
 	if err != nil {
 		return nil, fmt.Errorf("清理上下文-创建 ACP 会话: %w", err)

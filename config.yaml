@@ -53,13 +53,17 @@ agents:
             - .agents/commands
     rules:
         # Rule 路径：目录（递归扫描 *.mdc / *.md）或单个文件（如 CLAUDE.md）
-        # alwaysApply: true 的规则（或无 frontmatter 的独立文件）经 session/new 的 _meta.systemPrompt 注入
+        # alwaysApply: true 的规则（或无 frontmatter 的独立文件）会注入会话。
         user_dirs:
             - ~/.cursor/rules
             - ~/.claude/CLAUDE.md
         project_dirs:
             - .cursor/rules
             - CLAUDE.md
+        # prompt_prefix: 首轮 prompt 前置注入 alwaysApply 规则正文（通用兜底通道，所有 agent 生效）。默认 true。
+        # prompt_prefix: true
+        # meta_system_prompt: 走 session/new 的 _meta.systemPrompt 注入（ACP 非标准字段，仅 Claude Code 等生效）。默认 true。
+        # meta_system_prompt: true
     subagents:
         # subagent 根目录（递归扫描 *.md：frontmatter 含 name/description/model/tools，markdown 正文当 system_prompt）
         user_dirs:

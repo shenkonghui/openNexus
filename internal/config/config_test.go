@@ -210,6 +210,36 @@ func TestAgentsConfig_FailedTaskAutoRetryOnceEnabled(t *testing.T) {
 	}
 }
 
+func TestRulesConfig_PromptPrefixEnabled(t *testing.T) {
+	var unset RulesConfig
+	if !unset.PromptPrefixEnabled() {
+		t.Error("未配置时期望默认 true")
+	}
+	off := false
+	if (RulesConfig{PromptPrefix: &off}).PromptPrefixEnabled() {
+		t.Error("显式 false 时期望 false")
+	}
+	on := true
+	if !(RulesConfig{PromptPrefix: &on}).PromptPrefixEnabled() {
+		t.Error("显式 true 时期望 true")
+	}
+}
+
+func TestRulesConfig_MetaSystemPromptEnabled(t *testing.T) {
+	var unset RulesConfig
+	if !unset.MetaSystemPromptEnabled() {
+		t.Error("未配置时期望默认 true")
+	}
+	off := false
+	if (RulesConfig{MetaSystemPrompt: &off}).MetaSystemPromptEnabled() {
+		t.Error("显式 false 时期望 false")
+	}
+	on := true
+	if !(RulesConfig{MetaSystemPrompt: &on}).MetaSystemPromptEnabled() {
+		t.Error("显式 true 时期望 true")
+	}
+}
+
 func TestResolveConfigPath_Env(t *testing.T) {
 	t.Setenv("CONFIG_PATH", "/tmp/custom-opennexus-config.yaml")
 	if got := ResolveConfigPath(); got != "/tmp/custom-opennexus-config.yaml" {

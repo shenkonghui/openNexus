@@ -124,3 +124,22 @@ Rule body here.`
 		t.Fatalf("无规则时应返回空: %q", empty)
 	}
 }
+
+func TestWrapRulePrompt(t *testing.T) {
+	out := wrapRulePrompt("Rule body here.")
+	// 必须以 <project_rules> 标签包裹，正文前后有引导语
+	if !strings.HasPrefix(out, "<project_rules>\n") {
+		t.Fatalf("缺少开标签: %q", out)
+	}
+	if !strings.HasSuffix(out, "</project_rules>") {
+		t.Fatalf("缺少闭标签: %q", out)
+	}
+	if !strings.Contains(out, "Rule body here.") {
+		t.Fatalf("正文丢失: %q", out)
+	}
+	// 空正文仍应正常包裹（调用方负责判空，wrapRulePrompt 本身不判）
+	empty := wrapRulePrompt("")
+	if !strings.Contains(empty, "<project_rules>") || !strings.HasSuffix(empty, "</project_rules>") {
+		t.Fatalf("空正文包裹异常: %q", empty)
+	}
+}

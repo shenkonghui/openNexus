@@ -17,7 +17,7 @@
 - **Prompt 输入增强**：`/` 补全 command / skill / mode；`@` 分级引用 Command、Skill、工作区文件与笔记（按标签浏览）
 - **Skills & Commands 发现**：扫描工作区与用户目录下的 `SKILL.md` 与 slash command 文件，在输入框中补全
 - **MCP 集成**：全局 MCP server 配置（`mcpServers` JSON）自动注入所有 Agent 会话；内置笔记 MCP 和子 Agent MCP 服务
-- **规则扫描**：自动发现用户和项目目录下的规则文件（`.mdc` / `.md`）并注入 Agent 会话
+- **规则扫描**：自动发现用户和项目目录下的规则文件（`.mdc` / `.md`）并注入 Agent 会话；支持 `_meta.systemPrompt`（Claude Code 等）与首轮 prompt 前置（通用兜底，所有 Agent 生效）双通道注入
 - **连接健康检查与自动重连**：后台定期检测各 Agent 连接状态，断线自动重连；侧边栏实时展示连接状态
 - **权限系统**：Agent 发起敏感操作时弹出用户审批对话框，审查参数后决定是否放行
 - **沙箱效果测试**：在全局沙箱开启且 Agent 进程真正运行在 OS 沙箱内的前提下，向 Agent 发送预设的命令 prompt 让其真正执行，通过工具调用的退出码验证沙箱是否有效隔离了危险操作。沙箱未开启或降级为直通执行时拒绝执行。内置 16 条默认用例覆盖 6 个文件系统边界类别（写工作目录外/内、写系统目录、写敏感路径、写主目录、删除外部文件），支持通过 prompt 自定义命令、设置期望被阻止/放行，可一键并行测试全部 Agent
@@ -197,6 +197,13 @@ make electron-run     # 启动已安装的应用
 配置文件查找顺序：`CONFIG_PATH` → `~/.openNexus/config.yaml` → `./config.yaml`。数据库与会话数据默认均在 `~/.openNexus/`。
 
 Agent 的连接命令、参数、API Key 等可在前端「设置」页面动态管理，修改后实时生效。Skills、Commands、Rules、Sub-Agents、MCP 等均可通过 `config.yaml` 中的用户/项目目录配置。
+
+**规则注入策略**：`alwaysApply: true`（或无 frontmatter 的独立文件，如 `CLAUDE.md`）的规则会注入会话，提供两条可独立开关的通道：
+
+- `agents.rules.prompt_prefix`（默认 `true`）：把规则正文前置拼到**首轮**用户 prompt 前。这是通用兜底通道——ACP 规定所有 Agent 必须处理 prompt，对不认 `_meta.systemPrompt` 的 Agent（CodeBuddy / Qoder / Devin 等）也能让规则真正生效。
+- `agents.rules.meta_system_prompt`（默认 `true`）：走 `session/new` 的 `_meta.systemPrompt` 注入。该通道是 ACP 非标准扩展，仅 Claude Code 等主动读取该字段的 Agent 生效，但对这些 Agent 更干净（规则不占用用户 prompt）。
+
+两者默认同时开启：支持 `_meta` 的 Agent 走干净通道，不支持的 Agent 由 prompt 前置兜底。若你的 Agent 全部支持 `_meta` 且想省 token，可关闭 `prompt_prefix`。
 
 ## 数据迁移（自动）
 
