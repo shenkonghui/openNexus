@@ -12,10 +12,12 @@ A multi-Agent orchestration and conversation platform based on the [Agent Client
 - **File Browsing & Editing**: Browse directories, view and edit files within the session workspace (CodeMirror with multi-language syntax highlighting).
 - **Terminal**: WebSocket-based xterm terminal for direct session workspace interaction.
 - **Scheduled Tasks**: Cron-driven task scheduling with automatic session creation and prompt execution. View execution history.
+- **Task Assistant**: Multi-task orchestration with git worktree isolation, goal auto-continuation, and a multi-task grid mode for live parallel output. Completed tasks automatically collapse into compact cards in the rightmost column, keeping the workspace focused on active tasks.
 - **Sub-Agents**: Define reusable sub-agents as markdown files (frontmatter with name/description/model/tools); invoke them from any agent session via the built-in MCP server.
 - **Notes**: Quick capture with `#tag` parsing, tag filtering, Markdown rendering, and optional Agent-based auto-classification.
 - **Prompt Input Enhancements**: `/` completes commands, skills, and modes; `@` provides hierarchical references to commands, skills, workspace files, and notes (browse by tag).
 - **Skills & Commands Discovery**: Scans `SKILL.md` and slash command files under workspace and user directories for autocomplete.
+- **Skill Directory Upload**: Upload local Skill directories directly from the capability panel to the project's `.agents/skills` (default) or `.claude/skills` directory; uploaded skills are immediately discovered and listed.
 - **MCP Integration**: Global MCP server configuration (`mcpServers` JSON) shared across all agent sessions. Built-in MCP servers for Notes and Sub-Agents. Editable in the Settings page.
 - **Rule Scanning**: Automatically discovers and injects rules (`.mdc` / `.md`) from user and project directories into agent sessions; dual-channel injection via `_meta.systemPrompt` (Claude Code et al.) and first-turn prompt prefix (universal fallback, works with all agents).
 - **Health Check & Auto-Reconnect**: Background agent connection health monitoring with automatic reconnection on failure. Real-time status badges in the sidebar.

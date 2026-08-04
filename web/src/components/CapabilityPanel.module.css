@@ -229,3 +229,36 @@
 .dotBad {
   background: var(--danger, #c0392b);
 }
+
+.sectionHeadRow {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.sectionHeadRow .sectionHead {
+  flex: 1;
+  min-width: 0;
+}
+
+.sectionActions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+  padding-right: 8px;
+}
+
+.uploadOk {
+  padding: 4px 12px 4px 30px;
+  font-size: 11px;
+  color: var(--success, #2e7d32);
+  word-break: break-all;
+}
+
+.uploadErr {
+  padding: 4px 12px 4px 30px;
+  font-size: 11px;
+  color: var(--danger, #c0392b);
+  word-break: break-all;
+}

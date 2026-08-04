@@ -938,6 +938,9 @@
     "emptyCommands": "暂无可用命令",
     "skills": "技能",
     "emptySkills": "暂无可用技能",
+    "uploadSkill": "上传本地 Skill 目录",
+    "skillUploadNoCwd": "当前无工作目录，无法上传",
+    "skillUploadOk": "已上传 {{count}} 个文件到 {{dir}}",
     "mcp": "MCP 工具",
     "mcpProbing": "正在探测 MCP server...",
     "emptyMcp": "未配置 MCP server"
@@ -1071,6 +1074,8 @@
     "expandAll": "多任务模式",
     "expandAllHint": "平铺展开所有任务窗口，实时查看每个任务的输出",
     "collapseGrid": "退出多任务",
+    "completedTitle": "已完成",
+    "completedEmpty": "暂无已完成任务",
     "liveEmpty": "暂无输出",
     "taskPromptSent": "已发送到任务「{{title}}」，实时输出见任务窗口或其会话页。",
     "taskCmdNotFound": "未找到任务 {{id}}",

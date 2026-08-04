@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"fmt"
 	"io/fs"
 	"net/http"
 	"os"
@@ -31,15 +32,15 @@ type fileEntry struct {
 // FileSystemHandler 提供本地文件系统目录浏览能力（用于前端目录选择器）。
 // 扫描目录配置支持热刷新（SetScanDirs），故用 RWMutex 保护。
 type FileSystemHandler struct {
-	mu                   sync.RWMutex
-	skillUserDirs        []string
-	skillProjectDirs     []string
-	commandUserDirs      []string
-	commandProjectDirs   []string
-	ruleUserDirs         []string
-	ruleProjectDirs      []string
-	subAgentUserDirs     []string
-	subAgentProjectDirs  []string
+	mu                  sync.RWMutex
+	skillUserDirs       []string
+	skillProjectDirs    []string
+	commandUserDirs     []string
+	commandProjectDirs  []string
+	ruleUserDirs        []string
+	ruleProjectDirs     []string
+	subAgentUserDirs    []string
+	subAgentProjectDirs []string
 }
 
 // NewFileSystemHandler 创建 FileSystemHandler。
@@ -715,5 +716,208 @@ func (h *FileSystemHandler) DeleteEntry(c *gin.Context) {
 	Success(c, http.StatusOK, gin.H{
 		"path":    absPath,
 		"deleted": true,
+	})
+}
+
+// skillUploadMaxSize 单个上传文件的大小上限（10MB），避免大文件撑爆磁盘。
+const skillUploadMaxSize = 10 << 20
+
+// skillUploadMaxFiles 单次上传文件数量上限，避免恶意/误操作上传海量文件。
+const skillUploadMaxFiles = 200
+
+// defaultSkillProjectSubdir 上传 skill 时默认写入的项目级子目录（相对 cwd）。
+const defaultSkillProjectSubdir = ".agents/skills"
+
+// UploadSkill POST /api/v1/filesystem/skills/upload?path=<项目cwd>&target_subdir=<可选>
+// 接收前端通过 <input webkitdirectory> 选择的本地 skill 目录（multipart/form-data），
+// 按原始目录结构写入项目 cwd 下的 skills 扫描目录（默认 .agents/skills），
+// 使其立即可被 ScanSkills 发现并在能力面板展示。
+//
+// 落盘策略（安全）：先写入一个临时 staging 目录，全部文件落盘且校验通过（必须含 SKILL.md）
+// 后，才把 staging 内的文件移动到 targetRoot。任何校验失败或中途出错时只清理 staging
+// 目录（由本请求创建，可安全整体删除），绝不删除 targetRoot——后者是项目共享的 skills
+// 目录，可能已存在其他 skill，误删会造成用户数据丢失。
+//
+// multipart 字段：
+//   - files：一个或多个文件部分（与 workspace uploads 一致）
+//   - relative_paths：与 files 一一对应的表单字段，值为每个文件在所选目录中的相对路径
+//     （来自浏览器 File.webkitRelativePath，如 my-skill/SKILL.md）
+//
+// 校验：上传内容必须包含 SKILL.md；相对路径不能逃逸目标目录；单文件 ≤10MB；文件数 ≤200。
+func (h *FileSystemHandler) UploadSkill(c *gin.Context) {
+	// 1. 解析并校验项目 cwd
+	cwd := strings.TrimSpace(c.Query("path"))
+	if cwd == "" {
+		Fail(c, http.StatusBadRequest, "MISSING_PATH", "缺少 path 参数（项目工作目录）")
+		return
+	}
+	absCwd, err := filepath.Abs(cwd)
+	if err != nil {
+		Fail(c, http.StatusBadRequest, "INVALID_PATH", "路径无效")
+		return
+	}
+	if info, err := os.Stat(absCwd); err != nil || !info.IsDir() {
+		Fail(c, http.StatusBadRequest, "PATH_NOT_FOUND", "项目目录不存在或不是目录")
+		return
+	}
+
+	// 2. 解析目标子目录（相对 cwd），默认 .agents/skills
+	subdir := strings.TrimSpace(c.DefaultQuery("target_subdir", defaultSkillProjectSubdir))
+	if subdir == "" {
+		subdir = defaultSkillProjectSubdir
+	}
+	// 安全校验：子目录不能逃逸 cwd（防止 ../../）
+	subdir = filepath.Clean(filepath.FromSlash(subdir))
+	if strings.HasPrefix(subdir, "..") || filepath.IsAbs(subdir) {
+		Fail(c, http.StatusBadRequest, "INVALID_TARGET", "目标子目录不能为绝对路径或逃逸项目目录")
+		return
+	}
+	targetRoot := filepath.Join(absCwd, subdir)
+
+	// 3. 解析 multipart
+	if err := c.Request.ParseMultipartForm(skillUploadMaxSize); err != nil {
+		Fail(c, http.StatusBadRequest, "INVALID_REQUEST", "解析 multipart 失败: "+err.Error())
+		return
+	}
+	form := c.Request.MultipartForm
+	if form == nil {
+		Fail(c, http.StatusBadRequest, "INVALID_REQUEST", "未包含任何文件")
+		return
+	}
+	files := form.File["files"]
+	if len(files) == 0 {
+		Fail(c, http.StatusBadRequest, "INVALID_REQUEST", "未包含任何文件")
+		return
+	}
+	if len(files) > skillUploadMaxFiles {
+		Fail(c, http.StatusBadRequest, "TOO_MANY_FILES",
+			fmt.Sprintf("上传文件数量 %d 超过上限 %d", len(files), skillUploadMaxFiles))
+		return
+	}
+	// relative_paths 与 files 一一对应（来自 webkitRelativePath）
+	relPaths := form.Value["relative_paths"]
+	if len(relPaths) != len(files) {
+		Fail(c, http.StatusBadRequest, "INVALID_REQUEST",
+			fmt.Sprintf("relative_paths 数量 %d 与 files 数量 %d 不一致", len(relPaths), len(files)))
+		return
+	}
+
+	// 4. 创建 staging 临时目录：所有文件先落盘到这里，校验通过后再移动到 targetRoot。
+	// staging 置于系统临时目录，与 targetRoot 完全隔离，失败时只清理 staging（本请求创建，
+	// 可安全整体删除），绝不触碰 targetRoot 中已有的其他 skill。
+	stagingRoot, err := os.MkdirTemp("", "nexus-skill-upload-*")
+	if err != nil {
+		Fail(c, http.StatusInternalServerError, "STAGING_FAILED", "创建临时目录失败: "+err.Error())
+		return
+	}
+	// 无论成功失败，最终都清理 staging（成功时文件已被移走，目录为空）。
+	defer func() { _ = os.RemoveAll(stagingRoot) }()
+
+	// 5. 逐个落盘到 staging 并收集结果
+	type savedEntry struct {
+		RelativePath string `json:"relative_path"`
+		Size         int64  `json:"size"`
+	}
+	saved := make([]savedEntry, 0, len(files))
+	hasSkillMD := false
+	for i, fh := range files {
+		rel := strings.TrimSpace(relPaths[i])
+		if rel == "" {
+			// 回退到文件名（非目录上传场景）
+			rel = fh.Filename
+		}
+		// 统一为平台分隔符并清洗
+		rel = filepath.Clean(filepath.FromSlash(rel))
+		if strings.HasPrefix(rel, "..") || filepath.IsAbs(rel) {
+			Fail(c, http.StatusBadRequest, "INVALID_PATH", "非法的相对路径: "+relPaths[i])
+			return
+		}
+		if fh.Size > skillUploadMaxSize {
+			Fail(c, http.StatusBadRequest, "FILE_TOO_LARGE",
+				fmt.Sprintf("文件 %s 过大（%d 字节，上限 %d）", rel, fh.Size, skillUploadMaxSize))
+			return
+		}
+		// 落盘到 staging（与 targetRoot 同结构），二次防护确保仍在 staging 之下
+		dst := filepath.Join(stagingRoot, rel)
+		if !isWithinDir(stagingRoot, dst) {
+			Fail(c, http.StatusBadRequest, "INVALID_PATH", "文件路径逃逸目标目录: "+relPaths[i])
+			return
+		}
+		if filepath.Base(rel) == "SKILL.md" {
+			hasSkillMD = true
+		}
+		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+			Fail(c, http.StatusInternalServerError, "MKDIR_FAILED", "创建目录失败: "+err.Error())
+			return
+		}
+		if err := c.SaveUploadedFile(fh, dst); err != nil {
+			Fail(c, http.StatusInternalServerError, "SAVE_FAILED", "保存文件失败: "+err.Error())
+			return
+		}
+		saved = append(saved, savedEntry{RelativePath: filepath.ToSlash(rel), Size: fh.Size})
+	}
+
+	if !hasSkillMD {
+		Fail(c, http.StatusBadRequest, "NO_SKILL_MD", "上传内容必须包含 SKILL.md 文件")
+		return
+	}
+
+	// 6. 校验全部通过：把 staging 内的文件移动到 targetRoot。
+	// 仅覆盖本次上传涉及的文件（同路径文件覆盖，与原 SaveUploadedFile 行为一致），
+	// 不影响 targetRoot 中已有的其他 skill。
+	if err := os.MkdirAll(targetRoot, 0o755); err != nil {
+		Fail(c, http.StatusInternalServerError, "MKDIR_FAILED", "创建目标目录失败: "+err.Error())
+		return
+	}
+	if err := moveTree(stagingRoot, targetRoot); err != nil {
+		Fail(c, http.StatusInternalServerError, "MOVE_FAILED", "移动文件到目标目录失败: "+err.Error())
+		return
+	}
+
+	Success(c, http.StatusOK, gin.H{
+		"target_dir": targetRoot,
+		"files":      saved,
+		"count":      len(saved),
+	})
+}
+
+// moveTree 把 src 下所有文件/目录移动到 dst（已存在）之下，保留相对结构。
+// 同名文件覆盖（与 SaveUploadedFile 行为一致）；同名目录则合并进入。
+// src 应为本次上传独占的 staging 目录，dst 可包含其他无关文件，本函数只动 src 中存在的路径。
+func moveTree(src, dst string) error {
+	return filepath.WalkDir(src, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(src, p)
+		if err != nil {
+			return err
+		}
+		if rel == "." {
+			return nil
+		}
+		target := filepath.Join(dst, rel)
+		if d.IsDir() {
+			// 目标目录可能已存在（其他 skill 或本次上传的子目录），MkdirAll 幂等
+			return os.MkdirAll(target, 0o755)
+		}
+		// 文件：先确保父目录存在，再覆盖写入
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			return err
+		}
+		// 目标文件可能已存在，先移除再 Rename（跨文件系统时 Rename 会失败，回退到写拷贝）
+		_ = os.Remove(target)
+		if err := os.Rename(p, target); err != nil {
+			// 回退：读源文件写目标（跨文件系统场景）
+			data, rerr := os.ReadFile(p)
+			if rerr != nil {
+				return rerr
+			}
+			if werr := os.WriteFile(target, data, 0o644); werr != nil {
+				return werr
+			}
+			_ = os.Remove(p)
+		}
+		return nil
 	})
 }

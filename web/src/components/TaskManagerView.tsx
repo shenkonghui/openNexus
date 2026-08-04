@@ -15,9 +15,12 @@ import TaskManagerChatPanel from './TaskManagerChatPanel'
 import TaskLiveWindow from './TaskLiveWindow'
 import SplitPane from './SplitPane'
 import styles from './TaskManagerView.module.css'
-import { ChevronRight, ChevronDown, MessagesSquare, GitBranch, Plus, FileJson, List, Play, PlayCircle, Square, Trash2, Target, LayoutGrid, Gauge } from 'lucide-react'
+import { ChevronRight, ChevronDown, MessagesSquare, GitBranch, Plus, FileJson, List, Play, PlayCircle, Square, Trash2, Target, LayoutGrid, Gauge, CheckCircle2, ExternalLink } from 'lucide-react'
 
 const ACTIVE_STATUSES = new Set(['queued', 'running'])
+
+// 已完成（终态）状态：这些任务在多任务网格视图中折叠为紧凑卡片，放到最右侧列。
+const COMPLETED_STATUSES = new Set(['done', 'failed', 'canceled', 'interrupt'])
 
 const GOAL_STATUSES = new Set(['active', 'evaluating', 'achieved', 'stopped'])
 
@@ -346,79 +349,146 @@ export default function TaskManagerView({ workspaceId, cwd, agents, restoreSessi
     </label>
   )
 
-  // 「多任务模式」网格视图：上方任务窗口按浏览器宽度自适应平铺（每格实时订阅其会话输出），
+  // 「多任务模式」网格视图：上方活跃任务窗口按浏览器宽度自适应平铺（每格实时订阅其会话输出），
   // 下方保留任务助手对话（可用 @task:<id> 引用把消息直发到某个任务会话）。
+  // 已完成任务（done/failed/canceled/interrupt）折叠为紧凑卡片，放到最右侧列。
   if (gridMode && gitRepo !== false) {
+    const activeTasks = def.tasks.filter((tk) => !COMPLETED_STATUSES.has(tk.status))
+    const completedTasks = def.tasks.filter((tk) => COMPLETED_STATUSES.has(tk.status))
     return (
-      <SplitPane dir="col" storageKey="taskmanager-grid" defaultFlexes={[3, 2]}>
-        <div className={styles.gridCol}>
-          <div className={styles.toolbar}>
-            <span className={styles.toolbarTitle}>{t('taskmanager.groupTitle')}</span>
-            <div className={styles.toolbarActions}>
-              {maxParallelCtl}
-              {def.tasks.some((tk) => !ACTIVE_STATUSES.has(tk.status)) && (
+      <SplitPane dir="row" storageKey="taskmanager-grid-outer" defaultFlexes={[4, 1]}>
+        <SplitPane dir="col" storageKey="taskmanager-grid" defaultFlexes={[3, 2]}>
+          <div className={styles.gridCol}>
+            <div className={styles.toolbar}>
+              <span className={styles.toolbarTitle}>{t('taskmanager.groupTitle')}</span>
+              <div className={styles.toolbarActions}>
+                {maxParallelCtl}
+                {activeTasks.some((tk) => !ACTIVE_STATUSES.has(tk.status)) && (
+                  <button
+                    type="button"
+                    className={styles.toolbarBtn}
+                    onClick={handleStartAll}
+                    disabled={busy}
+                    title={t('taskmanager.startAll')}
+                  >
+                    <PlayCircle size={14} /> {t('taskmanager.startAll')}
+                  </button>
+                )}
                 <button
                   type="button"
                   className={styles.toolbarBtn}
-                  onClick={handleStartAll}
-                  disabled={busy}
-                  title={t('taskmanager.startAll')}
+                  onClick={toggleGridMode}
+                  title={t('taskmanager.collapseGrid') + ' (⌘⇧L)'}
                 >
-                  <PlayCircle size={14} /> {t('taskmanager.startAll')}
+                  <List size={14} /> {t('taskmanager.collapseGrid')}
                 </button>
+              </div>
+            </div>
+            <div className={styles.gridScroll}>
+              {activeTasks.length === 0 ? (
+                <div className={styles.empty}>{t('taskmanager.empty')}</div>
+              ) : (
+                <div className={styles.grid}>
+                  {activeTasks.map((task) => (
+                    <TaskLiveWindow
+                      key={task.id}
+                      task={task}
+                      onOpen={openTask}
+                      focused={task.id === focusedTaskId}
+                      onFocus={(tk) => setFocusedTaskId(tk.id)}
+                    />
+                  ))}
+                </div>
               )}
-              <button
-                type="button"
-                className={styles.toolbarBtn}
-                onClick={toggleGridMode}
-                title={t('taskmanager.collapseGrid') + ' (⌘⇧L)'}
-              >
-                <List size={14} /> {t('taskmanager.collapseGrid')}
-              </button>
             </div>
           </div>
-          <div className={styles.gridScroll}>
-            {def.tasks.length === 0 ? (
+          <div
+            className={styles.gridChatCol}
+            onMouseDown={(e) => {
+              // 点击输入区（composer：输入框 + 配置栏）时保留已选中的任务焦点，
+              // 以便继续输入并直发到该任务；仅点击消息/助手区域才取消焦点、回到与助手对话。
+              if ((e.target as HTMLElement).closest('[data-composer]')) return
+              setFocusedTaskId(null)
+            }}
+          >
+            {!workspaceId ? (
               <div className={styles.empty}>{t('taskmanager.empty')}</div>
             ) : (
-              <div className={styles.grid}>
-                {def.tasks.map((task) => (
-                  <TaskLiveWindow
-                    key={task.id}
-                    task={task}
-                    onOpen={openTask}
-                    focused={task.id === focusedTaskId}
-                    onFocus={(tk) => setFocusedTaskId(tk.id)}
-                  />
-                ))}
+              <div className={styles.chatBody}>
+                <TaskManagerChatPanel
+                  agents={agents}
+                  workspaceId={workspaceId}
+                  cwd={cwd}
+                  restoreSessionId={restoreSessionId}
+                  tasks={def.tasks}
+                  focusTaskId={focusedTaskId}
+                  onTaskChanged={reloadStatus}
+                />
               </div>
             )}
           </div>
-        </div>
-        <div
-          className={styles.gridChatCol}
-          onMouseDown={(e) => {
-            // 点击输入区（composer：输入框 + 配置栏）时保留已选中的任务焦点，
-            // 以便继续输入并直发到该任务；仅点击消息/助手区域才取消焦点、回到与助手对话。
-            if ((e.target as HTMLElement).closest('[data-composer]')) return
-            setFocusedTaskId(null)
-          }}
-        >
-          {!workspaceId ? (
-            <div className={styles.empty}>{t('taskmanager.empty')}</div>
-          ) : (
-            <div className={styles.chatBody}>
-              <TaskManagerChatPanel
-                agents={agents}
-                workspaceId={workspaceId}
-                cwd={cwd}
-                restoreSessionId={restoreSessionId}
-                tasks={def.tasks}
-                focusTaskId={focusedTaskId}
-                onTaskChanged={reloadStatus}
-              />
-            </div>
-          )}
+        </SplitPane>
+        {/* 最右侧列：已完成任务折叠为紧凑卡片 */}
+        <div className={styles.completedCol}>
+          <div className={styles.completedHeader}>
+            <CheckCircle2 size={14} />
+            <span className={styles.completedTitle}>{t('taskmanager.completedTitle')}</span>
+            <span className={styles.completedCount}>{completedTasks.length}</span>
+          </div>
+          <div className={styles.completedScroll}>
+            {completedTasks.length === 0 ? (
+              <div className={styles.completedEmpty}>{t('taskmanager.completedEmpty')}</div>
+            ) : (
+              completedTasks.map((task) => (
+                <div
+                  key={task.id}
+                  className={styles.completedCard}
+                  onMouseDown={() => setFocusedTaskId(task.id)}
+                >
+                  <div className={styles.completedCardHeader}>
+                    <span
+                      className={styles.completedCardName}
+                      role="button"
+                      tabIndex={0}
+                      title={t('taskmanager.openTask')}
+                      onClick={() => openTask(task)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openTask(task) }
+                      }}
+                    >{task.title}</span>
+                    <button
+                      type="button"
+                      className={styles.completedOpenBtn}
+                      onClick={() => openTask(task)}
+                      title={t('taskmanager.openChat')}
+                    >
+                      <ExternalLink size={12} />
+                    </button>
+                  </div>
+                  <div className={styles.completedCardMeta}>
+                    {task.branch && (
+                      <span className={styles.completedBranch} title={task.worktree_path || task.branch}>
+                        <GitBranch size={10} />
+                        <span className={styles.completedBranchName}>{task.branch}</span>
+                      </span>
+                    )}
+                    {task.goal && GOAL_STATUSES.has(task.goal.status) && (
+                      <span
+                        className={`${styles.completedGoal} ${styles[`goal_${task.goal.status}`] || ''}`}
+                        title={task.goal.condition}
+                      >
+                        <Target size={10} />
+                        {t(`taskmanager.goal_${task.goal.status}`)}
+                      </span>
+                    )}
+                    <span className={`${styles.completedStatus} ${styles[`status_${task.status}`] || ''}`}>
+                      {t(`taskmanager.status_${task.status}`)}
+                    </span>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
         </div>
       </SplitPane>
     )

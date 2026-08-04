@@ -12,10 +12,12 @@
 - **文件浏览与编辑**：在会话工作区内浏览目录、查看与编辑文件（集成 CodeMirror，支持多语言语法高亮）
 - **终端交互**：基于 WebSocket 的 xterm 终端，可直接操作会话工作区
 - **定时任务**：支持 cron 表达式调度，自动创建会话并发送 prompt，可查看历史执行记录
+- **任务助手**：基于 git worktree 隔离的多任务并发编排，支持 goal 自动续轮、多任务模式实时平铺查看各任务输出；已完成的任务自动折叠为紧凑卡片收纳到最右侧列，保持工作区聚焦于进行中的任务
 - **子 Agent (Sub-Agent)**：通过 Markdown 文件定义可复用的子 Agent（frontmatter 含 name/description/model/tools），通过内置 MCP 服务从任意会话中调用
 - **笔记**：快速记录想法，支持 `#标签` 解析、按标签筛选、Markdown 渲染；可配置 Agent 自动分类任务
 - **Prompt 输入增强**：`/` 补全 command / skill / mode；`@` 分级引用 Command、Skill、工作区文件与笔记（按标签浏览）
 - **Skills & Commands 发现**：扫描工作区与用户目录下的 `SKILL.md` 与 slash command 文件，在输入框中补全
+- **Skill 目录上传**：在能力面板可直接选择本地 Skill 目录上传到项目的 `.agents/skills`（默认）或 `.claude/skills` 下，上传后立即可被扫描发现并在能力面板展示
 - **MCP 集成**：全局 MCP server 配置（`mcpServers` JSON）自动注入所有 Agent 会话；内置笔记 MCP 和子 Agent MCP 服务
 - **规则扫描**：自动发现用户和项目目录下的规则文件（`.mdc` / `.md`）并注入 Agent 会话；支持 `_meta.systemPrompt`（Claude Code 等）与首轮 prompt 前置（通用兜底，所有 Agent 生效）双通道注入
 - **连接健康检查与自动重连**：后台定期检测各 Agent 连接状态，断线自动重连；侧边栏实时展示连接状态

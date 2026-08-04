@@ -211,7 +211,7 @@ function renderCapabilities(ctx: PanelCtx) {
   // 会话已存在时取会话 agent；新建任务页回退到下拉选中的 agent
   const agentType = ctx.session?.agent_type || ctx.selectedAgent || ''
   if (!agentType) return <EmptyPanel hintKey="panel.requireSession" />
-  return <CapabilityPanel agentType={agentType} commands={ctx.commands} skills={ctx.skills} />
+  return <CapabilityPanel agentType={agentType} commands={ctx.commands} skills={ctx.skills} cwd={ctx.cwd || ''} onSkillsUploaded={ctx.onSkillsUploaded} />
 }
 
 function renderRecords(ctx: PanelCtx) {

@@ -1222,6 +1222,7 @@ export default function ChatPage() {
           hasMore,
           loadingMore,
           onLoadMore: loadMore,
+          onSkillsUploaded: () => { if (sessionId) listSkills(sessionId).then((r) => setSkills(r.data.skills || [])).catch(() => {}) },
           ...({
             __chatConfig: {
               configBar: 'coding',
@@ -1359,6 +1360,11 @@ export default function ChatPage() {
       // 新建任务页的输入框采用受控值，支持从任务管理入口预填（draftPrompt）。
       restoreInput,
       onRestoreInputChange: setRestoreInput,
+      onSkillsUploaded: () => {
+        listSkillsByPath(workspaceCwd || undefined)
+          .then((r) => setHomeSkills(r.data.skills || []))
+          .catch(() => {})
+      },
       // 统一配置栏：Agent + 模式 + 模型（与会话详情页共用同一套内置 configBar）
       ...({
         __chatConfig: {

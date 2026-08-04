@@ -193,6 +193,7 @@ func Setup(authSvc *services.AuthService, jwtSvc *services.JWTService, agentRout
 			protected.GET("/filesystem/list", fsHandler.ListFiles)
 			protected.GET("/filesystem/docs", fsHandler.ListDocs)
 			protected.GET("/filesystem/skills", fsHandler.Skills)
+			protected.POST("/filesystem/skills/upload", fsHandler.UploadSkill)
 			protected.GET("/filesystem/commands", fsHandler.Commands)
 			protected.GET("/filesystem/rules", fsHandler.Rules)
 			protected.GET("/filesystem/sub-agents", fsHandler.SubAgents)

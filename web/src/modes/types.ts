@@ -137,6 +137,9 @@ export interface PanelCtx {
   loadingMore?: boolean
   /** 加载更早消息的回调 */
   onLoadMore?: () => void
+
+  /** Skill 上传成功后的回调（能力面板上传本地 skill 目录后刷新 skills 列表） */
+  onSkillsUploaded?: () => void
 }
 
 /** 面板注册项 */

@@ -69,6 +69,27 @@ func (p *promptPersister) enqueue(op persistOp) {
 	}
 }
 
+// tryEnqueue 非阻塞提交一条落盘操作，队列满或 writer 已退出时丢弃并返回 false。
+// 用于 agent_thought_chunk 等高频可丢 delta：落盘由 writer 攒批合并拼接，
+// 丢几条 delta 不影响最终合并记录完整性（前端实时流已推、断点续传从仓库读合并文本）。
+// 关键作用是打破「writer 慢 → enqueue 阻塞 → 消费循环卡死 → ACP 订阅 buffer 满」的反噬链。
+func (p *promptPersister) tryEnqueue(op persistOp) bool {
+	select {
+	case <-p.done:
+		// writer 已退出：thought chunk 攒批已 flush，丢弃本条 delta 不丢历史
+		return false
+	default:
+	}
+	select {
+	case p.q <- op:
+		return true
+	default:
+		slog.Debug("promptPersister 队列满，丢弃 thought chunk delta",
+			"session", op.msg.SessionID, "sequence", op.msg.Sequence)
+		return false
+	}
+}
+
 // barrier 同步等待 writer 排空当前队列并 flush 全部攒批。
 // 用于断点续传订阅：保证订阅时刻之前广播过的消息都已可从仓库读到。
 func (p *promptPersister) barrier() {

@@ -123,19 +123,19 @@ type Service struct {
 	gatewayEndpoint string
 	gatewayToken    string
 	// gatewayTransport 网关注入传输形态：stdio（默认，统一 stdio 桥）/ auto（按握手能力选 http）。
-	gatewayTransport    string
+	gatewayTransport string
 	// selfExe 主程序可执行文件路径（启动时注入），供 gatewayBridgeEntry 构造 stdio 桥子进程命令。
-	selfExe string
-	commandUserDirs     []string
-	commandProjectDirs  []string
-	ruleUserDirs        []string
-	ruleProjectDirs     []string
+	selfExe            string
+	commandUserDirs    []string
+	commandProjectDirs []string
+	ruleUserDirs       []string
+	ruleProjectDirs    []string
 	// rulePromptPrefix 控制是否在首轮 prompt 前置注入 alwaysApply 规则（通用兜底通道）。
 	rulePromptPrefix bool
 	// ruleMetaSystemPrompt 控制是否走 session/new 的 _meta.systemPrompt 注入规则（仅部分 agent 生效）。
 	ruleMetaSystemPrompt bool
-	subAgentUserDirs    []string
-	subAgentProjectDirs []string
+	subAgentUserDirs     []string
+	subAgentProjectDirs  []string
 	// goalRoleUserDirs/goalRoleProjectDirs goal 评估角色扫描目录（SetGoalRoleDirs 注入）。
 	goalRoleUserDirs    []string
 	goalRoleProjectDirs []string
@@ -2154,7 +2154,9 @@ func (s *Service) PromptWithExecution(ctx context.Context, sessionID, prompt str
 						// 思考片段实时流式推送；out 满时丢弃（非阻塞，与 usage/tool_update
 						// 一致），杜绝单个慢 SSE 客户端卡死消费循环导致 ACP 订阅 buffer
 						// 满而丢弃 agent_message_chunk。落库由 writer 攒批合并。
-						pw.enqueue(persistOp{msg: msg})
+						// enqueue 亦用非阻塞（tryEnqueue）：thought delta 可丢，避免 writer
+						// 慢时 enqueue 阻塞反噬消费循环导致 ACP 订阅 buffer 满丢弃消息。
+						pw.tryEnqueue(persistOp{msg: msg})
 						bc.broadcast(msg)
 						select {
 						case out <- msg:
@@ -2253,8 +2255,12 @@ func (s *Service) PromptWithExecution(ctx context.Context, sessionID, prompt str
 // CancelSession 取消正在进行的 prompt。
 func (s *Service) CancelSession(ctx context.Context, sessionID string) error {
 	// 用户主动取消视为放弃 goal：否则取消后流正常关闭（finalStatus=done）会误触发自动续轮。
+	// 清除后需通知任务管理服务写回 goal 终态（stopped），否则任务列表会一直显示"goal 生效中"。
 	if s.clearGoal(sessionID) {
 		slog.Info("会话取消，goal 已清除", "session", sessionID)
+		if sess, err := s.GetSession(sessionID); err == nil {
+			s.notifyGoalState(sess, "", nil, "")
+		}
 	}
 	conn, ok := s.connForSession(sessionID)
 	if !ok {

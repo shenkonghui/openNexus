@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -839,7 +840,7 @@ func TestReapIdleConnections_NoRepo(t *testing.T) {
 func TestReapIdleConnections_Disabled(t *testing.T) {
 	s := newTestService(t)
 	s.SetACPConnectionRepo(repository.NewACPConnectionRepository(setupACPTestDB(t)))
-	s.SetIdleTimeout(-1) // 关闭回收
+	s.SetIdleTimeout(-1)    // 关闭回收
 	s.reapIdleConnections() // 应在 effectiveIdleTimeout<=0 处短路，不查 DB
 }
 
@@ -898,5 +899,108 @@ func TestReapIdleConnections_RecentRowKept(t *testing.T) {
 	db.Model(&models.ACPConnection{}).Count(&count)
 	if count != 1 {
 		t.Errorf("近期活动行被误删, 剩余 %d 行, 期望 1", count)
+	}
+}
+
+// mockGoalStateNotifier 记录 GoalStateChanged 调用，用于验证 goal 清除通知。
+type mockGoalStateNotifier struct {
+	mu       sync.Mutex
+	calls    []mockGoalCall
+	notified chan struct{}
+}
+
+type mockGoalCall struct {
+	dbSessionID uint
+	state       *models.TaskGoalState
+}
+
+func (m *mockGoalStateNotifier) GoalStateChanged(dbSessionID uint, state *models.TaskGoalState) {
+	m.mu.Lock()
+	m.calls = append(m.calls, mockGoalCall{dbSessionID: dbSessionID, state: state})
+	m.mu.Unlock()
+	if m.notified != nil {
+		select {
+		case m.notified <- struct{}{}:
+		default:
+		}
+	}
+}
+
+func (m *mockGoalStateNotifier) lastCall() (mockGoalCall, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(m.calls) == 0 {
+		return mockGoalCall{}, false
+	}
+	return m.calls[len(m.calls)-1], true
+}
+
+// TestCancelSessionNotifiesGoalCleared 验证 CancelSession 清除 goal 时会通知
+// GoalStateNotifier（state=nil），使任务管理服务能及时写回 goal 终态，
+// 避免用户手动停止后任务列表仍显示"goal 生效中"。
+func TestCancelSessionNotifiesGoalCleared(t *testing.T) {
+	db := setupACPTestDB(t)
+	repo := repository.NewSessionRepository(db)
+	sess := &models.Session{
+		SessionID: "cancel-goal-test", AgentType: "claude-code", Cwd: "/tmp",
+		Status: models.SessionStatusActive,
+	}
+	if err := repo.Create(sess); err != nil {
+		t.Fatalf("创建会话失败: %v", err)
+	}
+
+	skills, commands, rules, subAgents := testDiscoveryConfig(t)
+	svc := NewService(db, t.TempDir(), config.WorkspaceConfig{DefaultMode: "external"}, skills, commands, rules, subAgents)
+	notifier := &mockGoalStateNotifier{}
+	svc.SetGoalStateNotifier(notifier)
+
+	// 设定 goal
+	svc.setGoal(sess.SessionID, "完成所有测试")
+	if _, ok := svc.getGoal(sess.SessionID); !ok {
+		t.Fatal("setGoal 后应能读到 goal")
+	}
+
+	// CancelSession 会返回 ErrSessionNotFound（无真实连接），但 goal 清除通知应已发出
+	_ = svc.CancelSession(context.Background(), sess.SessionID)
+
+	// goal 内存态应已清除
+	if _, ok := svc.getGoal(sess.SessionID); ok {
+		t.Error("CancelSession 后 goal 应已从内存清除")
+	}
+
+	// GoalStateNotifier 应被调用，且 state 为 nil（表示 goal 已清除）
+	call, ok := notifier.lastCall()
+	if !ok {
+		t.Fatal("CancelSession 清除 goal 后未通知 GoalStateNotifier")
+	}
+	if call.dbSessionID != sess.ID {
+		t.Errorf("通知的 dbSessionID = %d, 期望 %d", call.dbSessionID, sess.ID)
+	}
+	if call.state != nil {
+		t.Errorf("通知的 state 应为 nil（goal 已清除），实际 %+v", call.state)
+	}
+}
+
+// TestCancelSessionNoGoalNoNotify 验证会话无 goal 时 CancelSession 不触发通知。
+func TestCancelSessionNoGoalNoNotify(t *testing.T) {
+	db := setupACPTestDB(t)
+	repo := repository.NewSessionRepository(db)
+	sess := &models.Session{
+		SessionID: "cancel-no-goal", AgentType: "claude-code", Cwd: "/tmp",
+		Status: models.SessionStatusActive,
+	}
+	if err := repo.Create(sess); err != nil {
+		t.Fatalf("创建会话失败: %v", err)
+	}
+
+	skills, commands, rules, subAgents := testDiscoveryConfig(t)
+	svc := NewService(db, t.TempDir(), config.WorkspaceConfig{DefaultMode: "external"}, skills, commands, rules, subAgents)
+	notifier := &mockGoalStateNotifier{}
+	svc.SetGoalStateNotifier(notifier)
+
+	_ = svc.CancelSession(context.Background(), sess.SessionID)
+
+	if _, ok := notifier.lastCall(); ok {
+		t.Error("会话无 goal 时 CancelSession 不应通知 GoalStateNotifier")
 	}
 }

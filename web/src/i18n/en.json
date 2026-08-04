@@ -938,6 +938,9 @@
     "emptyCommands": "No commands available",
     "skills": "Skills",
     "emptySkills": "No skills available",
+    "uploadSkill": "Upload local Skill directory",
+    "skillUploadNoCwd": "No working directory, cannot upload",
+    "skillUploadOk": "Uploaded {{count}} files to {{dir}}",
     "mcp": "MCP Tools",
     "mcpProbing": "Probing MCP servers...",
     "emptyMcp": "No MCP servers configured"
@@ -1071,6 +1074,8 @@
     "expandAll": "Multi-task Mode",
     "expandAllHint": "Tile all task windows and watch each task's live output",
     "collapseGrid": "Exit Multi-task",
+    "completedTitle": "Completed",
+    "completedEmpty": "No completed tasks",
     "liveEmpty": "No output yet",
     "taskPromptSent": "Sent to task \"{{title}}\". Watch live output in its window or session page.",
     "taskCmdNotFound": "Task {{id}} not found",

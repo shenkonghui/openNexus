@@ -239,3 +239,52 @@ export interface DocScanResponse {
 export function listDocs(path: string): Promise<{ data: DocScanResponse }> {
   return apiFetch(`/filesystem/docs?path=${encodeURIComponent(path)}`)
 }
+
+// ===== Skill 目录上传 =====
+
+// 上传 skill 目录后的响应项
+export interface UploadedSkillFile {
+  relative_path: string
+  size: number
+}
+
+// 上传 skill 目录响应
+export interface UploadSkillResponse {
+  target_dir: string
+  files: UploadedSkillFile[]
+  count: number
+}
+
+/**
+ * 上传本地 skill 目录到项目的 skills 扫描目录（默认 .agents/skills）。
+ * 浏览器端通过 <input type="file" webkitdirectory> 选择目录，files 带有
+ * webkitRelativePath（如 my-skill/SKILL.md），后端按原始目录结构落盘。
+ *
+ * 注意：不能复用 apiFetch（强制 application/json），FormData 必须让浏览器自动设置 boundary。
+ *
+ * @param cwd 项目工作目录（绝对路径）
+ * @param files 所选目录下的文件列表（File[]，通常来自 input.files）
+ * @param targetSubdir 可选目标子目录，默认 .agents/skills
+ */
+export async function uploadSkillDirectory(
+  cwd: string,
+  files: File[],
+  targetSubdir?: string,
+): Promise<{ data: UploadSkillResponse }> {
+  const form = new FormData()
+  for (const f of files) {
+    form.append('files', f, f.name)
+    // webkitRelativePath 在通过 webkitdirectory 选择时存在，如 "my-skill/SKILL.md"
+    // 普通文件选择时为空，后端回退到文件名
+    const rel = (f as File & { webkitRelativePath?: string }).webkitRelativePath || f.name
+    form.append('relative_paths', rel)
+  }
+  const params = new URLSearchParams({ path: cwd })
+  if (targetSubdir) params.set('target_subdir', targetSubdir)
+  const resp = await apiFetchRaw(`/filesystem/skills/upload?${params.toString()}`, {
+    method: 'POST',
+    body: form,
+    // 不设 Content-Type，让 fetch 根据 FormData 自动带 multipart boundary
+  })
+  return resp.json()
+}

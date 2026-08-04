@@ -1,8 +1,9 @@
-import { useState, useEffect, useCallback, type ReactNode } from 'react'
+import { useState, useEffect, useCallback, useRef, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
-import { ChevronRight, ChevronDown, RefreshCw, Cpu, SlashSquare, Sparkles, Plug, CheckCircle2, XCircle } from 'lucide-react'
+import { ChevronRight, ChevronDown, RefreshCw, Cpu, SlashSquare, Sparkles, Plug, CheckCircle2, XCircle, Upload, Loader2 } from 'lucide-react'
 import { getAgentCapabilities } from '../api/agents'
 import { getMCPStatus, type MCPServerStatus } from '../api/config'
+import { uploadSkillDirectory } from '../api/filesystem'
 import type { AgentAcpCapabilities, AgentCommand, AgentSkill } from '../types'
 import styles from './CapabilityPanel.module.css'
 
@@ -10,6 +11,9 @@ interface CapabilityPanelProps {
   agentType: string
   commands: AgentCommand[]
   skills: AgentSkill[]
+  cwd?: string
+  /** Skill 上传成功后的回调（父组件重新拉取 skills 列表） */
+  onSkillsUploaded?: () => void
 }
 
 /** 可折叠分组：标题 + 数量徽标 + 内容 */
@@ -19,22 +23,27 @@ function Section({
   count,
   defaultOpen,
   children,
+  actions,
 }: {
   icon: ReactNode
   title: string
   count?: number
   defaultOpen?: boolean
   children: ReactNode
+  actions?: ReactNode
 }) {
   const [open, setOpen] = useState(!!defaultOpen)
   return (
     <div className={styles.section}>
-      <button type="button" className={styles.sectionHead} onClick={() => setOpen((v) => !v)}>
-        {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
-        <span className={styles.sectionIcon}>{icon}</span>
-        <span className={styles.sectionTitle}>{title}</span>
-        {count !== undefined && <span className={styles.countBadge}>{count}</span>}
-      </button>
+      <div className={styles.sectionHeadRow}>
+        <button type="button" className={styles.sectionHead} onClick={() => setOpen((v) => !v)}>
+          {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+          <span className={styles.sectionIcon}>{icon}</span>
+          <span className={styles.sectionTitle}>{title}</span>
+          {count !== undefined && <span className={styles.countBadge}>{count}</span>}
+        </button>
+        {actions && <div className={styles.sectionActions}>{actions}</div>}
+      </div>
       {open && <div className={styles.sectionBody}>{children}</div>}
     </div>
   )
@@ -54,13 +63,18 @@ function CapFlag({ label, on }: { label: string; on: boolean }) {
  * 「能力」面板：展示当前会话 agent 支持的能力全貌——
  * ACP 握手能力、slash 命令（含内置命令与 skill 命令）、技能、MCP server 及其工具。
  */
-export default function CapabilityPanel({ agentType, commands, skills }: CapabilityPanelProps) {
+export default function CapabilityPanel({ agentType, commands, skills, cwd, onSkillsUploaded }: CapabilityPanelProps) {
   const { t } = useTranslation()
   const [caps, setCaps] = useState<AgentAcpCapabilities | null>(null)
   const [mcpServers, setMcpServers] = useState<MCPServerStatus[]>([])
   const [mcpLoading, setMcpLoading] = useState(false)
   const [mcpLoaded, setMcpLoaded] = useState(false)
   const [error, setError] = useState('')
+
+  // Skill 上传状态
+  const [skillUploading, setSkillUploading] = useState(false)
+  const [skillUploadMsg, setSkillUploadMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
+  const skillInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     if (!agentType) return
@@ -92,6 +106,36 @@ export default function CapabilityPanel({ agentType, commands, skills }: Capabil
   }, [])
 
   const mcpToolCount = mcpServers.reduce((n, s) => n + (s.tools?.length || 0), 0)
+
+  // 处理 skill 目录上传：通过隐藏的 <input webkitdirectory> 选择目录后上传到项目 .agents/skills
+  const handleSkillUpload = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const fileList = e.target.files
+    if (!fileList || fileList.length === 0) return
+    if (!cwd) {
+      setSkillUploadMsg({ type: 'error', text: t('capPanel.skillUploadNoCwd') })
+      e.target.value = ''
+      return
+    }
+    setSkillUploading(true)
+    setSkillUploadMsg(null)
+    try {
+      const files = Array.from(fileList)
+      const resp = await uploadSkillDirectory(cwd, files)
+      setSkillUploadMsg({
+        type: 'success',
+        text: t('capPanel.skillUploadOk', { count: resp.data.count, dir: resp.data.target_dir }),
+      })
+      onSkillsUploaded?.()
+    } catch (err) {
+      setSkillUploadMsg({
+        type: 'error',
+        text: err instanceof Error ? err.message : String(err),
+      })
+    } finally {
+      setSkillUploading(false)
+      e.target.value = ''
+    }
+  }, [cwd, onSkillsUploaded, t])
 
   return (
     <div className={styles.panel}>
@@ -146,7 +190,39 @@ export default function CapabilityPanel({ agentType, commands, skills }: Capabil
         </Section>
 
         {/* 技能 */}
-        <Section icon={<Sparkles size={13} />} title={t('capPanel.skills')} count={skills.length}>
+        <Section
+          icon={<Sparkles size={13} />}
+          title={t('capPanel.skills')}
+          count={skills.length}
+          actions={
+            <>
+              <input
+                ref={skillInputRef}
+                type="file"
+                // @ts-expect-error webkitdirectory 是非标准属性，浏览器支持目录选择
+                webkitdirectory=""
+                directory=""
+                multiple
+                style={{ display: 'none' }}
+                onChange={(e) => void handleSkillUpload(e)}
+              />
+              <button
+                type="button"
+                className={styles.iconBtn}
+                onClick={() => skillInputRef.current?.click()}
+                disabled={skillUploading || !cwd}
+                title={cwd ? t('capPanel.uploadSkill') : t('capPanel.skillUploadNoCwd')}
+              >
+                {skillUploading ? <Loader2 size={13} className={styles.spin} /> : <Upload size={13} />}
+              </button>
+            </>
+          }
+        >
+          {skillUploadMsg && (
+            <div className={skillUploadMsg.type === 'success' ? styles.uploadOk : styles.uploadErr}>
+              {skillUploadMsg.text}
+            </div>
+          )}
           {skills.length === 0 ? (
             <div className={styles.hint}>{t('capPanel.emptySkills')}</div>
           ) : (
