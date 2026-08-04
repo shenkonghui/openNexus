@@ -124,6 +124,8 @@ type Service struct {
 	gatewayToken    string
 	// gatewayTransport 网关注入传输形态：stdio（默认，统一 stdio 桥）/ auto（按握手能力选 http）。
 	gatewayTransport    string
+	// selfExe 主程序可执行文件路径（启动时注入），供 gatewayBridgeEntry 构造 stdio 桥子进程命令。
+	selfExe string
 	commandUserDirs     []string
 	commandProjectDirs  []string
 	ruleUserDirs        []string
@@ -352,6 +354,15 @@ func (s *Service) SetMCPConfigPath(path string) {
 	s.mcpConfigPath = strings.TrimSpace(path)
 }
 
+// SetSelfExe 注入主程序可执行文件路径，供 gatewayBridgeEntry 构造 stdio 桥子进程命令。
+// 应在进程启动后尽早调用，避免 gatewayBridgeEntry 每次运行时重复调用 os.Executable。
+func (s *Service) SetSelfExe(path string) {
+	if path == "" {
+		return
+	}
+	s.selfExe = path
+}
+
 // SetGatewayEndpoint 注入 MCP 聚合网关的对外 endpoint 与共享 token。
 // 两者均非空时，configuredMCPServers 会默认把网关注入给所有会话，
 // 并收敛被网关代理的 http/sse 上游——无需用户手动启用网关条目。
@@ -412,16 +423,29 @@ func (s *Service) configuredMCPServers(caps acp.McpCapabilities) []acp.McpServer
 		// stdio 形态（默认）：统一走 stdio 桥——协议基线所有 agent 支持，
 		// 且桥启动时同步拉取网关工具，规避部分 agent http 懒加载导致工具不可见；
 		// auto 形态：仅在 agent 握手声明不支持 http 时才降级 stdio 桥。
-		// 桥不可用（取不到主程序路径）时保留 http 条目，交由末端能力过滤兜底。
 		if s.gatewayTransport != "auto" || !caps.Http {
 			if bridge, ok := s.gatewayBridgeEntry(); ok {
 				gwEntry = bridge
+			} else if !caps.Http && !caps.Sse {
+				// agent 仅支持 stdio（如 devin）但桥不可用，
+				// http 网关条目注入后会被 filterByMcpCapabilities 过滤，
+				// 直接返回 nil 避免静默下发空列表。
+				slog.Warn("agent 仅支持 stdio MCP 传输但 stdio 网关桥不可用，跳过 MCP 注入",
+					"transport", "stdio", "gateway_transport", s.gatewayTransport)
+				return nil
 			}
 		}
 		return ConvertMCPServers(collapseWithGatewayEntry(entries, gwEntry))
 	}
 	// 兼容旧路径：mcp.json 里已手动写入网关条目时仍按原逻辑收敛。
-	return ConvertMCPServers(CollapseViaGateway(entries))
+	result := ConvertMCPServers(CollapseViaGateway(entries))
+	// 兜底告警：agent 仅支持 stdio 但配置中无 stdio 条目时，
+	// filterByMcpCapabilities 会将 http/sse 全部过滤，最终下发空列表。
+	// 此告警仅在该场景触发，避免静默失败——通常说明网关未启用。
+	if !caps.Http && !caps.Sse && len(result) > 0 && len(filterByMcpCapabilities(result, caps)) == 0 {
+		slog.Warn("agent 仅支持 stdio MCP 传输但 MCP 配置中无 stdio 条目，session/new 将下发空列表（请检查 MCP 网关是否已启用）")
+	}
+	return result
 }
 
 // gatewayBridgeEntry 构造 stdio 形态的网关条目：通过 `opennexus mcp-bridge` 子进程
@@ -429,9 +453,9 @@ func (s *Service) configuredMCPServers(caps acp.McpCapabilities) []acp.McpServer
 // 供握手声明 http:false 的 agent（如 devin）接入。
 // endpoint/token 经 env 传递，避免 token 暴露在进程参数里。
 func (s *Service) gatewayBridgeEntry() (NamedMCPServerEntry, bool) {
-	exe, err := os.Executable()
-	if err != nil {
-		slog.Warn("获取主程序可执行文件路径失败，无法注入 stdio 网关桥", "err", err)
+	exe := s.selfExe
+	if exe == "" {
+		slog.Warn("主程序可执行文件路径未设置，无法注入 stdio 网关桥")
 		return NamedMCPServerEntry{}, false
 	}
 	env := map[string]string{

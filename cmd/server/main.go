@@ -181,6 +181,13 @@ func main() {
 		messagesDir = filepath.Join(os.TempDir(), "opennexus-messages")
 	}
 	acpSvc := acp.NewService(db, messagesDir, cfg.Agents.Workspace, cfg.Agents.Skills, cfg.Agents.Commands, cfg.Agents.Rules, cfg.Agents.SubAgents)
+	// 注入主程序可执行文件路径：用于构造 stdio MCP 桥子进程命令（`opennexus mcp-bridge`），
+	// 避免 gatewayBridgeEntry 每次运行时重复调用 os.Executable。
+	if exe, err := os.Executable(); err != nil {
+		log.Printf("获取主程序可执行文件路径失败（stdio MCP 桥将不可用）: %v", err)
+	} else {
+		acpSvc.SetSelfExe(exe)
+	}
 	acpSvc.SetGoalRoleDirs(cfg.Agents.GoalRoles)
 	acpSvc.SetDebugConfig(cfg.Debug)
 	// 注入 acp_connections 心跳表仓库：主 server 写入连接 PID/活动时间/心跳，
