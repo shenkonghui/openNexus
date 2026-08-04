@@ -124,7 +124,7 @@ func TestCreateWorktree_Hardened(t *testing.T) {
 
 // TestWorktreePathFlattensBranchSlash 验证分支名中的 / 被扁平化为 '-'，
 // 不在文件系统上形成多级嵌套子目录（feat/add-login → 单层目录 feat-add-login）。
-// 分别覆盖未注入 baseDir（回退 .worktrees）与注入 baseDir（全局目录）两种场景。
+// 覆盖三种 baseDir 模式：未注入（回退 .worktrees）、绝对路径（全局）、相对路径（按项目）。
 func TestWorktreePathFlattensBranchSlash(t *testing.T) {
 	repo := "/repo/NexusAgent"
 
@@ -135,12 +135,30 @@ func TestWorktreePathFlattensBranchSlash(t *testing.T) {
 		t.Fatalf("回退场景 WorktreePath = %q, want %q", got, want)
 	}
 
-	// 全局目录场景：注入 baseDir 后路径为 <baseDir>/<repo>/<扁平名>
 	t.Cleanup(func() { SetWorktreesBaseDir("") })
+
+	// 全局目录场景：注入绝对路径 baseDir，路径为 <baseDir>/<repo>/<扁平名>
 	SetWorktreesBaseDir("/home/u/.openNexus/worktrees")
 	got = WorktreePath(repo, "feat/sub/name") // 多段 / 全部压平
 	want = filepath.Join("/home/u/.openNexus/worktrees", "NexusAgent", "feat-sub-name")
 	if got != want {
 		t.Fatalf("全局场景 WorktreePath = %q, want %q", got, want)
+	}
+
+	// 相对路径场景：注入相对 baseDir，路径为 <repoRoot>/<baseDir>/<扁平名>，
+	// 使每个项目的 worktree 落在各自仓库内。
+	SetWorktreesBaseDir(".worktrees")
+	got = WorktreePath(repo, "feat/add-login")
+	want = filepath.Join(repo, ".worktrees", "feat-add-login")
+	if got != want {
+		t.Fatalf("相对路径场景 WorktreePath = %q, want %q", got, want)
+	}
+
+	// 相对路径多层场景：build/wt
+	SetWorktreesBaseDir(filepath.Join("build", "wt"))
+	got = WorktreePath(repo, "fix/bug")
+	want = filepath.Join(repo, "build", "wt", "fix-bug")
+	if got != want {
+		t.Fatalf("相对多层场景 WorktreePath = %q, want %q", got, want)
 	}
 }

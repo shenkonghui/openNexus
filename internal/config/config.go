@@ -502,9 +502,13 @@ func (c *Config) resolveDataPaths() error {
 	}
 	// worktrees_dir 默认 ~/.openNexus/worktrees：默认将各任务/会话的 worktree
 	// 集中存放于全局目录下，按 <仓库名>/<分支名> 隔离，避免污染用户代码仓库。
+	// 支持「相对路径」语义：相对路径（如 .worktrees、build/wt）不在此处展开，
+	// 由 acp.WorktreePath 相对「每个项目仓库根」解析，使各项目各自落到仓库内目录；
+	// 绝对路径或 ~/ 开头才展开为全局统一目录。
 	if c.Agents.Workspace.WorktreesDir == "" {
 		c.Agents.Workspace.WorktreesDir = filepath.Join(home, ".openNexus", "worktrees")
-	} else {
+	} else if filepath.IsAbs(c.Agents.Workspace.WorktreesDir) ||
+		strings.HasPrefix(c.Agents.Workspace.WorktreesDir, "~") {
 		abs, err := expandPath(c.Agents.Workspace.WorktreesDir)
 		if err != nil {
 			return fmt.Errorf("worktrees_dir 无效: %w", err)

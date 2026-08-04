@@ -189,7 +189,7 @@ The configuration file is `config.yaml`. Environment variable overrides:
 | `debug.acp.dir` | `DEBUG_ACP_DIR` | ACP debug log directory |
 | `agents.workspace.session_dir` | `AGENTS_WORKSPACE_SESSION_DIR` | Session workspace root (default: `~/.openNexus/session`) |
 | `agents.workspace.default_cwd` | `AGENTS_WORKSPACE_DEFAULT_CWD` | Fixed file path for the default (persistent) workspace (default: `~/.openNexus/workspaces/default`) |
-| `agents.workspace.worktrees_dir` | `AGENTS_WORKSPACE_WORKTREES_DIR` | Root directory for task/session git worktrees, isolated per `<repo>/<branch>` (default: `~/.openNexus/worktrees`) |
+| `agents.workspace.worktrees_dir` | `AGENTS_WORKSPACE_WORKTREES_DIR` | Root directory for task/session git worktrees. An absolute path (default `~/.openNexus/worktrees`) isolates per `<repo>/<branch>` centrally; a relative path (e.g. `.worktrees`) is resolved per project repo root so each project's worktrees stay inside its own repo |
 | `agents.workspace.default_mode` | - | Default workspace mode: `temporary` / `persistent` |
 | `agents.mcp.config_path` | `AGENTS_MCP_CONFIG_PATH` | Global MCP servers config path (default: `~/.agents/mcp.json`) |
 | `agents.idle_timeout` | - | Idle agent connection TTL — idle connections are reaped (process killed, memory freed) and rebuilt on next use. Default `30m`; negative disables |

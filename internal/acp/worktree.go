@@ -21,9 +21,12 @@ const WorktreesDir = ".worktrees"
 // 保证不依赖配置的测试环境不受影响。
 var worktreesBaseDir string
 
-// SetWorktreesBaseDir 设置全局 worktree 存放根目录，由 main 启动时调用一次。
-// 之后 WorktreePath 返回 <dir>/<仓库名>/<name>、EnsureWorktreesDir 确保
-// <dir>/<仓库名> 存在。dir 为空则恢复仓库内 .worktrees 的回退行为。
+// SetWorktreesBaseDir 设置 worktree 存放根目录，由 main 启动时调用一次。
+// dir 的语义：
+//   - 空串：回退为仓库根下 .worktrees/<name>（兼容旧行为，主要服务于测试）；
+//   - 绝对路径：所有项目统一存放于 <dir>/<仓库名>/<name>（默认 ~/.openNexus/worktrees）；
+//   - 相对路径：相对「每个项目仓库根」解析为 <repoRoot>/<dir>/<name>，
+//     例如配 .worktrees 即让各项目 worktree 落在各自仓库内的 .worktrees 下。
 func SetWorktreesBaseDir(dir string) {
 	worktreesBaseDir = dir
 }
@@ -203,19 +206,44 @@ func RemoveWorktree(repoPath, destPath, branch string) error {
 	return nil
 }
 
-// WorktreePath 返回 worktree 的绝对路径。
-// 注入了全局根目录时为 <baseDir>/<仓库名>/<name>（默认 ~/.openNexus/worktrees/<repo>/<name>）；
-// 否则回退为仓库根下 .worktrees/<name>（兼容旧测试与未配置场景）。
+// WorktreePath 返回 worktree 的绝对路径。根据 worktreesBaseDir 的语义分三种：
+//   - 空串（未配置/测试）：仓库根下 .worktrees/<name>；
+//   - 绝对路径（全局目录）：<baseDir>/<仓库名>/<name>（默认 ~/.openNexus/worktrees/<repo>/<name>）；
+//   - 相对路径（按项目）：<repoRoot>/<baseDir>/<name>，让各项目 worktree 落在各自仓库内。
 //
 // name 通常是分支名（可能含 /，如 feat/add-login）。为避免在文件系统上形成多级嵌套
 // 子目录（feat/add-login 变成两层目录），这里的 / 与 \ 统一扁平化为 '-'，
 // 得到单层目录名（feat-add-login）；分支名本身（含 /）不受影响，仅目录名扁平化。
 func WorktreePath(repoRoot, name string) string {
 	flat := flattenWorktreeName(name)
-	if worktreesBaseDir != "" {
+	switch resolveWorktreeBaseMode(worktreesBaseDir) {
+	case worktreeBaseNone:
+		return filepath.Join(repoRoot, WorktreesDir, flat)
+	case worktreeBaseRelative:
+		return filepath.Join(repoRoot, worktreesBaseDir, flat)
+	default: // worktreeBaseAbsolute
 		return filepath.Join(worktreesBaseDir, filepath.Base(repoRoot), flat)
 	}
-	return filepath.Join(repoRoot, WorktreesDir, flat)
+}
+
+// worktreeBaseMode 表示 worktreesBaseDir 的解析模式。
+type worktreeBaseMode int
+
+const (
+	worktreeBaseNone worktreeBaseMode = iota // 空串：回退仓库内 .worktrees
+	worktreeBaseAbsolute                     // 绝对路径：全局 <dir>/<repo>/<name>
+	worktreeBaseRelative                     // 相对路径：按项目 <repo>/<dir>/<name>
+)
+
+// resolveWorktreeBaseMode 根据 dir 形态判定解析模式。
+func resolveWorktreeBaseMode(dir string) worktreeBaseMode {
+	if dir == "" {
+		return worktreeBaseNone
+	}
+	if filepath.IsAbs(dir) {
+		return worktreeBaseAbsolute
+	}
+	return worktreeBaseRelative
 }
 
 // flattenWorktreeName 把分支名中的路径分隔符（/ 与 \）替换为 '-'，
@@ -390,13 +418,19 @@ func parseWorktreeList(out string) []WorktreeInfo {
 	return list
 }
 
-// EnsureWorktreesDir 确保 worktree 存放目录存在。
-// 注入了全局根目录时确保 <baseDir>/<仓库名> 存在；否则确保仓库根下 .worktrees 存在。
+// EnsureWorktreesDir 确保 worktree 存放目录存在，模式判定与 WorktreePath 一致：
+//   - 空串：确保仓库根下 .worktrees 存在；
+//   - 绝对路径：确保 <baseDir>/<仓库名> 存在；
+//   - 相对路径：确保 <repoRoot>/<baseDir> 存在。
 func EnsureWorktreesDir(repoRoot string) error {
-	if worktreesBaseDir != "" {
+	switch resolveWorktreeBaseMode(worktreesBaseDir) {
+	case worktreeBaseNone:
+		return os.MkdirAll(filepath.Join(repoRoot, WorktreesDir), 0o755)
+	case worktreeBaseRelative:
+		return os.MkdirAll(filepath.Join(repoRoot, worktreesBaseDir), 0o755)
+	default: // worktreeBaseAbsolute
 		return os.MkdirAll(filepath.Join(worktreesBaseDir, filepath.Base(repoRoot)), 0o755)
 	}
-	return os.MkdirAll(filepath.Join(repoRoot, WorktreesDir), 0o755)
 }
 
 // hasCommit 报告 path 所在仓库是否已有可用的 HEAD 提交。

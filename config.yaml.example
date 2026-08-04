@@ -30,9 +30,10 @@ agents:
         # temporary 模式会话工作区的存放根目录，默认 ~/.openNexus/session。
         # 由程序在删除会话时清理，不依赖操作系统清理临时目录。
         session_dir: ~/.openNexus/session
-        # 任务/会话 git worktree 的存放根目录，默认 ~/.openNexus/worktrees。
-        # 每个仓库在其下按 <仓库名>/<分支名> 隔离，避免在用户代码仓库内堆积 .worktrees 目录。
-        # 留空回退到仓库内 .worktrees（兼容旧行为）。可通过环境变量 AGENTS_WORKSPACE_WORKTREES_DIR 覆盖。
+        # 任务/会话 git worktree 的存放根目录。支持两种语义：
+        #   - 绝对路径（默认 ~/.openNexus/worktrees）：所有项目集中存放，按 <仓库名>/<分支名> 隔离；
+        #   - 相对路径（如 .worktrees）：相对「每个项目仓库根」解析，让各项目 worktree 落在各自仓库内。
+        # 可通过环境变量 AGENTS_WORKSPACE_WORKTREES_DIR 覆盖。
         worktrees_dir: ~/.openNexus/worktrees
     skills:
         # 用户级 skills 根目录（agentskills.io：递归扫描子目录中的 SKILL.md）
