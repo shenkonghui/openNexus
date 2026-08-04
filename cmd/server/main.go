@@ -183,10 +183,15 @@ func main() {
 	acpSvc := acp.NewService(db, messagesDir, cfg.Agents.Workspace, cfg.Agents.Skills, cfg.Agents.Commands, cfg.Agents.Rules, cfg.Agents.SubAgents)
 	// 注入主程序可执行文件路径：用于构造 stdio MCP 桥子进程命令（`opennexus mcp-bridge`），
 	// 避免 gatewayBridgeEntry 每次运行时重复调用 os.Executable。
+	// 解析符号链接以获取真实路径，确保 agent 子进程能正确找到可执行文件。
 	if exe, err := os.Executable(); err != nil {
 		log.Printf("获取主程序可执行文件路径失败（stdio MCP 桥将不可用）: %v", err)
+	} else if realExe, err := filepath.EvalSymlinks(exe); err != nil {
+		log.Printf("解析主程序可执行文件符号链接失败（stdio MCP 桥可能不可用）: %v, path=%s", err, exe)
+		acpSvc.SetSelfExe(exe) // 仍尝试使用原始路径
 	} else {
-		acpSvc.SetSelfExe(exe)
+		acpSvc.SetSelfExe(realExe)
+		log.Printf("MCP stdio 网关桥可执行文件路径: %s", realExe)
 	}
 	acpSvc.SetGoalRoleDirs(cfg.Agents.GoalRoles)
 	acpSvc.SetDebugConfig(cfg.Debug)

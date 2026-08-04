@@ -426,6 +426,7 @@ func (s *Service) configuredMCPServers(caps acp.McpCapabilities) []acp.McpServer
 		if s.gatewayTransport != "auto" || !caps.Http {
 			if bridge, ok := s.gatewayBridgeEntry(); ok {
 				gwEntry = bridge
+				slog.Debug("stdio 网关桥创建成功", "command", bridge.Entry.Command, "args", bridge.Entry.Args)
 			} else if !caps.Http && !caps.Sse {
 				// agent 仅支持 stdio（如 devin）但桥不可用，
 				// http 网关条目注入后会被 filterByMcpCapabilities 过滤，
@@ -489,7 +490,14 @@ func (s *Service) sessionMCPServers(userID uint, caps acp.McpCapabilities) []acp
 	if !hasServerNamed(configured, notesMCPName) && !hasServerNamed(configured, GatewayMCPName) {
 		servers = append(configured, s.notesMCPServers(userID)...)
 	}
-	return filterByMcpCapabilities(servers, caps)
+	result := filterByMcpCapabilities(servers, caps)
+	slog.Debug("session MCP servers 注入列表",
+		"count", len(result),
+		"http_cap", caps.Http, "sse_cap", caps.Sse,
+		"gateway_active", s.gatewayEndpoint != "" && s.gatewayToken != "",
+		"gateway_transport", s.gatewayTransport,
+		"self_exe_set", s.selfExe != "")
+	return result
 }
 
 // notesMCPName 是笔记 MCP server 的固定名称（与 mcp.json 中写入的条目名一致）。

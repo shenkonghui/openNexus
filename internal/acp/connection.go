@@ -196,7 +196,7 @@ func (c *Connection) AuthenticateIfRequired(ctx context.Context, initResp acp.In
 // systemPrompt 非空时写入 _meta.systemPrompt，由支持该扩展的 Agent 注入为系统提示词。
 // 同一 Connection 可多次调用，每次返回不同的 session ID。
 func (c *Connection) NewSession(ctx context.Context, cwd string, additionalDirectories []string, mcpServers []acp.McpServer, systemPrompt string) (string, []acp.SessionConfigOption, []acp.SessionMode, error) {
-	slog.Debug("ACP newSession", "cwd", cwd, "extra_dirs", len(additionalDirectories), "mcp_servers", len(mcpServers), "system_prompt_chars", len(systemPrompt))
+	slog.Debug("ACP newSession", "cwd", cwd, "extra_dirs", len(additionalDirectories), "mcp_servers", len(mcpServers), "mcp_server_names", mcpServerNames(mcpServers), "system_prompt_chars", len(systemPrompt))
 	if mcpServers == nil {
 		mcpServers = []acp.McpServer{}
 	}
