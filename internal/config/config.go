@@ -269,6 +269,10 @@ type WorkspaceConfig struct {
 	// ~/.openNexus/workspaces/default。用户首次发起会话且未指定 workspace 时，
 	// 自动创建的默认工作区即指向此目录，跨会话持久保留。
 	DefaultCwd string `yaml:"default_cwd"`
+	// WorktreesDir 是任务/会话 git worktree 的全局存放根目录。
+	// 默认 ~/.openNexus/worktrees，每个仓库在其下建 <仓库名>/<分支名> 子目录，
+	// 避免污染用户代码仓库；留空则回退到仓库内 .worktrees/<分支名>（兼容旧行为）。
+	WorktreesDir string `yaml:"worktrees_dir"`
 }
 
 type ClaudeCodeConfig struct {
@@ -331,6 +335,9 @@ func (c *Config) applyEnv() {
 	}
 	if v := os.Getenv("AGENTS_WORKSPACE_DEFAULT_CWD"); v != "" {
 		c.Agents.Workspace.DefaultCwd = v
+	}
+	if v := os.Getenv("AGENTS_WORKSPACE_WORKTREES_DIR"); v != "" {
+		c.Agents.Workspace.WorktreesDir = v
 	}
 	if v := os.Getenv("AGENTS_SKILLS_USER_DIRS"); v != "" {
 		c.Agents.Skills.UserDirs = splitCommaList(v)
@@ -492,6 +499,17 @@ func (c *Config) resolveDataPaths() error {
 			return fmt.Errorf("default_cwd 无效: %w", err)
 		}
 		c.Agents.Workspace.DefaultCwd = abs
+	}
+	// worktrees_dir 默认 ~/.openNexus/worktrees：默认将各任务/会话的 worktree
+	// 集中存放于全局目录下，按 <仓库名>/<分支名> 隔离，避免污染用户代码仓库。
+	if c.Agents.Workspace.WorktreesDir == "" {
+		c.Agents.Workspace.WorktreesDir = filepath.Join(home, ".openNexus", "worktrees")
+	} else {
+		abs, err := expandPath(c.Agents.Workspace.WorktreesDir)
+		if err != nil {
+			return fmt.Errorf("worktrees_dir 无效: %w", err)
+		}
+		c.Agents.Workspace.WorktreesDir = abs
 	}
 	return nil
 }

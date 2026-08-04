@@ -20,7 +20,7 @@ interface GitPanelProps {
   cwd: string
 }
 
-/** 取路径最后一段作为紧凑显示（如 /a/b/.worktrees/task-1 -> task-1） */
+/** 取路径最后一段作为紧凑显示（如 ~/.openNexus/worktrees/repo/task-1 -> task-1） */
 function baseName(path: string): string {
   const parts = path.replace(/\/+$/, '').split('/')
   return parts[parts.length - 1] || path

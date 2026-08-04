@@ -19,7 +19,7 @@ interface WorktreePickerProps {
   onClose: () => void
 }
 
-/** 取路径最后一段作为显示名（如 /a/b/.worktrees/task-1 -> task-1） */
+/** 取路径最后一段作为显示名（如 ~/.openNexus/worktrees/repo/task-1 -> task-1） */
 function baseName(path: string): string {
   const parts = path.replace(/\/+$/, '').split('/')
   return parts[parts.length - 1] || path
@@ -87,7 +87,7 @@ export default function WorktreePicker({ repoPath, selectedPath, onSelect, onClo
           <button className={styles.closeBtn} onClick={onClose} type="button"><X size={16} /></button>
         </div>
 
-        {/* 新建 worktree：输入分支名，回车或点按钮创建到 .worktrees/<branch> */}
+        {/* 新建 worktree：输入分支名，回车或点按钮创建到 ~/.openNexus/worktrees/<repo>/<branch> */}
         <form className={styles.createBar} onSubmit={handleCreate}>
           <input
             className={styles.createInput}

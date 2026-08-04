@@ -55,7 +55,7 @@ export function listWorktrees(path: string): Promise<{ data: WorktreeListRespons
   return apiFetch(`/filesystem/worktrees?path=${encodeURIComponent(path)}`)
 }
 
-// 在 path 所在仓库创建新 worktree：新分支 branch 检出到 <repoRoot>/.worktrees/<branch>
+// 在 path 所在仓库创建新 worktree：新分支 branch 检出到 ~/.openNexus/worktrees/<repo>/<branch>
 // base 为空时从当前 HEAD 创建。返回新建的 worktree 项。
 export function createWorktree(path: string, branch: string, base?: string): Promise<{ data: { worktree: WorktreeEntry } }> {
   return apiFetch(`/filesystem/worktrees`, {

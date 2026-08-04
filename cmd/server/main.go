@@ -208,6 +208,9 @@ func main() {
 	//（环境防线已兜底，不再打断全自动流程）。
 	acp.SetSandboxSettings(acp.SandboxSettings{Enabled: cfg.Sandbox.Enabled, Mode: cfg.Sandbox.Mode})
 	acpSvc.SetSandboxActive(cfg.Sandbox.Enabled)
+	// worktree 存放根目录：默认 ~/.openNexus/worktrees，按 <仓库名>/<分支名> 隔离，
+	// 避免在用户代码仓库内堆积 .worktrees。须在首次创建 worktree 前注入。
+	acp.SetWorktreesBaseDir(cfg.Agents.Workspace.WorktreesDir)
 	if cfg.Sandbox.Enabled {
 		log.Printf("agent 沙箱已启用（mode=%s：文件系统只读+写白名单+凭证剥离）", cfg.Sandbox.Mode)
 	}

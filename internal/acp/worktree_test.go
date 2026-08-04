@@ -121,3 +121,26 @@ func TestCreateWorktree_Hardened(t *testing.T) {
 		t.Fatalf("worktree 内 git push 应失败")
 	}
 }
+
+// TestWorktreePathFlattensBranchSlash 验证分支名中的 / 被扁平化为 '-'，
+// 不在文件系统上形成多级嵌套子目录（feat/add-login → 单层目录 feat-add-login）。
+// 分别覆盖未注入 baseDir（回退 .worktrees）与注入 baseDir（全局目录）两种场景。
+func TestWorktreePathFlattensBranchSlash(t *testing.T) {
+	repo := "/repo/NexusAgent"
+
+	// 回退场景：未注入 baseDir，路径为 <repo>/.worktrees/<扁平名>
+	got := WorktreePath(repo, "feat/add-login")
+	want := filepath.Join(repo, ".worktrees", "feat-add-login")
+	if got != want {
+		t.Fatalf("回退场景 WorktreePath = %q, want %q", got, want)
+	}
+
+	// 全局目录场景：注入 baseDir 后路径为 <baseDir>/<repo>/<扁平名>
+	t.Cleanup(func() { SetWorktreesBaseDir("") })
+	SetWorktreesBaseDir("/home/u/.openNexus/worktrees")
+	got = WorktreePath(repo, "feat/sub/name") // 多段 / 全部压平
+	want = filepath.Join("/home/u/.openNexus/worktrees", "NexusAgent", "feat-sub-name")
+	if got != want {
+		t.Fatalf("全局场景 WorktreePath = %q, want %q", got, want)
+	}
+}

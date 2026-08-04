@@ -26,7 +26,7 @@ interface ChatPanelProps {
 }
 
 /**
- * 取路径最后一段作为紧凑显示（如 /a/b/.worktrees/task-1 -> task-1）。
+ * 取路径最后一段作为紧凑显示（如 ~/.openNexus/worktrees/repo/task-1 -> task-1）。
  * 空路径返回空字符串。
  */
 function cwdBaseName(path?: string): string {

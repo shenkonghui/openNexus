@@ -155,7 +155,7 @@ export function getTaskGitStatus(workspaceId: number): Promise<{ data: { cwd: st
   return apiFetch(`/taskmanager/git-status${qs(workspaceId)}`)
 }
 
-// 初始化 git 仓库（含初始提交）并创建 .worktrees 目录
+// 初始化 git 仓库（含初始提交）并确保 worktree 存放目录（~/.openNexus/worktrees）存在
 export function initTaskGitRepo(workspaceId: number): Promise<{ data: { cwd: string; is_git_repo: boolean } }> {
   return apiFetch(`/taskmanager/git-init${qs(workspaceId)}`, { method: 'POST' })
 }

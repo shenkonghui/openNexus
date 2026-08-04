@@ -10,8 +10,23 @@ import (
 	"unicode"
 )
 
-// WorktreesDir 是存放各任务 worktree 的目录名，位于仓库根下。
+// WorktreesDir 是存放各任务 worktree 的目录名。
+// 默认路径已改为全局 ~/.openNexus/worktrees/<仓库名>/<分支名>（见 SetWorktreesBaseDir），
+// 此常量仅在未配置全局目录（如测试）时作为仓库内回退目录名保留。
 const WorktreesDir = ".worktrees"
+
+// worktreesBaseDir 是 worktree 的全局存放根目录，由 main 在启动时通过
+// SetWorktreesBaseDir 注入（通常为 ~/.openNexus/worktrees）。留空（零值）时
+// WorktreePath / EnsureWorktreesDir 回退为仓库内 .worktrees/<name> 的旧行为，
+// 保证不依赖配置的测试环境不受影响。
+var worktreesBaseDir string
+
+// SetWorktreesBaseDir 设置全局 worktree 存放根目录，由 main 启动时调用一次。
+// 之后 WorktreePath 返回 <dir>/<仓库名>/<name>、EnsureWorktreesDir 确保
+// <dir>/<仓库名> 存在。dir 为空则恢复仓库内 .worktrees 的回退行为。
+func SetWorktreesBaseDir(dir string) {
+	worktreesBaseDir = dir
+}
 
 // ErrNotGitRepo 表示给定路径不是一个 git 仓库。
 var ErrNotGitRepo = errors.New("路径不是 git 仓库")
@@ -188,9 +203,25 @@ func RemoveWorktree(repoPath, destPath, branch string) error {
 	return nil
 }
 
-// WorktreePath 返回仓库根下 .worktrees/<name> 的绝对路径。
+// WorktreePath 返回 worktree 的绝对路径。
+// 注入了全局根目录时为 <baseDir>/<仓库名>/<name>（默认 ~/.openNexus/worktrees/<repo>/<name>）；
+// 否则回退为仓库根下 .worktrees/<name>（兼容旧测试与未配置场景）。
+//
+// name 通常是分支名（可能含 /，如 feat/add-login）。为避免在文件系统上形成多级嵌套
+// 子目录（feat/add-login 变成两层目录），这里的 / 与 \ 统一扁平化为 '-'，
+// 得到单层目录名（feat-add-login）；分支名本身（含 /）不受影响，仅目录名扁平化。
 func WorktreePath(repoRoot, name string) string {
-	return filepath.Join(repoRoot, WorktreesDir, name)
+	flat := flattenWorktreeName(name)
+	if worktreesBaseDir != "" {
+		return filepath.Join(worktreesBaseDir, filepath.Base(repoRoot), flat)
+	}
+	return filepath.Join(repoRoot, WorktreesDir, flat)
+}
+
+// flattenWorktreeName 把分支名中的路径分隔符（/ 与 \）替换为 '-'，
+// 使 worktree 目录落在单层目录下而非多级嵌套。仅作用于目录名，不影响 git 分支名。
+func flattenWorktreeName(name string) string {
+	return strings.NewReplacer("/", "-", "\\", "-").Replace(name)
 }
 
 // SanitizeWorktreeName 把任意文本（如 AI 输出或 prompt 首行）清洗为合法的
@@ -359,8 +390,12 @@ func parseWorktreeList(out string) []WorktreeInfo {
 	return list
 }
 
-// EnsureWorktreesDir 确保仓库根下的 .worktrees 目录存在。
+// EnsureWorktreesDir 确保 worktree 存放目录存在。
+// 注入了全局根目录时确保 <baseDir>/<仓库名> 存在；否则确保仓库根下 .worktrees 存在。
 func EnsureWorktreesDir(repoRoot string) error {
+	if worktreesBaseDir != "" {
+		return os.MkdirAll(filepath.Join(worktreesBaseDir, filepath.Base(repoRoot)), 0o755)
+	}
 	return os.MkdirAll(filepath.Join(repoRoot, WorktreesDir), 0o755)
 }
 

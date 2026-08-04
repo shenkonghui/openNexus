@@ -193,7 +193,7 @@ type createSessionRequest struct {
 	// Yolo 创建时即开启本任务 YOLO。
 	Yolo bool `json:"yolo"`
 	// AutoWorktree 自动创建 worktree：由 AI 根据首条 prompt 生成分支名，
-	// 在工作区仓库的 .worktrees 下创建并作为会话 cwd。与 Cwd 互斥（Cwd 优先）。
+	// 在全局 worktrees 目录（~/.openNexus/worktrees/<仓库名>）下创建并作为会话 cwd。与 Cwd 互斥（Cwd 优先）。
 	AutoWorktree bool `json:"auto_worktree"`
 	// Prompt 首条对话内容，仅用于 AutoWorktree 时的 AI 命名，不会在此接口发送给 agent。
 	Prompt string `json:"prompt"`
@@ -244,7 +244,7 @@ func (h *SessionHandler) createAutoWorktree(ctx context.Context, req *createSess
 		}
 	}
 	if err := acplocal.EnsureWorktreesDir(repoRoot); err != nil {
-		return "", fmt.Errorf("创建 .worktrees 目录失败: %w", err)
+		return "", fmt.Errorf("创建 worktrees 目录失败: %w", err)
 	}
 	name := acplocal.UniqueWorktreeName(repoRoot, h.generateWorktreeName(ctx, req))
 	destPath := acplocal.WorktreePath(repoRoot, name)

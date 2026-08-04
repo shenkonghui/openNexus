@@ -299,7 +299,7 @@ export default function TaskManagerView({ workspaceId, cwd, agents, restoreSessi
     }
   }
 
-  // 初始化 git 仓库（含初始提交）并创建 .worktrees 目录，成功后刷新状态。
+  // 初始化 git 仓库（含初始提交）并确保 worktree 存放目录（~/.openNexus/worktrees）存在，成功后刷新状态。
   async function handleGitInit() {
     if (!workspaceId || gitInitializing) return
     setGitInitializing(true)

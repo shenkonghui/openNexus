@@ -314,7 +314,7 @@ func (h *TaskManagerHandler) GitStatus(c *gin.Context) {
 }
 
 // GitInit POST /api/v1/taskmanager/git-init?workspace_id=123
-// 在编排 cwd 初始化 git 仓库（含初始提交）并创建 .worktrees 目录。
+// 在编排 cwd 初始化 git 仓库（含初始提交）并确保 worktree 存放目录（~/.openNexus/worktrees）存在。
 func (h *TaskManagerHandler) GitInit(c *gin.Context) {
 	cwd, _, ok := h.resolveCwd(c)
 	if !ok {

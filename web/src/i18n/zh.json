@@ -1046,7 +1046,7 @@
     "openConversation": "打开任务对话",
     "openTask": "打开任务",
     "gitRequiredTitle": "需要 git 仓库",
-    "gitRequiredHint": "任务管理需要当前工作目录是 git 仓库，以便为每个任务在 .worktrees 下创建独立的 worktree。",
+    "gitRequiredHint": "任务管理需要当前工作目录是 git 仓库，以便为每个任务在 ~/.openNexus/worktrees 下创建独立的 worktree。",
     "gitInit": "初始化 git 仓库",
     "gitInitializing": "正在初始化…",
     "newTask": "新建任务",

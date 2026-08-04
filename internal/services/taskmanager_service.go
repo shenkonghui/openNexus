@@ -96,7 +96,7 @@ func (s *TaskManagerService) IsGitRepo(cwd string) bool {
 	return acp.IsGitRepo(cwd)
 }
 
-// InitGitRepo 在 cwd 初始化 git 仓库（含初始提交），并确保 .worktrees 目录存在。
+// InitGitRepo 在 cwd 初始化 git 仓库（含初始提交），并确保 worktree 存放目录存在。
 func (s *TaskManagerService) InitGitRepo(cwd string) error {
 	if cwd == "" {
 		return fmt.Errorf("cwd 不能为空")

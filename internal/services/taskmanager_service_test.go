@@ -121,14 +121,14 @@ func TestExecuteTaskUsesWorktreeCwd(t *testing.T) {
 	if !res.Success {
 		t.Fatalf("executeTask result 应成功: %+v", res)
 	}
-	wantSuffix := filepath.Join(".worktrees", "feat", "add-login")
+	wantSuffix := filepath.Join(".worktrees", "feat-add-login")
 	if mock.lastCfg.Cwd == "" || !strings.HasSuffix(mock.lastCfg.Cwd, wantSuffix) {
 		t.Fatalf("Cwd = %q, 期望以 %q 结尾", mock.lastCfg.Cwd, wantSuffix)
 	}
 }
 
 // TestExecuteTaskUsesExplicitBranch 验证任务显式指定 Branch 时直接沿用，
-// 不走 AI 命名，worktree 目录为 .worktrees/<branch>。
+// 不走 AI 命名，worktree 目录为 .worktrees/<分支名扁平化>（feat/x → feat-x）。
 func TestExecuteTaskUsesExplicitBranch(t *testing.T) {
 	cwd := t.TempDir()
 	mock := &mockTMExecutor{result: acp.SessionTaskResult{Success: true, SessionID: "s-uuid", DBSessionID: 99}}
@@ -142,7 +142,7 @@ func TestExecuteTaskUsesExplicitBranch(t *testing.T) {
 	if _, err := svc.executeTask(context.Background(), cwd, task, 5, 8); err != nil {
 		t.Fatalf("executeTask: %v", err)
 	}
-	wantSuffix := filepath.Join(".worktrees", "fix", "login-crash")
+	wantSuffix := filepath.Join(".worktrees", "fix-login-crash")
 	if !strings.HasSuffix(mock.lastCfg.Cwd, wantSuffix) {
 		t.Fatalf("Cwd = %q, 期望以 %q 结尾", mock.lastCfg.Cwd, wantSuffix)
 	}

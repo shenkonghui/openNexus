@@ -1046,7 +1046,7 @@
     "openConversation": "Open Task Chat",
     "openTask": "Open Task",
     "gitRequiredTitle": "Git repository required",
-    "gitRequiredHint": "Task management requires the current working directory to be a git repository, so each task gets its own worktree under .worktrees.",
+    "gitRequiredHint": "Task management requires the current working directory to be a git repository, so each task gets its own worktree under ~/.openNexus/worktrees.",
     "gitInit": "Initialize git repository",
     "gitInitializing": "Initializing…",
     "newTask": "New Task",

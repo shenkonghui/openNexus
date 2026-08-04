@@ -200,7 +200,7 @@ func (h *FileSystemHandler) ListWorktrees(c *gin.Context) {
 
 // CreateWorktree POST /api/v1/filesystem/worktrees
 // Body: { "path": "<仓库内路径>", "branch": "<新分支名>", "base": "<可选基准引用>" }
-// 在仓库根的 .worktrees/<分支名> 下创建新 worktree（分支名中的 / 替换为 -）。
+// 在 ~/.openNexus/worktrees/<仓库名>/<分支名> 下创建新 worktree（分支名中的 / 替换为 -）。
 // 创建成功后返回该 worktree 信息；目录已存在返回 409。
 func (h *FileSystemHandler) CreateWorktree(c *gin.Context) {
 	var req struct {
@@ -228,12 +228,12 @@ func (h *FileSystemHandler) CreateWorktree(c *gin.Context) {
 		return
 	}
 	if err := acplocal.EnsureWorktreesDir(repoRoot); err != nil {
-		Fail(c, http.StatusInternalServerError, "MKDIR_FAILED", "创建 .worktrees 目录失败")
+		Fail(c, http.StatusInternalServerError, "MKDIR_FAILED", "创建 worktrees 目录失败")
 		return
 	}
-	// worktree 目录名：分支名中的路径分隔符替换为 -（如 feature/x -> feature-x）
-	dirName := strings.NewReplacer("/", "-", "\\", "-").Replace(branch)
-	destPath := acplocal.WorktreePath(repoRoot, dirName)
+	// worktree 目录名由 WorktreePath 统一扁平化（分支名中的 / → -，如 feat/x -> feat-x），
+	// 这里直接用原始分支名，避免双重替换。
+	destPath := acplocal.WorktreePath(repoRoot, branch)
 	if err := acplocal.CreateWorktree(repoRoot, branch, destPath, strings.TrimSpace(req.Base)); err != nil {
 		if strings.Contains(err.Error(), "已存在") {
 			Fail(c, http.StatusConflict, "WORKTREE_EXISTS", err.Error())
