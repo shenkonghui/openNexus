@@ -200,7 +200,7 @@ type createSessionRequest struct {
 }
 
 // autoWorktreeNamePrompt 是 AI 生成 worktree 分支名的提示词模板。
-const autoWorktreeNamePrompt = `请为以下开发任务生成一个简短的英文 git 分支名（kebab-case，2-4 个单词，只用小写字母、数字和连字符，概括任务核心内容）。
+const autoWorktreeNamePrompt = `请为以下开发任务生成一个简短的英文 git 分支名（kebab-case，2-4 个单词，只用小写字母、数字和连字符，概括任务核心内容）。严禁出现中文字符或任何非 ASCII 字符。
 任务描述：{{prompt}}
 仅输出分支名，不要输出其他任何内容。`
 

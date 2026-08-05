@@ -218,6 +218,15 @@ func (h *FileSystemHandler) CreateWorktree(c *gin.Context) {
 		Fail(c, http.StatusBadRequest, "INVALID_BRANCH", "分支名不能为空")
 		return
 	}
+	// 分支名仅允许 ASCII（英文、数字、下划线、连字符、斜杠），禁止中文等非 ASCII 字符。
+	// 斜杠用于 feat/、fix/ 前缀，目录名会由 WorktreePath 扁平化为单层。
+	for _, r := range branch {
+		if r > 127 {
+			Fail(c, http.StatusBadRequest, "INVALID_BRANCH",
+				"分支名只能包含英文、数字、下划线、连字符和斜杠，请勿使用中文")
+			return
+		}
+	}
 	absPath, err := filepath.Abs(strings.TrimSpace(req.Path))
 	if err != nil {
 		Fail(c, http.StatusBadRequest, "INVALID_PATH", "路径无效")

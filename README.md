@@ -191,7 +191,7 @@ make electron-run     # 启动已安装的应用
 | `debug.acp.dir` | `DEBUG_ACP_DIR` | ACP 调试日志存储目录 |
 | `agents.workspace.session_dir` | `AGENTS_WORKSPACE_SESSION_DIR` | 会话工作区根目录，默认 `~/.openNexus/session` |
 | `agents.workspace.default_cwd` | `AGENTS_WORKSPACE_DEFAULT_CWD` | 默认工作区（persistent）的固定文件路径，默认 `~/.openNexus/workspaces/default` |
-| `agents.workspace.worktrees_dir` | `AGENTS_WORKSPACE_WORKTREES_DIR` | 任务/会话 git worktree 存放根目录。绝对路径（默认 `~/.openNexus/worktrees`）按 `<仓库名>/<分支名>` 集中隔离；相对路径（如 `.worktrees`）则相对每个项目仓库根解析，让各项目 worktree 落在各自仓库内 |
+| `agents.workspace.worktrees_dir` | `AGENTS_WORKSPACE_WORKTREES_DIR` | 任务/会话 git worktree 存放根目录。绝对路径（默认 `~/.openNexus/worktrees`）按 `<仓库名>/<分支名>` 集中隔离；相对路径（如 `.worktrees`）则相对每个项目仓库根解析，让各项目 worktree 落在各自仓库内。分支名仅支持 ASCII 字符（英文、数字、下划线、连字符、`feat/fix/` 斜杠前缀），不支持中文——手动创建输入中文会被拒绝，AI 自动命名产生的非 ASCII 字符会被清洗替换 |
 | `agents.workspace.default_mode` | - | 工作区模式：`temporary` / `persistent` |
 | `agents.mcp.config_path` | `AGENTS_MCP_CONFIG_PATH` | 全局 MCP 配置路径，默认 `~/.agents/mcp.json` |
 | `agents.idle_timeout` | - | 空闲 agent 连接存活上限，超时自动回收进程释放内存，下次使用时按需重建。默认 `30m`；负数关闭 |

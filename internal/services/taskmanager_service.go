@@ -538,7 +538,7 @@ func (s *TaskManagerService) runTask(run *orchRun, t *models.TaskManagerTask, wo
 }
 
 // taskBranchNamePrompt 是 AI 生成任务分支名的提示词模板。
-const taskBranchNamePrompt = `请为以下开发任务生成一个简短的英文 git 分支名，要求以 feat/ 或 fix/ 开头（新功能用 feat/，缺陷修复用 fix/），斜杠后为 kebab-case 的 2-4 个英文单词，只用小写字母、数字和连字符，概括任务核心内容。
+const taskBranchNamePrompt = `请为以下开发任务生成一个简短的英文 git 分支名，要求以 feat/ 或 fix/ 开头（新功能用 feat/，缺陷修复用 fix/），斜杠后为 kebab-case 的 2-4 个英文单词，只用小写字母、数字和连字符，概括任务核心内容。严禁出现中文字符或任何非 ASCII 字符。
 任务标题：{{title}}
 任务详情：{{detail}}
 仅输出分支名，不要输出其他任何内容。`

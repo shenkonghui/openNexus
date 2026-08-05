@@ -264,7 +264,7 @@ type createTaskIn struct {
 	AgentType   string   `json:"agent_type,omitempty" jsonschema:"执行任务的 agent 类型，留空则继承用户最近使用的 agent"`
 	ModelValue  string   `json:"model_value,omitempty" jsonschema:"模型值，留空则用 agent 默认"`
 	Priority    string   `json:"priority,omitempty" jsonschema:"优先级，取值 p0、p1、p2，缺省为 p1"`
-	Branch      string   `json:"branch,omitempty" jsonschema:"任务 worktree 分支名，建议 feat/ 或 fix/ 开头的英文 kebab-case；留空则启动时由 AI 自动生成"`
+	Branch      string   `json:"branch,omitempty" jsonschema:"任务 worktree 分支名，必须为英文 kebab-case（feat/ 或 fix/ 开头），仅允许 ASCII 字母、数字、连字符、斜杠，禁止中文；留空则启动时由 AI 自动生成"`
 	DependsOn   []string `json:"depends_on,omitempty" jsonschema:"依赖的其他任务 id 数组"`
 	WorkspaceID uint     `json:"workspace_id,omitempty" jsonschema:"工作区 ID，留空则使用默认工作区"`
 }

@@ -162,3 +162,32 @@ func TestWorktreePathFlattensBranchSlash(t *testing.T) {
 		t.Fatalf("相对多层场景 WorktreePath = %q, want %q", got, want)
 	}
 }
+
+// TestSanitizeRejectsNonASCII 验证 SanitizeWorktreeName 不再保留中文等非 ASCII 字符，
+// 一律替换为 '-'，纯英文不受影响。
+func TestSanitizeRejectsNonASCII(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+	}{
+		{"纯中文", "修复登录bug"},
+		{"中英混合", "feat/修复-login"},
+	}
+	for _, tc := range cases {
+		out := SanitizeWorktreeName(tc.in)
+		for _, r := range out {
+			if r > 127 {
+				t.Fatalf("%q 清洗后仍含非 ASCII 字符: %q", tc.in, out)
+			}
+		}
+	}
+
+	// 纯英文不受影响
+	if got := SanitizeWorktreeName("feat-add-login"); got != "feat-add-login" {
+		t.Fatalf("纯英文被错误清洗: got=%q", got)
+	}
+	// 中英混合：feat/修复-login → 修复 替换为 -，折叠后应收敛为 feat-login
+	if got := SanitizeWorktreeName("feat/修复-login"); got != "feat-login" {
+		t.Fatalf("中英混合清洗结果不符: got=%q (中文段应被替换并折叠)", got)
+	}
+}

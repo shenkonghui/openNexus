@@ -7,7 +7,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"unicode"
 )
 
 // WorktreesDir 是存放各任务 worktree 的目录名。
@@ -253,8 +252,9 @@ func flattenWorktreeName(name string) string {
 }
 
 // SanitizeWorktreeName 把任意文本（如 AI 输出或 prompt 首行）清洗为合法的
-// git 分支名 / worktree 目录名：取首行、去引号，非法字符替换为 '-'，
-// 保留 unicode 字母数字（中文可用），并截断到 40 个字符。清洗后为空返回 ""。
+// git 分支名 / worktree 目录名：取首行、去引号，非法字符替换为 '-'。
+// 仅保留 ASCII 字母、数字及 -_.（中文等非 ASCII 字符一律替换为 '-'，
+// 避免产生中文分支名/目录名），并截断到 40 个字符。清洗后为空返回 ""。
 func SanitizeWorktreeName(s string) string {
 	s = strings.TrimSpace(s)
 	if idx := strings.IndexByte(s, '\n'); idx >= 0 {
@@ -267,9 +267,8 @@ func SanitizeWorktreeName(s string) string {
 		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9',
 			r == '-', r == '_', r == '.':
 			b.WriteRune(r)
-		case unicode.IsLetter(r) || unicode.IsDigit(r):
-			b.WriteRune(r)
 		default:
+			// 非 ASCII（含中文）及其他符号一律替换为 '-'
 			b.WriteRune('-')
 		}
 	}
