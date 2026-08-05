@@ -11,7 +11,7 @@ import SessionModeSelector from '../components/SessionModeSelector'
 import ContextStats from '../components/ContextStats'
 import WorktreePicker, { AUTO_WORKTREE } from '../components/WorktreePicker'
 import { AgentTerminalsProvider } from '../context/AgentTerminalsContext'
-import { BookOpenText, Code2, FolderGit2, ListPlus, Sparkles, X } from 'lucide-react'
+import { BookOpenText, Code2, FolderGit2, ListPlus, Sparkles, X, Zap } from 'lucide-react'
 import type { PanelCtx, ConfigBarKind } from './types'
 import styles from './ChatPanel.module.css'
 
@@ -68,6 +68,18 @@ export default function ChatPanel({
     } else {
       ctx.onSend(prompt)
     }
+  }
+
+  // 中断当前对话并立即发送指定消息（来自队列某条）：
+  // 1) 先清空队列 —— 保证中断回到 idle 时，下方 flush 的 useEffect 不会抢先续发剩余消息；
+  // 2) await onCancel —— 等待中断真正完成（ChatPage 同步 abort 旧 SSE + await 后端 cancelSession + setConv idle）；
+  // 3) 再 onSend —— 此时旧流已中止、convState 已 idle，新发送安全推到 connecting。
+  const onCancelRef = useRef(ctx.onCancel)
+  onCancelRef.current = ctx.onCancel
+  const interruptAndSend = async (prompt: string) => {
+    setQueue([])
+    await onCancelRef.current()
+    onSendRef.current(prompt)
   }
 
   // 当前轮结束（含取消/出错）后自动发送队首；onSend 同步把 conv 推到 connecting，
@@ -233,6 +245,15 @@ export default function ChatPanel({
               <div key={`${i}-${item.slice(0, 24)}`} className={styles.queueItem}>
                 <ListPlus size={12} className={styles.queueIcon} />
                 <span className={styles.queueText} title={item}>{item}</span>
+                <button
+                  type="button"
+                  className={styles.queueSend}
+                  onClick={() => interruptAndSend(item)}
+                  title={t('prompt.queueInterruptSend')}
+                  aria-label={t('prompt.queueInterruptSend')}
+                >
+                  <Zap size={12} />
+                </button>
                 <button
                   type="button"
                   className={styles.queueRemove}

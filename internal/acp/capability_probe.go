@@ -1,12 +1,15 @@
 package acp
 
 import (
+	"bufio"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -250,6 +253,17 @@ func mcpServerNames(servers []acp.McpServer) []string {
 	return names
 }
 
+// hasGatewayBridge 判断注入列表是否含 stdio 形态的聚合网关桥条目。
+// 仅此时桥就绪探测有意义（http 形态的网关由 agent 直接消费，无独立子进程可探测）。
+func hasGatewayBridge(servers []acp.McpServer) bool {
+	for _, sv := range servers {
+		if sv.Stdio != nil && sv.Stdio.Name == GatewayMCPName {
+			return true
+		}
+	}
+	return false
+}
+
 // parseCapTestLine 从 agent 回复中提取 "PREFIX:" 行的内容（大小写不敏感，容忍 markdown 修饰）。
 // 前缀允许出现在行中间：部分 agent 会把工具输出（如 subagent 返回的标记）与
 // 格式行不加换行地拼在一起（例："CAPTEST-SUBAGENT-XXXXMCP: NONE"）。
@@ -287,6 +301,119 @@ func autoApprovePermissions(conn *Connection, permCh <-chan PermissionNotify) {
 		}
 		_ = conn.Client().RespondPermission(pn.RequestID, optID, optID == "")
 	}
+}
+
+// BridgeProbeResult 是 stdio 网关桥就绪探测的结果。
+type BridgeProbeResult struct {
+	Available bool   // 桥可拉起且能从网关拿到工具
+	ToolCount int    // 桥同步到的工具数（Available=true 时 >0）
+	Detail    string // 人类可读的诊断说明
+}
+
+// probeGatewayBridge 主动拉起 `opennexus mcp-bridge` 子进程并执行一次 MCP
+// initialize + tools/list 握手，确认网关→桥链路就绪、工具集非空。
+//
+// 用途：部分 agent（如 toolbox/chisel）对 session/new 注入的 stdio MCP server
+// 采用异步懒加载，能力自检的首轮 prompt 可能在桥就绪前发出，导致 MCP 项假阴性。
+// 本探测不依赖 agent 何时拉起桥，而是由自检侧独立验证桥链路本身是否通：
+//   - 桥就绪但 agent 报 NONE → 判 partial（agent 异步加载未完成，非链路故障）；
+//   - 桥本身拿不到工具 → 判 failed 时在 detail 中指明根因在网关而非 agent。
+//
+// 仅在注入列表含 stdio 网关桥条目时调用；其他场景返回 Available=false,ToolCount=0
+// 表示"未探测"（由调用方据 Detail 区分"未探测"与"探测失败"）。
+func (s *Service) probeGatewayBridge(ctx context.Context) BridgeProbeResult {
+	if s.selfExe == "" || s.gatewayEndpoint == "" || s.gatewayToken == "" {
+		return BridgeProbeResult{Detail: "未探测（selfExe/gatewayEndpoint/gatewayToken 未就绪）"}
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(probeCtx, s.selfExe, "mcp-bridge")
+	cmd.Env = append(os.Environ(),
+		"OPENNEXUS_GATEWAY_URL="+s.gatewayEndpoint,
+		"OPENNEXUS_GATEWAY_TOKEN="+s.gatewayToken,
+	)
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return BridgeProbeResult{Detail: fmt.Sprintf("探测失败：创建 stdin 管道: %v", err)}
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		_ = stdin.Close()
+		return BridgeProbeResult{Detail: fmt.Sprintf("探测失败：创建 stdout 管道: %v", err)}
+	}
+	if err := cmd.Start(); err != nil {
+		return BridgeProbeResult{Detail: fmt.Sprintf("探测失败：拉起桥进程 %s: %v", s.selfExe, err)}
+	}
+	// 探测结束确保回收进程，避免泄漏。
+	defer func() {
+		_ = stdin.Close()
+		_ = cmd.Process.Kill()
+		_, _ = cmd.Process.Wait()
+	}()
+
+	// 发送 initialize → notifications/initialized → tools/list
+	writeLine := func(line string) error {
+		_, err := fmt.Fprintln(stdin, line)
+		return err
+	}
+	if err := writeLine(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"captest-probe","version":"1.0"}}}`); err != nil {
+		return BridgeProbeResult{Detail: fmt.Sprintf("探测失败：写入 initialize: %v", err)}
+	}
+
+	// 逐行读取响应：initialize 响应 → 发 initialized → 发 tools/list → 读 tools/list 响应
+	scan := bufio.NewScanner(stdout)
+	scan.Buffer(make([]byte, 0, 64*1024), 4*1024*1024) // 工具列表可能较大
+	var toolCount int
+	phase := 0 // 0=等 initialize 响应, 1=已发 initialized 等 tools/list 响应
+	for scan.Scan() {
+		line := strings.TrimSpace(scan.Text())
+		if line == "" {
+			continue
+		}
+		var msg map[string]any
+		if err := json.Unmarshal([]byte(line), &msg); err != nil {
+			continue // 非 JSON 行（桥的日志走 stderr，不混入 stdout）
+		}
+		if _, isNotif := msg["method"]; isNotif {
+			continue // 跳过通知（如 listChanged）
+		}
+		id, _ := msg["id"].(float64)
+		switch phase {
+		case 0: // initialize 响应（id=1）
+			if id == 1 {
+				if errMsg, hasErr := msg["error"]; hasErr {
+					return BridgeProbeResult{Detail: fmt.Sprintf("探测失败：initialize 返回错误: %v", errMsg)}
+				}
+				_ = writeLine(`{"jsonrpc":"2.0","method":"notifications/initialized"}`)
+				_ = writeLine(`{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}`)
+				phase = 1
+			}
+		case 1: // tools/list 响应（id=2）
+			if id == 2 {
+				if errMsg, hasErr := msg["error"]; hasErr {
+					return BridgeProbeResult{Detail: fmt.Sprintf("探测失败：tools/list 返回错误: %v", errMsg)}
+				}
+				if result, ok := msg["result"].(map[string]any); ok {
+					if tools, ok := result["tools"].([]any); ok {
+						toolCount = len(tools)
+					}
+				}
+				if toolCount > 0 {
+					return BridgeProbeResult{Available: true, ToolCount: toolCount,
+						Detail: fmt.Sprintf("桥就绪：stdio 桥从网关同步到 %d 个工具", toolCount)}
+				}
+				return BridgeProbeResult{Detail: "探测失败：桥启动成功但工具列表为空（检查网关上游配置）"}
+			}
+		}
+	}
+	if err := scan.Err(); err != nil && probeCtx.Err() == nil {
+		return BridgeProbeResult{Detail: fmt.Sprintf("探测失败：读取桥输出: %v", err)}
+	}
+	if probeCtx.Err() != nil {
+		return BridgeProbeResult{Detail: "探测失败：超时（桥进程未在 15s 内完成握手）"}
+	}
+	return BridgeProbeResult{Detail: "探测失败：桥输出意外结束"}
 }
 
 // TestAgentCapabilities 对指定 agent 类型执行能力接入测试。
@@ -365,6 +492,19 @@ func (s *Service) TestAgentCapabilities(ctx context.Context, agentType string, u
 	mcpServers := s.sessionMCPServers(userID, caps)
 	mcpDetail := fmt.Sprintf("传输能力 http=%v sse=%v（stdio 为协议基线）；注入 server: %s",
 		caps.Http, caps.Sse, strings.Join(mcpServerNames(mcpServers), ", "))
+
+	// 注入列表含 stdio 网关桥时，自检侧主动探测桥链路是否就绪。
+	// 不依赖 agent 何时异步拉起桥——桥链路本身可用即可证明 MCP 注入配置正确，
+	// 即使 agent 异步加载慢导致 e2e 报 NONE，也可降级为 partial 而非误判 failed。
+	var bridgeProbe BridgeProbeResult
+	if e2e && hasGatewayBridge(mcpServers) {
+		bridgeProbe = s.probeGatewayBridge(ctx)
+		if bridgeProbe.Available {
+			slog.Info("能力测试桥探测：网关桥链路就绪", "agent", agentType, "tools", bridgeProbe.ToolCount)
+		} else {
+			slog.Warn("能力测试桥探测未通过", "agent", agentType, "detail", bridgeProbe.Detail)
+		}
+	}
 
 	// 测试 subagent：把带随机标记的定义写入 cwd 下的 subagent 扫描目录（session/new 前写入，
 	// 保证 agent 启动扫描时可见）；写入失败不阻断其余测试项。
@@ -458,7 +598,7 @@ func (s *Service) TestAgentCapabilities(ctx context.Context, agentType string, u
 	report.Items = []CapabilityTestItem{
 		evalMarkerItem("rule", response, "RULE", ruleMarker),
 		evalMarkerItem("skill", response, "SKILL", skillMarker),
-		evalMCPItem(response, mcpServers, mcpKeywords, mcpDetail),
+		evalMCPItem(response, mcpServers, mcpKeywords, mcpDetail, bridgeProbe),
 		evalSubAgentItem(response, subMarker, subDetail, subErr),
 	}
 	slog.Info("agent 能力测试完成", "agent", agentType, "mode", report.Mode,
@@ -505,14 +645,22 @@ func evalMarkerItem(id, response, linePrefix, marker string) CapabilityTestItem 
 //   - MCP 行列出的工具名包含任一可接受名称（注入 server 名或网关上游条目名，
 //     网关聚合工具以 <上游server>_<tool> 命名，不含网关自身名）→ passed
 //   - 有非 NONE 的工具列表但匹配不到 → partial（agent 可能改写了工具名前缀）
-//   - NONE 或缺失 → failed
-func evalMCPItem(response string, servers []acp.McpServer, acceptNames []string, baseDetail string) CapabilityTestItem {
+//   - NONE 或缺失，但桥探测确认网关工具就绪 → partial（agent 异步加载未完成，链路本身可用）
+//   - NONE 或缺失，桥探测也未通过 → failed
+func evalMCPItem(response string, servers []acp.McpServer, acceptNames []string, baseDetail string, bridgeProbe BridgeProbeResult) CapabilityTestItem {
 	if len(servers) == 0 {
 		return CapabilityTestItem{ID: "mcp", Status: CapTestSkipped, Detail: "无可注入的 MCP server（未配置或全部被能力过滤丢弃）"}
 	}
 	val, ok := parseCapTestLine(response, "MCP")
 	if !ok || strings.EqualFold(strings.TrimSpace(val), "NONE") || strings.TrimSpace(val) == "" {
-		return CapabilityTestItem{ID: "mcp", Status: CapTestFailed, Detail: "agent 未报告任何 MCP 工具；" + baseDetail}
+		// agent 报告 NONE：若桥探测确认网关→桥链路就绪，说明根因是 agent 异步加载
+		// 未在自检窗口内完成（非配置/链路故障），降级为 partial 避免误判。
+		if bridgeProbe.Available {
+			return CapabilityTestItem{ID: "mcp", Status: CapTestPartial,
+				Detail: fmt.Sprintf("agent 未报告 MCP 工具，但桥探测确认网关链路就绪（%d 个工具可用）；agent 对注入的 stdio MCP server 采用异步加载，自检窗口内未完成注册。%s", bridgeProbe.ToolCount, baseDetail)}
+		}
+		return CapabilityTestItem{ID: "mcp", Status: CapTestFailed,
+			Detail: "agent 未报告任何 MCP 工具；" + baseDetail + appendProbeDetail(bridgeProbe)}
 	}
 	for _, name := range acceptNames {
 		if name != "" && strings.Contains(val, name) {
@@ -520,6 +668,14 @@ func evalMCPItem(response string, servers []acp.McpServer, acceptNames []string,
 		}
 	}
 	return CapabilityTestItem{ID: "mcp", Status: CapTestPartial, Detail: fmt.Sprintf("agent 报告了工具（%s）但未匹配到注入 server 名；%s", truncateDetail(val, 200), baseDetail)}
+}
+
+// appendProbeDetail 在桥探测执行过（Detail 非空）时附加诊断说明。
+func appendProbeDetail(probe BridgeProbeResult) string {
+	if probe.Detail == "" || strings.HasPrefix(probe.Detail, "未探测") {
+		return ""
+	}
+	return "；桥探测：" + probe.Detail
 }
 
 // evalSubAgentItem 判定 subagent 单项：

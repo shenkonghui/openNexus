@@ -40,6 +40,7 @@
   "prompt": {
     "send": "发送",
     "queueSend": "加入发送队列，当前任务结束后自动发送",
+    "queueInterruptSend": "中断当前对话并发送此条",
     "queueRemove": "从队列移除",
     "slashMenuTitle": "输入筛选 command / skill / 模式（↑↓ 选择，Enter 确认）",
     "slashNoMatch": "无匹配项",

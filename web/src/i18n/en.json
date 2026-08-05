@@ -40,6 +40,7 @@
   "prompt": {
     "send": "Send",
     "queueSend": "Add to send queue; sent automatically when the current task finishes",
+    "queueInterruptSend": "Interrupt current conversation and send this now",
     "queueRemove": "Remove from queue",
     "slashMenuTitle": "Filter commands / skills / modes (↑↓ select, Enter confirm)",
     "slashNoMatch": "No matches",

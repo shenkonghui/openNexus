@@ -57,21 +57,28 @@ func TestEvalMarkerItem(t *testing.T) {
 func TestEvalMCPItem(t *testing.T) {
 	servers := []acp.McpServer{{Stdio: &acp.McpServerStdio{Name: "opennexus-gateway"}}}
 	accept := append(mcpServerNames(servers), "opennexus-notes")
+	noProbe := BridgeProbeResult{}
 
-	if item := evalMCPItem("MCP: opennexus-gateway_foo", servers, accept, ""); item.Status != CapTestPassed {
+	if item := evalMCPItem("MCP: opennexus-gateway_foo", servers, accept, "", noProbe); item.Status != CapTestPassed {
 		t.Errorf("匹配 server 名应 passed，得到 %s", item.Status)
 	}
-	if item := evalMCPItem("MCP: opennexus-notes_get_note", servers, accept, ""); item.Status != CapTestPassed {
+	if item := evalMCPItem("MCP: opennexus-notes_get_note", servers, accept, "", noProbe); item.Status != CapTestPassed {
 		t.Errorf("匹配网关上游名应 passed，得到 %s", item.Status)
 	}
-	if item := evalMCPItem("MCP: something-else", servers, accept, ""); item.Status != CapTestPartial {
+	if item := evalMCPItem("MCP: something-else", servers, accept, "", noProbe); item.Status != CapTestPartial {
 		t.Errorf("有工具但不匹配应 partial，得到 %s", item.Status)
 	}
-	if item := evalMCPItem("MCP: NONE", servers, accept, ""); item.Status != CapTestFailed {
-		t.Errorf("NONE 应 failed，得到 %s", item.Status)
+	if item := evalMCPItem("MCP: NONE", servers, accept, "", noProbe); item.Status != CapTestFailed {
+		t.Errorf("NONE 无桥探测应 failed，得到 %s", item.Status)
 	}
-	if item := evalMCPItem("MCP: whatever", nil, nil, ""); item.Status != CapTestSkipped {
+	if item := evalMCPItem("MCP: whatever", nil, nil, "", noProbe); item.Status != CapTestSkipped {
 		t.Errorf("无注入 server 应 skipped，得到 %s", item.Status)
+	}
+
+	// 桥探测就绪但 agent 报 NONE：降级为 partial（agent 异步加载未完成，非链路故障）
+	probeReady := BridgeProbeResult{Available: true, ToolCount: 11, Detail: "桥就绪：11 个工具"}
+	if item := evalMCPItem("MCP: NONE", servers, accept, "", probeReady); item.Status != CapTestPartial {
+		t.Errorf("桥就绪但 agent 报 NONE 应 partial，得到 %s（detail: %s）", item.Status, item.Detail)
 	}
 }
 

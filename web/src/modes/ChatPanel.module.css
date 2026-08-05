@@ -210,6 +210,26 @@
   line-height: 1;
 }
 
+/* 队列条目「中断并发送」按钮：中断当前对话并立即发送此条，用 accent 主色醒目提示 */
+.queueSend {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  color: var(--accent);
+  cursor: pointer;
+  padding: 2px;
+  border-radius: 4px;
+  line-height: 1;
+}
+
+.queueSend:hover {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
+}
+
 .queueRemove:hover {
   background: var(--bg-hover);
   color: var(--text-primary);
