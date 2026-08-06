@@ -13,24 +13,15 @@ services:
     ports:
       - "8008:8008"
     volumes:
-      # 容器内 HOME 与宿主机对齐（见 environment.HOME），挂载点统一用 ${HOME}：
-      # 容器内外绝对路径完全相同，会话工作区路径两边都可达，避免目录混乱。
-      - ${HOME}/.openNexus:${HOME}/.openNexus
-      # 容器用 *.npm-linux / *.npm-global-linux 与宿主机 macOS 的 npm 缓存物理隔离：
-      # npx 调用的 claude-agent-acp 依赖原生二进制，跨 macOS/Linux 共享会崩溃。
+      # 单人开发环境：一次性挂载整个 HOME，保持容器/宿主机路径完全一致
+      - ${HOME}:${HOME}
+      # 容器用 Linux npm 缓存，覆盖掉上方 HOME 挂载中的 macOS npm
+      # 避免 npx 调用的原生二进制（如 claude-agent-acp）跨平台崩溃
       - ${HOME}/.npm-linux:${HOME}/.npm-linux
       - ${HOME}/.npm-global-linux:${HOME}/.npm-global-linux
-      # Go module / build 缓存复用宿主机，避免容器重启后重新拉取依赖
-      - ${HOME}/go:${HOME}/go
       # 外部下载的 Linux CLI（二进制由宿主机准备，容器内只读使用）
       - ./bin:/opt/opennexus/bin:ro
-      # 以下与 docker-compose.yml 保持一致，确保关键用户目录在 dev 容器中也可用
-      - ${HOME}/src:${HOME}/src
-      - ${HOME}/.config:${HOME}/.config
-      # 挂载本地 ~/.local：使 agent 子进程能使用 ~/.local/bin 下的工具及 ~/.local/share 下的配置/数据。
-      - ${HOME}/.local:${HOME}/.local
-      # 挂载宿主机 docker socket：容器内 docker CLI 直接管理宿主机容器（agent 使用）。
-      # 容器内进程以 root 运行，可读写该 socket；谨慎暴露，仅用于受信任的开发环境。
+      # 挂载宿主机 docker socket：容器内 docker CLI 直接管理宿主机容器
       - /var/run/docker.sock:/var/run/docker.sock
     group_add:
       # 将容器进程加入宿主机的 docker 组，保证对 docker.sock 的访问权限
