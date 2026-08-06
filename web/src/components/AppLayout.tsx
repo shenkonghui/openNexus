@@ -4,7 +4,6 @@ import { useTranslation } from 'react-i18next'
 import { PanelLeftOpen, PanelLeftClose } from 'lucide-react'
 import SessionSidebar from './SessionSidebar'
 import WorkspaceFileEditor from './WorkspaceFileEditor'
-import StartupWarmup from './StartupWarmup'
 import SettingsDialog, { parseSettingsTab } from './SettingsDialog'
 import { getPermissionSettings, updatePermissionSettings } from '../api/permissions'
 import type { PermissionSettings } from '../types'
@@ -206,7 +205,6 @@ export default function AppLayout({ sidebarProps, children }: AppLayoutProps) {
   return (
     <SidebarContext.Provider value={{ collapsed, toggle }}>
       <TaskEventsProvider workspaceId={workspaceId}>
-      <StartupWarmup />
       <div className={styles.layout}>
         {!collapsed && (
           <div className={styles.sidebarWrap} style={{ width }}>

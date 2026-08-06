@@ -25,18 +25,6 @@
     "enabled": "启用",
     "disabled": "禁用"
   },
-  "warmup": {
-    "title": "正在准备 Agent",
-    "subtitle": "正在连接 ACP 服务，稍候……",
-    "connecting": "连接中",
-    "ready": "就绪",
-    "failed": "失败",
-    "skip": "跳过",
-    "done": "全部就绪",
-    "progress": "{{ready}}/{{total}} 已就绪",
-    "configCount": "{{count}} 项配置",
-    "noAgents": "未配置可用 Agent"
-  },
   "prompt": {
     "send": "发送",
     "queueSend": "加入发送队列，当前任务结束后自动发送",
