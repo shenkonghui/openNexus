@@ -836,12 +836,21 @@
     "debug": "Debug",
     "browser": "Browser",
     "docPreview": "Doc",
+    "excel": "Excel",
     "git": "Git",
     "capabilities": "Capabilities",
     "records": "Records",
     "addTab": "Open panel",
     "closeTab": "Close panel",
     "requireSession": "Create or select a task session first"
+  },
+  "excel": {
+    "emptyTitle": "Excel Viewer",
+    "emptyHint": "Click a .xlsx / .xlsm / .xls / .csv file in the left file tree to view and select content here",
+    "emptySheet": "This sheet is empty",
+    "selection": "Selection",
+    "insertToPrompt": "Insert to chat",
+    "openInExcelPanel": "Open Excel files in the \"Excel\" panel to view and select (open it via the \"+\" on the right tab bar)"
   },
   "capTest": {
     "hint": "Verify whether a given Agent (ACP server) recognizes the Rule, Skill and MCP capabilities injected by openNexus. Static check finishes in seconds; the end-to-end test creates a temporary session and sends one verification prompt, consuming a real Agent call (about 30-120s).",

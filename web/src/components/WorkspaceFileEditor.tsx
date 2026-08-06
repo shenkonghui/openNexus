@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { readWorkspaceFile, writeWorkspaceFile } from '../api/filesystem'
 import CodeEditor from './CodeEditor'
-import { X } from 'lucide-react'
+import { X, Table2 } from 'lucide-react'
 import styles from './FilePanel.module.css'
 
 interface WorkspaceFileEditorProps {
@@ -13,6 +13,9 @@ interface WorkspaceFileEditorProps {
 
 const AUTO_SAVE_DELAY = 800 // 编辑停顿后自动保存延迟（ms）
 const POLL_INTERVAL = 3000 // 后台文件变更轮询间隔（ms）
+
+/** Excel 类文件：在 files 面板不加载二进制，提示用户切到 Excel 面板查看 */
+const EXCEL_RE = /\.(xlsx|xlsm|xls|csv)$/i
 
 /**
  * 主内容区的工作区文件编辑器：按绝对路径读写，与会话无关。
@@ -120,6 +123,27 @@ export default function WorkspaceFileEditor({ path, onClose }: WorkspaceFileEdit
   }, [path])
 
   const fileName = path.split(/[\\/]/).pop() || path
+  const isExcel = EXCEL_RE.test(path)
+
+  // Excel 文件：不在 files 面板加载二进制，提示用户切到 Excel 面板
+  if (isExcel) {
+    return (
+      <div className={styles.panel}>
+        <div className={styles.toolbar}>
+          <span className={styles.fileName} title={path}>{fileName}</span>
+          <div className={styles.toolbarActions}>
+            <button className={styles.closeBtn} onClick={onClose} type="button" title={t('common.close')}>
+              <X size={16} />
+            </button>
+          </div>
+        </div>
+        <div className={styles.placeholder} style={{ flexDirection: 'column', gap: 8 }}>
+          <Table2 size={32} style={{ opacity: 0.4 }} />
+          <span>{t('excel.openInExcelPanel')}</span>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className={styles.panel} onKeyDown={handleKeyDown}>

@@ -11,9 +11,10 @@ import GitPanel from '../components/GitPanel'
 import CapabilityPanel from '../components/CapabilityPanel'
 import SessionRecordsPanel from '../components/SessionRecordsPanel'
 import { useFileViewer } from '../context/FileViewerContext'
-import { Folder, SquareTerminal, Pencil, Bug, MessageSquare, BookOpenText, Globe, GitBranch, Blocks, History } from 'lucide-react'
+import { Folder, SquareTerminal, Pencil, Bug, MessageSquare, BookOpenText, Globe, GitBranch, Blocks, History, Table2 } from 'lucide-react'
 import type { PanelDef, PanelCtx } from './types'
 import ChatPanel from './ChatPanel'
+import ExcelViewer from '../components/ExcelViewer'
 
 /** 通用空占位（要求会话 / 提示选文档等） */
 function EmptyPanel({
@@ -220,6 +221,15 @@ function renderRecords(ctx: PanelCtx) {
   return <SessionRecordsPanel sessionId={ctx.sessionId} refreshSignal={ctx.messages.length} />
 }
 
+/**
+ * excel 面板：Excel 查看器。点击文件树中的 .xlsx/.xlsm/.xls/.csv 时自动激活，
+ * 用 SheetJS 在浏览器端解析并渲染表格，支持 sheet 切换与单元格区域选取，
+ * 选中内容可一键转为 markdown 表格插入对话输入框。
+ */
+function renderExcel(_ctx: PanelCtx) {
+  return <ExcelViewer />
+}
+
 /** 面板注册表。新增面板在此加一条；新增模式只需在 MODES 引用面板 id。 */
 export const PANELS: PanelDef[] = [
   { id: 'chat', titleKey: 'panel.chat', icon: <MessageSquare size={14} />, render: renderChat },
@@ -230,6 +240,7 @@ export const PANELS: PanelDef[] = [
   { id: 'debug', titleKey: 'panel.debug', icon: <Bug size={14} />, render: renderDebug },
   { id: 'browser', titleKey: 'panel.browser', icon: <Globe size={14} />, render: renderBrowser },
   { id: 'doc-preview', titleKey: 'panel.docPreview', icon: <BookOpenText size={14} />, render: renderDocPreview },
+  { id: 'excel', titleKey: 'panel.excel', icon: <Table2 size={14} />, render: renderExcel },
   { id: 'capabilities', titleKey: 'panel.capabilities', icon: <Blocks size={14} />, render: renderCapabilities },
   { id: 'records', titleKey: 'panel.records', icon: <History size={14} />, render: renderRecords },
 ]

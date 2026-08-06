@@ -27,6 +27,7 @@
 - **日志面板**：后端日志实时 SSE 推送到前端
 - **文件变更对比**：会话中文件变更的左右对比视图
 - **Drawio 渲染**：对话中嵌入 ` ```drawio ` 代码块自动渲染图表
+- **Excel 处理**：内置 `excel` Skill（随程序释放到 `~/.openNexus/builtin-skills`，开箱即用），指导 Agent 用 pandas/openpyxl/xlsxwriter 读写分析 Excel；右侧新增「Excel」面板，点击 `.xlsx/.xlsm/.xls/.csv` 文件自动激活，浏览器端用 SheetJS 解析渲染（sheet 切换、行列标号），支持鼠标拖选单元格区域，一键将选区转为 markdown 表格插入对话输入框
 - **用户认证**：JWT 鉴权，支持注册 / 登录 / 密码修改 / 个人资料
 - **主题切换**：内置亮色 / 暗色主题
 - **国际化**：支持中文和英文界面，在设置页可切换语言
@@ -38,7 +39,7 @@
 | 层 | 技术 |
 |------|------|
 | 后端 | Go 1.25 · Gin · GORM · SQLite · JWT · gorilla/websocket · robfig/cron |
-| 前端 | React 18 · TypeScript · Vite · CodeMirror · xterm.js · react-markdown · react-router-dom · i18next |
+| 前端 | React 18 · TypeScript · Vite · CodeMirror · xterm.js · react-markdown · react-router-dom · i18next · SheetJS |
 | 协议 | Agent Client Protocol (ACP) · Model Context Protocol (MCP) |
 
 ## 项目结构
@@ -49,7 +50,7 @@ openNexus/
 │   ├── server/            # 程序入口（主服务）
 │   └── import-fleeting/   # Fleeting notes 导入工具
 ├── internal/
-│   ├── acp/               # ACP 协议封装：连接、客户端、会话、健康检查、二进制安装、注册表、子 Agent 运行
+│   ├── acp/               # ACP 协议封装：连接、客户端、会话、健康检查、二进制安装、注册表、子 Agent 运行、内置 Skill 释放
 │   ├── agent/             # Agent 注册表与路由
 │   ├── config/            # 配置加载、校验与历史数据迁移
 │   ├── database/          # 数据库连接

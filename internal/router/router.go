@@ -198,6 +198,7 @@ func Setup(authSvc *services.AuthService, jwtSvc *services.JWTService, agentRout
 			protected.GET("/filesystem/rules", fsHandler.Rules)
 			protected.GET("/filesystem/sub-agents", fsHandler.SubAgents)
 			protected.GET("/filesystem/file", fsHandler.ReadFile)
+			protected.GET("/filesystem/file-binary", fsHandler.ReadFileBinary)
 			protected.PUT("/filesystem/file", fsHandler.WriteFile)
 			protected.POST("/filesystem/create", fsHandler.CreateEntry)
 			protected.DELETE("/filesystem/entry", fsHandler.DeleteEntry)

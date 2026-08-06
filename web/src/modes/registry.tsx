@@ -24,7 +24,7 @@ export const MODES: ModeDef[] = [
       // 左：AI 对话
       leaf('chat', 1),
       // 右：单一标签组。默认仅展示文件/终端/改动，其余（Git/调试/浏览器/文档/能力/记录）通过「+」按需打开
-      tabs(['files', 'terminal', 'changes'], 1.3, 'terminal', ['git', 'debug', 'browser', 'doc-preview', 'capabilities', 'records']),
+      tabs(['files', 'terminal', 'changes'], 1.3, 'terminal', ['git', 'debug', 'browser', 'doc-preview', 'excel', 'capabilities', 'records']),
     ]),
   },
 ]

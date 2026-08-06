@@ -205,6 +205,13 @@ export function readWorkspaceFile(path: string): Promise<{ data: WorkspaceFileCo
   return apiFetch(`/filesystem/file?path=${encodeURIComponent(path)}`)
 }
 
+// 读取工作区中的二进制文件（通过绝对路径），返回 ArrayBuffer。
+// 用于 Excel 等 xlsx 二进制文件，前端用 SheetJS 解析。最大 20MB。
+export async function readWorkspaceFileBinary(path: string): Promise<ArrayBuffer> {
+  const resp = await apiFetchRaw(`/filesystem/file-binary?path=${encodeURIComponent(path)}`)
+  return resp.arrayBuffer()
+}
+
 // 写入工作区中的文件（通过绝对路径）。文档编辑器保存用。
 export function writeWorkspaceFile(path: string, content: string): Promise<{ data: { path: string; size: number } }> {
   return apiFetch(`/filesystem/file`, {

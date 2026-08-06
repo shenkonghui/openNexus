@@ -27,6 +27,7 @@ A multi-Agent orchestration and conversation platform based on the [Agent Client
 - **Log Panel**: Real-time streaming of backend logs via SSE.
 - **Change Diff**: Side-by-side diff view for file changes made during a session.
 - **Drawio Rendering**: Render drawio diagrams (embed ` ```drawio ` code blocks) in conversations.
+- **Excel Support**: Built-in `excel` Skill (released to `~/.openNexus/builtin-skills` on startup, ready out of the box) guides Agents to read/write/analyze Excel via pandas/openpyxl/xlsxwriter; a new "Excel" panel on the right auto-activates when clicking `.xlsx/.xlsm/.xls/.csv` files, parsing and rendering them in-browser via SheetJS (sheet tabs, row/column headers), with mouse-drag cell-range selection and one-click conversion of the selection into a markdown table inserted into the chat input.
 - **User Authentication**: JWT-based auth with registration, login, password change, and profile management.
 - **Theme Toggle**: Light and dark theme support.
 - **Internationalization**: Chinese and English UI. Switch language in the Settings page.
@@ -38,7 +39,7 @@ A multi-Agent orchestration and conversation platform based on the [Agent Client
 | Layer | Technology |
 |-------|-----------|
 | Backend | Go 1.25 · Gin · GORM · SQLite · JWT · gorilla/websocket · robfig/cron |
-| Frontend | React 18 · TypeScript · Vite · CodeMirror · xterm.js · react-markdown · react-router-dom · i18next |
+| Frontend | React 18 · TypeScript · Vite · CodeMirror · xterm.js · react-markdown · react-router-dom · i18next · SheetJS |
 | Protocol | Agent Client Protocol (ACP) · Model Context Protocol (MCP) |
 
 ## Project Structure
@@ -49,7 +50,7 @@ openNexus/
 │   ├── server/            # Entry point (main server)
 │   └── import-fleeting/   # Fleeting notes import tool
 ├── internal/
-│   ├── acp/               # ACP protocol: connection, client, session, health check, binary install, registry, sub-agent runner
+│   ├── acp/               # ACP protocol: connection, client, session, health check, binary install, registry, sub-agent runner, built-in Skill release
 │   ├── agent/             # Agent registry and router
 │   ├── config/            # Config loading, validation, and legacy data migration
 │   ├── database/          # DB connection

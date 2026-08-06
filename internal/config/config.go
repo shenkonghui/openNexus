@@ -564,6 +564,19 @@ func (s *SkillsConfig) normalize() error {
 	if len(s.ProjectDirs) == 0 {
 		s.ProjectDirs = []string{".claude/skills", ".agents/skills"}
 	}
+	// 始终追加内置 skill 目录（~/.openNexus/builtin-skills），不受用户配置影响。
+	// 内置 skill 由程序启动时从 embed 释放，开箱即用；用户自定义目录优先级更高（排在前面）。
+	builtinDir := filepath.Join(home, ".openNexus", "builtin-skills")
+	already := false
+	for _, d := range s.UserDirs {
+		if d == builtinDir {
+			already = true
+			break
+		}
+	}
+	if !already {
+		s.UserDirs = append(s.UserDirs, builtinDir)
+	}
 	return nil
 }
 

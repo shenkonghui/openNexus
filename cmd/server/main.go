@@ -144,6 +144,12 @@ func main() {
 		log.Fatalf("配置校验失败: %v", err)
 	}
 
+	// 释放内置 skill（如 excel）到 ~/.openNexus/builtin-skills，开箱即用。
+	// config.normalize 已把该目录追加到 skills 扫描路径，此处保证文件落盘。
+	if err := acp.EnsureBuiltinSkills(""); err != nil {
+		log.Printf("释放内置 skill 失败（不影响启动）: %v", err)
+	}
+
 	logging.Setup(cfg.Logging.Level)
 	if cfg.Auth.AutoLogin {
 		log.Printf("auth.auto_login 已启用：前端将自动以 admin 身份登录")

@@ -744,6 +744,21 @@ export default function PromptInput({
     })
   }
 
+  // 监听全局「插入到对话」事件（如 Excel 面板选取单元格转 markdown 表格后插入）。
+  // 用 ref 保存最新 insertAtCursor，监听器只注册一次，避免随 text/cursorPos 变化频繁重建。
+  const insertAtCursorRef = useRef(insertAtCursor)
+  insertAtCursorRef.current = insertAtCursor
+  useEffect(() => {
+    const onInsert = (e: Event) => {
+      const detail = (e as CustomEvent<{ text?: string }>).detail
+      if (detail && typeof detail.text === 'string') {
+        insertAtCursorRef.current(detail.text + '\n')
+      }
+    }
+    window.addEventListener('onx:insert-to-prompt', onInsert)
+    return () => window.removeEventListener('onx:insert-to-prompt', onInsert)
+  }, [])
+
   // 拖拽进入/经过:必须 preventDefault 才能触发 drop,且可阻止 Electron 默认把文件当导航跳走。
   function handleDragOver(e: DragEvent<HTMLDivElement>) {
     if (disabled || locked || uploading) return

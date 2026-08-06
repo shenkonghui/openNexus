@@ -836,12 +836,21 @@
     "debug": "调试",
     "browser": "浏览器",
     "docPreview": "文档",
+    "excel": "Excel",
     "git": "Git",
     "capabilities": "能力",
     "records": "记录",
     "addTab": "打开面板",
     "closeTab": "关闭面板",
     "requireSession": "请先创建或选择一个任务会话"
+  },
+  "excel": {
+    "emptyTitle": "Excel 查看器",
+    "emptyHint": "在左侧文件树中点击 .xlsx / .xlsm / .xls / .csv 文件，在此查看与选取内容",
+    "emptySheet": "该工作表为空",
+    "selection": "选区",
+    "insertToPrompt": "插入到对话",
+    "openInExcelPanel": "Excel 文件请在「Excel」面板查看与选取（点击右侧标签栏的「+」打开 Excel 面板）"
   },
   "capTest": {
     "hint": "验证指定 Agent（ACP server）能否识别 openNexus 注入的 Rule、Skill 与 MCP 能力。静态检查秒级完成；端到端测试会创建临时会话并发送一条验证消息，真实消耗一次 Agent 调用（约 30-120 秒）。",

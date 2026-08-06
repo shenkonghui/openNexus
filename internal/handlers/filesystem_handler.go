@@ -608,6 +608,42 @@ func (h *FileSystemHandler) ReadFile(c *gin.Context) {
 	})
 }
 
+// ReadFileBinary GET /api/v1/filesystem/file-binary?path=...
+// 读取指定文件的原始字节（用于 Excel 等二进制文件，前端拿 ArrayBuffer 解析）。
+// 最大 20MB。直接以 application/octet-stream 返回，前端用 fetch.arrayBuffer() 接收。
+func (h *FileSystemHandler) ReadFileBinary(c *gin.Context) {
+	reqPath := strings.TrimSpace(c.Query("path"))
+	if reqPath == "" {
+		Fail(c, http.StatusBadRequest, "MISSING_PATH", "缺少 path 参数")
+		return
+	}
+	absPath, err := filepath.Abs(reqPath)
+	if err != nil {
+		Fail(c, http.StatusBadRequest, "INVALID_PATH", "路径无效")
+		return
+	}
+	info, err := os.Stat(absPath)
+	if err != nil {
+		Fail(c, http.StatusNotFound, "FILE_NOT_FOUND", "文件不存在")
+		return
+	}
+	if info.IsDir() {
+		Fail(c, http.StatusBadRequest, "NOT_A_FILE", "路径不是文件")
+		return
+	}
+	const maxSize = 20 << 20 // 20MB
+	if info.Size() > maxSize {
+		Fail(c, http.StatusBadRequest, "FILE_TOO_LARGE", "文件过大（最大 20MB）")
+		return
+	}
+	data, err := os.ReadFile(absPath)
+	if err != nil {
+		Fail(c, http.StatusForbidden, "READ_DENIED", "无法读取文件")
+		return
+	}
+	c.Data(http.StatusOK, "application/octet-stream", data)
+}
+
 // WriteFile PUT /api/v1/filesystem/file
 // 将文本内容写入指定文件。
 func (h *FileSystemHandler) WriteFile(c *gin.Context) {

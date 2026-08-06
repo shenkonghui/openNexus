@@ -276,8 +276,10 @@ func TestValidate_SkillsUserDirsDefault(t *testing.T) {
 		t.Fatal(err)
 	}
 	expected := filepath.Join(home, ".claude", "skills")
-	if len(cfg.Agents.Skills.UserDirs) != 1 || cfg.Agents.Skills.UserDirs[0] != expected {
-		t.Errorf("UserDirs = %v, 期望 [%q]", cfg.Agents.Skills.UserDirs, expected)
+	builtinDir := filepath.Join(home, ".openNexus", "builtin-skills")
+	// 默认 UserDirs = [~/.claude/skills, ~/.openNexus/builtin-skills]（后者为内置 skill 目录，始终追加）
+	if len(cfg.Agents.Skills.UserDirs) != 2 || cfg.Agents.Skills.UserDirs[0] != expected || cfg.Agents.Skills.UserDirs[1] != builtinDir {
+		t.Errorf("UserDirs = %v, 期望 [%q, %q]", cfg.Agents.Skills.UserDirs, expected, builtinDir)
 	}
 	if len(cfg.Agents.Skills.ProjectDirs) != 2 {
 		t.Errorf("ProjectDirs = %v, 期望 2 项", cfg.Agents.Skills.ProjectDirs)
