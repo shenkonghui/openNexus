@@ -3315,6 +3315,20 @@ func (s *Service) ResumeSession(ctx context.Context, sessionID string) (*models.
 		return nil, fmt.Errorf("恢复会话-创建 ACP 会话: %w", err)
 	}
 
+	// 关闭旧 ACP 会话（best-effort）：与 ClearContext 对齐，避免旧 agent session 泄漏。
+	// 泄漏的旧 session 会继续发 terminal 事件，但 DB 已切到新 agent_session_id，
+	// terminalBridge 按 agent_session_id 反查 DB 会持续 record not found 并刷日志。
+	// 旧 agent 进程已退出时 CloseSession RPC 会失败，但 UnregisterStream 仍会清理
+	// 客户端侧的 stream 注册，阻断后续事件路由。
+	if oldAgentSID != "" && oldAgentSID != newAgentSID {
+		if closeErr := conn.CloseSessionByID(ctx, oldAgentSID); closeErr != nil {
+			slog.Warn("恢复会话-关闭旧 ACP 会话失败（best-effort，可能进程已退出）",
+				"session", sessionID, "old_agent_session", oldAgentSID, "err", closeErr)
+		} else {
+			slog.Info("恢复会话-已关闭旧 ACP 会话", "session", sessionID, "old_agent_session", oldAgentSID)
+		}
+	}
+
 	// 查询历史消息并注入上下文（只取最近 100 条，避免长会话全量加载 raw_json 撑爆内存）
 	history, _ := s.messages.FindBySessionIDLastN(session.SessionID, 100)
 	contextText := formatHistory(history)

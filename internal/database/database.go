@@ -2,12 +2,15 @@ package database
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 
 	"opennexus/internal/models"
 )
@@ -32,7 +35,22 @@ func tuneDSN(dsn string) string {
 }
 
 func Connect(dsn string, defaultCwd string) (*gorm.DB, error) {
-	db, err := gorm.Open(sqlite.Open(tuneDSN(dsn)), &gorm.Config{})
+	// IgnoreRecordNotFoundError=true：terminalBridge 按 agent_session_id 反查会话路由
+	// terminal 事件，查不到（临时探测会话 / 旧 session 已被新 ID 替换）是正常分支，
+	// 不应刷 GORM 的 record not found 红色日志。First 仍返回 error，调用方按需处理。
+	// LogLevel=Warn：仅打印慢查询与真实错误，屏蔽 INFO 级 SQL 回显。
+	gormLogger := logger.New(
+		log.New(os.Stdout, "\r\n", log.LstdFlags),
+		logger.Config{
+			SlowThreshold:             200 * time.Millisecond,
+			LogLevel:                  logger.Warn,
+			IgnoreRecordNotFoundError: true,
+			Colorful:                  true,
+		},
+	)
+	db, err := gorm.Open(sqlite.Open(tuneDSN(dsn)), &gorm.Config{
+		Logger: gormLogger,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("打开数据库: %w", err)
 	}
