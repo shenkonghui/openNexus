@@ -1238,6 +1238,11 @@ export default function ChatPage() {
           <div className={styles.header}>
             <div className={styles.sysBar}>
               <SidebarToggleButton />
+              {activeSession && (
+                <span className={styles.agentType}>
+                  {activeSession.title || agents.find((a) => a.type === activeSession.agent_type)?.display_name || activeSession.agent_type}
+                </span>
+              )}
               <div className={styles.actions}>
                 <WorkspaceSelector
                   variant="header"
