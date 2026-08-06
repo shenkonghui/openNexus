@@ -89,18 +89,8 @@ export default function AgentModelSelector({
         list.push({ agentType: agent.type, modelValue: '', label: agent.display_name, modelLabel: agent.display_name, title: agent.display_name })
       }
     }
-
-    // 当前选中组合被过滤或尚未出现在列表时补充，保持触发按钮显示有效
-    if (selectedAgent && !list.some((e) => e.agentType === selectedAgent && e.modelValue === selectedModel)) {
-      const agent = agents.find((a) => a.type === selectedAgent)
-      const model = (modelsByAgent[selectedAgent] || []).find((m) => m.value === selectedModel)
-      const name = agent?.display_name || selectedAgent
-      const modelName = selectedModel ? truncateSelectLabel(model?.name || selectedModel, 24) : name
-      const label = selectedModel ? `${name} · ${modelName}` : name
-      list.unshift({ agentType: selectedAgent, modelValue: selectedModel, label, modelLabel: modelName, title: label })
-    }
     return list
-  }, [agents, modelsByAgent, regexes, selectedAgent, selectedModel])
+  }, [agents, modelsByAgent, regexes])
 
   // 输入关键字实时过滤（匹配组合标签、agent 类型、模型值，忽略大小写）
   const filtered = useMemo(() => {
@@ -114,7 +104,22 @@ export default function AgentModelSelector({
     )
   }, [entries, query])
 
-  const selectedEntry = entries.find((e) => e.agentType === selectedAgent && e.modelValue === selectedModel)
+  // 触发按钮显示当前选中组合（即使不在下拉过滤范围内，也保留触发态可读性）
+  const selectedEntry = useMemo(() => {
+    if (!selectedAgent) return null
+    const agent = agents.find((a) => a.type === selectedAgent)
+    const model = (modelsByAgent[selectedAgent] || []).find((m) => m.value === selectedModel)
+    const name = agent?.display_name || selectedAgent
+    const modelName = selectedModel ? truncateSelectLabel(model?.name || selectedModel, 24) : name
+    const label = selectedModel ? `${name} · ${modelName}` : name
+    return {
+      agentType: selectedAgent,
+      modelValue: selectedModel,
+      label,
+      modelLabel: modelName,
+      title: fullOptionLabel(label, model?.description),
+    }
+  }, [agents, modelsByAgent, selectedAgent, selectedModel])
   // 收起态触发按钮仅显示模型名（展开后列表项才显示完整 agent · 模型）
   const triggerLabel = selectedAgent ? (selectedEntry?.modelLabel || selectedModel || selectedAgent) : ''
 
