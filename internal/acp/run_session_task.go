@@ -50,6 +50,17 @@ type SessionTaskConfig struct {
 // 比 promptOnceTimeout (60s) 更长，因为持久会话可能执行较重的多步任务。
 const sessionTaskTimeout = 5 * time.Minute
 
+// drainMessageStream 在后台排空消息流直至其关闭。
+// 用于调用方提前返回但 prompt 仍在后台运行的场景：prompt 消费 goroutine 会向
+// out channel 阻塞写入（低频消息分支），无人消费会使其在缓冲写满后永久阻塞，
+// 进而写满 ACP 订阅 buffer，导致 session update 在分发层被丢弃（且不落库）。
+func drainMessageStream(ch <-chan models.Message) {
+	go func() {
+		for range ch {
+		}
+	}()
+}
+
 // RunSessionTask 创建一个持久会话（落库），阻塞运行一次性任务并收集 assistant 文本后返回。
 //
 // 与 RunSubAgent 的差异：
@@ -138,6 +149,9 @@ consume:
 			// 超时：返回已收集的部分文本。会话仍在后台运行（detached context 未取消），
 			// 用户可在 UI 继续对话、响应权限。标记 Background：调用方不写终态，
 			// 由 PromptFinished 在 prompt 真正结束时按真实终态收尾，避免提前误判完成。
+			// 必须后台排空 updates：prompt 消费 goroutine 会向该 channel 阻塞写入，
+			// 无人消费会将其卡死，进而写满 ACP 订阅 buffer 导致 update 被丢弃（不落库）。
+			drainMessageStream(updates)
 			result.Success = sb.Len() > 0
 			result.Background = true
 			result.Result = strings.TrimSpace(sb.String())
@@ -148,6 +162,8 @@ consume:
 		case <-ctx.Done():
 			// MCP 调用方取消（如父 agent 放弃工具调用）：同样返回已收集的部分，
 			// 会话继续在后台运行（promptCtx 未被取消），同样标记 Background。
+			// 同超时路径：后台排空 updates，避免阻塞 prompt 消费 goroutine。
+			drainMessageStream(updates)
 			result.Success = sb.Len() > 0
 			result.Background = true
 			result.Result = strings.TrimSpace(sb.String())

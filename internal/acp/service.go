@@ -2031,6 +2031,20 @@ func (s *Service) PromptWithExecution(ctx context.Context, sessionID, prompt str
 		// finalStatus 控制 defer 收尾：正常完成=done，进程崩溃且不可恢复=interrupted
 		finalStatus := models.RunningTaskStatusDone
 
+		// sendOut 非阻塞发送消息到主订阅 channel。out 满说明消费端异常
+		//（慢 SSE 客户端，或消费者提前退出未排空）：阻塞写入会卡死整个消费循环，
+		// 进而写满 ACP 订阅 buffer 导致 session update 在分发层被丢弃且不落库。
+		// 此处丢弃仅影响主订阅客户端的实时帧——消息已落库+经广播器分发，
+		// 客户端可通过断点续传恢复，代价远小于全链路停滞。
+		sendOut := func(msg models.Message) {
+			select {
+			case out <- msg:
+			default:
+				slog.Warn("out channel 已满，丢弃发往主订阅者的消息（已落库，可断点续传恢复）",
+					"session", msg.SessionID, "sequence", msg.Sequence, "kind", msg.Kind)
+			}
+		}
+
 		defer func() {
 			// prompt 超时兜底：若因 promptCtx 超时退出（agent 卡死），标记 interrupted 而非 done，
 			// 让前端提示"任务超时，可重发"。正常完成时 promptCtx 尚未到期，Err()==nil。
@@ -2051,7 +2065,7 @@ func (s *Service) PromptWithExecution(ctx context.Context, sessionID, prompt str
 					slog.Error("持久化文件改动摘要失败", "session", sessionID, "sequence", fileMsg.Sequence, "err", err)
 				} else {
 					bc.broadcast(fileMsg)
-					out <- fileMsg
+					sendOut(fileMsg)
 				}
 			}
 			// LastSeq 仅在收尾写一次（生产代码不读它，逐条更新是纯白写，
@@ -2087,7 +2101,7 @@ func (s *Service) PromptWithExecution(ctx context.Context, sessionID, prompt str
 			// 广播过的消息必然已可从仓库读到，补齐无缺口。
 			pw.enqueue(persistOp{msg: msg})
 			bc.broadcast(msg)
-			out <- msg
+			sendOut(msg)
 		}
 
 		// 若本次发送触发了会话重连（非活跃/连接丢失），先推送一条临时状态帧
@@ -2105,7 +2119,7 @@ func (s *Service) PromptWithExecution(ctx context.Context, sessionID, prompt str
 				CreatedAt:   time.Now(),
 			}
 			bc.broadcast(reconnMsg)
-			out <- reconnMsg
+			sendOut(reconnMsg)
 		}
 
 		// 持久化用户发送的 prompt 作为 user_message_chunk
@@ -2181,7 +2195,7 @@ func (s *Service) PromptWithExecution(ctx context.Context, sessionID, prompt str
 						// 低频消息：经落盘队列持久化（tool_call 附带创建工具调用记录）
 						pw.enqueue(persistOp{msg: msg, tc: u.ToolCall})
 						bc.broadcast(msg)
-						out <- msg
+						sendOut(msg)
 					}
 				case pn, ok := <-permCh:
 					if !ok {

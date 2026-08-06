@@ -760,7 +760,14 @@ func (s *TaskManagerService) SendPrompt(_ context.Context, cwd, taskID, prompt s
 					return
 				}
 			case <-runCtx.Done():
-				// 被 Stop 取消：状态已由 Stop 写为 canceled，这里只负责退出
+				// 被 Stop 取消：状态已由 Stop 写为 canceled，这里只负责退出。
+				// 必须后台排空消息流直至关闭：Stop 的 CancelSession 生效前（或取消失败时）
+				// prompt 消费 goroutine 仍在向 ch 阻塞写入，无人消费会使其在缓冲写满后
+				// 永久阻塞（goroutine 泄漏），进而写满 ACP 订阅 buffer 导致 update 被丢弃。
+				go func() {
+					for range ch {
+					}
+				}()
 				return
 			}
 		}
