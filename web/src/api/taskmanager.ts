@@ -77,9 +77,14 @@ export function upsertTask(
   })
 }
 
-// 删除单个任务
-export function deleteTask(workspaceId: number, taskId: string): Promise<void> {
-  return apiFetch(`/taskmanager/tasks/${encodeURIComponent(taskId)}${qs(workspaceId)}`, { method: 'DELETE' })
+// 删除单个任务。removeWorktree 为 true 时一并删除 worktree 目录，默认保留。
+export function deleteTask(workspaceId: number, taskId: string, removeWorktree?: boolean): Promise<void> {
+  const base = `/taskmanager/tasks/${encodeURIComponent(taskId)}`
+  const params = new URLSearchParams()
+  if (workspaceId) params.set('workspace_id', String(workspaceId))
+  if (removeWorktree) params.set('remove_worktree', 'true')
+  const query = params.toString()
+  return apiFetch(query ? `${base}?${query}` : base, { method: 'DELETE' })
 }
 
 // 设置并发上限

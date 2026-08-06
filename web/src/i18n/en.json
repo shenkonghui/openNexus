@@ -1069,6 +1069,8 @@
     "promptRequired": "Please enter a prompt",
     "jsonInvalid": "Invalid JSON",
     "confirmDelete": "Delete this task?",
+    "confirmDeleteKeepWorktree": "Delete task? The worktree ({{branch}}) will be kept for later manual cleanup.",
+    "confirmAlsoRemoveWorktree": "Also remove the worktree ({{branch}}) and its branch? Click Cancel to keep it.",
     "expandAll": "Multi-task Mode",
     "expandAllHint": "Tile all task windows and watch each task's live output",
     "collapseGrid": "Exit Multi-task",

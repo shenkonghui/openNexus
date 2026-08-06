@@ -135,13 +135,14 @@ func (s *TaskManagerService) UpsertTask(cwd string, task models.TaskManagerTask)
 	return s.storeFor(cwd).UpsertTask(task)
 }
 
-// DeleteTask 删除指定任务。若任务正在运行则先取消，并尝试清理其 worktree；
+// DeleteTask 删除指定任务。若任务正在运行则先取消；
+// removeWorktree 为 true 时清理其 worktree，默认保留 worktree 目录供用户后续检查。
 // 任务关联的会话（db_session_id/session_id）一并删除，使左侧任务列表同步移除，
 // 与「删除会话 → 注销任务」（UnregisterSessionTask）保持对称。
-func (s *TaskManagerService) DeleteTask(cwd, taskID string) error {
+func (s *TaskManagerService) DeleteTask(cwd, taskID string, removeWorktree bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	removed, err := s.deleteTaskLocked(cwd, func(t *models.TaskManagerTask) bool { return t.ID == taskID }, true)
+	removed, err := s.deleteTaskLocked(cwd, func(t *models.TaskManagerTask) bool { return t.ID == taskID }, true, removeWorktree)
 	if err != nil {
 		return err
 	}
@@ -161,9 +162,10 @@ func (s *TaskManagerService) UnregisterSessionTask(cwd string, dbSessionID uint)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	// 会话本身正在被删除，此处只需移除登记条目，不再回头删会话。
+	// removeWorktree=false：会话删除不应连带删除任务的 worktree。
 	_, err := s.deleteTaskLocked(cwd, func(t *models.TaskManagerTask) bool {
 		return t.DBSessionID != nil && *t.DBSessionID == dbSessionID
-	}, false)
+	}, false, false)
 	return err
 }
 
@@ -288,10 +290,12 @@ func (s *TaskManagerService) cleanupArchived(cwd string, entry *models.ArchivedT
 	}
 }
 
-// deleteTaskLocked 删除首个匹配的任务（需持有 s.mu）：取消运行、清理 worktree 并写回。
+// deleteTaskLocked 删除首个匹配的任务（需持有 s.mu）：取消运行、可选清理 worktree 并写回。
 // deleteSession 为 true 时连带删除任务关联的会话（best-effort，失败仅记日志），
-// 会话发起的注销（UnregisterSessionTask）传 false 避免重复删除。返回是否删除了条目。
-func (s *TaskManagerService) deleteTaskLocked(cwd string, match func(*models.TaskManagerTask) bool, deleteSession bool) (bool, error) {
+// 会话发起的注销（UnregisterSessionTask）传 false 避免重复删除。
+// removeWorktree 为 true 时清理任务的 worktree 目录；默认 false 保留 worktree 供用户后续检查。
+// 返回是否删除了条目。
+func (s *TaskManagerService) deleteTaskLocked(cwd string, match func(*models.TaskManagerTask) bool, deleteSession bool, removeWorktree bool) (bool, error) {
 	def, err := s.storeFor(cwd).Load()
 	if err != nil {
 		return false, err
@@ -315,11 +319,13 @@ func (s *TaskManagerService) deleteTaskLocked(cwd string, match func(*models.Tas
 	}
 	// 取消运行中的任务
 	s.cancelLocked(cwd, taskID)
-	// 清理 worktree
-	if wtPath != "" {
+	// 清理 worktree（可选）：默认保留 worktree 目录供用户后续检查代码改动
+	if removeWorktree && wtPath != "" {
 		if rerr := acp.RemoveWorktree(cwd, wtPath, branch); rerr != nil {
 			slog.Warn("删除任务时清理 worktree 失败", "task", taskID, "err", rerr)
 		}
+	} else if wtPath != "" {
+		slog.Info("删除任务时保留 worktree", "task", taskID, "worktree", wtPath, "branch", branch)
 	}
 	def.Tasks = append(def.Tasks[:idx], def.Tasks[idx+1:]...)
 	if err := s.storeFor(cwd).Save(def); err != nil {

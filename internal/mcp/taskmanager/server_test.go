@@ -83,7 +83,7 @@ type fakeTaskCreator struct {
 }
 
 func (f *fakeTaskCreator) UpsertTask(string, models.TaskManagerTask) error { return nil }
-func (f *fakeTaskCreator) DeleteTask(string, string) error                 { return nil }
+func (f *fakeTaskCreator) DeleteTask(string, string, bool) error           { return nil }
 func (f *fakeTaskCreator) SetMaxParallel(string, int) error                { return nil }
 func (f *fakeTaskCreator) Stop(string, string) error                       { return nil }
 func (f *fakeTaskCreator) Start(context.Context, string, uint, uint, string) error {

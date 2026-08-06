@@ -46,7 +46,7 @@ type WorkspaceResolver interface {
 // 用于通过 MCP 工具管理编排任务（创建/更新/删除/启停/调整并发）。
 type TaskManagerTaskCreator interface {
 	UpsertTask(cwd string, task models.TaskManagerTask) error
-	DeleteTask(cwd, taskID string) error
+	DeleteTask(cwd, taskID string, removeWorktree bool) error
 	SetMaxParallel(cwd string, maxParallel int) error
 	Stop(cwd, taskID string) error
 	Start(ctx context.Context, cwd string, workspaceID uint, userID uint, taskID string) error
@@ -429,9 +429,10 @@ func handleUpdateTask(ctx context.Context, prefsRepo *repository.UserAgentPrefsR
 // ====== delete_task ======
 
 type deleteTaskIn struct {
-	TaskID      string `json:"task_id" jsonschema:"要删除的任务 id，支持 glob 模式（如 t12*）批量匹配"`
-	Glob        *bool  `json:"glob,omitempty" jsonschema:"是否启用 glob 模式匹配 task_id，默认开启；传 false 则按字面 id 精确匹配"`
-	WorkspaceID uint   `json:"workspace_id,omitempty" jsonschema:"工作区 ID"`
+	TaskID         string `json:"task_id" jsonschema:"要删除的任务 id，支持 glob 模式（如 t12*）批量匹配"`
+	Glob           *bool  `json:"glob,omitempty" jsonschema:"是否启用 glob 模式匹配 task_id，默认开启；传 false 则按字面 id 精确匹配"`
+	RemoveWorktree *bool  `json:"remove_worktree,omitempty" jsonschema:"是否一并删除任务的 worktree 目录，默认 false 保留"`
+	WorkspaceID    uint   `json:"workspace_id,omitempty" jsonschema:"工作区 ID"`
 }
 
 type deleteTaskOut struct {
@@ -457,8 +458,9 @@ func handleDeleteTask(ctx context.Context, wsResolver WorkspaceResolver, orchCre
 		return nil, deleteTaskOut{}, err
 	}
 	var failed []string
+	removeWt := in.RemoveWorktree != nil && *in.RemoveWorktree
 	for _, id := range ids {
-		if derr := orchCreator.DeleteTask(cwd, id); derr != nil {
+		if derr := orchCreator.DeleteTask(cwd, id, removeWt); derr != nil {
 			failed = append(failed, fmt.Sprintf("%s: %v", id, derr))
 		}
 	}

@@ -1069,6 +1069,8 @@
     "promptRequired": "请先输入 prompt",
     "jsonInvalid": "JSON 格式错误",
     "confirmDelete": "确定删除该任务？",
+    "confirmDeleteKeepWorktree": "确定删除任务？worktree（{{branch}}）将保留，可后续手动清理。",
+    "confirmAlsoRemoveWorktree": "是否一并删除 worktree（{{branch}}）及其分支？点击「取消」仅保留。",
     "expandAll": "多任务模式",
     "expandAllHint": "平铺展开所有任务窗口，实时查看每个任务的输出",
     "collapseGrid": "退出多任务",

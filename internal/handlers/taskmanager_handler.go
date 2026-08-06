@@ -176,7 +176,8 @@ func (h *TaskManagerHandler) UpsertTask(c *gin.Context) {
 	Success(c, http.StatusOK, task)
 }
 
-// DeleteTask DELETE /api/v1/taskmanager/tasks/:task_id?workspace_id=123
+// DeleteTask DELETE /api/v1/taskmanager/tasks/:task_id?workspace_id=123&remove_worktree=true
+// remove_worktree 默认 false：保留 worktree 目录供用户后续检查；传 true 时一并清理。
 func (h *TaskManagerHandler) DeleteTask(c *gin.Context) {
 	cwd, _, ok := h.resolveCwd(c)
 	if !ok {
@@ -187,7 +188,8 @@ func (h *TaskManagerHandler) DeleteTask(c *gin.Context) {
 		Fail(c, http.StatusBadRequest, "INVALID_REQUEST", "缺少 task_id")
 		return
 	}
-	if err := h.svc.DeleteTask(cwd, taskID); err != nil {
+	removeWorktree := c.Query("remove_worktree") == "true"
+	if err := h.svc.DeleteTask(cwd, taskID, removeWorktree); err != nil {
 		Fail(c, http.StatusInternalServerError, "INTERNAL", err.Error())
 		return
 	}

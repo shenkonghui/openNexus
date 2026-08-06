@@ -437,7 +437,7 @@ func TestDeleteTask_DeletesLinkedSession(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("写入会话关联: %v", err)
 	}
-	if err := svc.DeleteTask(cwd, "t1"); err != nil {
+	if err := svc.DeleteTask(cwd, "t1", false); err != nil {
 		t.Fatalf("DeleteTask: %v", err)
 	}
 	def, _ := svc.Load(cwd)
@@ -457,7 +457,7 @@ func TestDeleteTask_NoSessionIsNoop(t *testing.T) {
 	if err := svc.UpsertTask(cwd, models.TaskManagerTask{ID: "t1", Title: "T", Detail: "d"}); err != nil {
 		t.Fatalf("UpsertTask: %v", err)
 	}
-	if err := svc.DeleteTask(cwd, "t1"); err != nil {
+	if err := svc.DeleteTask(cwd, "t1", false); err != nil {
 		t.Fatalf("DeleteTask: %v", err)
 	}
 	if len(mock.deletedSessions) != 0 {

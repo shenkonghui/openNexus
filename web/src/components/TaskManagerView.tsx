@@ -239,13 +239,25 @@ export default function TaskManagerView({ workspaceId, cwd, agents, restoreSessi
     }
   }
 
-  // 删除单个任务（需确认）。
+  // 删除单个任务（需确认）。有 worktree 的任务默认保留 worktree，用户可选一并删除。
   async function handleDeleteTask(task: TaskManagerTask) {
     if (!workspaceId || busy) return
-    if (!window.confirm(t('taskmanager.confirmDelete'))) return
+    const hasWorktree = !!task.worktree_path
+    // 有 worktree 时提示用户选择：确认=仅删任务保留 worktree；取消=不删。
+    // 浏览器 confirm 无法做三态，这里用 confirm 表达"删任务保留 worktree"，
+    // 需要连同删 worktree 时用下面的二次确认。
+    let removeWorktree = false
+    if (hasWorktree) {
+      const keep = window.confirm(t('taskmanager.confirmDeleteKeepWorktree', { branch: task.branch || task.worktree_path }))
+      if (!keep) return
+      // 再问是否一并删除 worktree
+      removeWorktree = window.confirm(t('taskmanager.confirmAlsoRemoveWorktree', { branch: task.branch || task.worktree_path }))
+    } else {
+      if (!window.confirm(t('taskmanager.confirmDelete'))) return
+    }
     setBusy(true)
     try {
-      await deleteTask(workspaceId, task.id)
+      await deleteTask(workspaceId, task.id, removeWorktree)
       await reloadDef()
     } catch (e) {
       onError(String((e as Error)?.message || e))
