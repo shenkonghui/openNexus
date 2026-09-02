@@ -60,6 +60,44 @@ export function toolCommandFromRaw(rawJSON: string): string {
   return best
 }
 
+interface ToolInputLine {
+  command: string
+  cwd: string
+}
+
+// 从 raw_json 提取工具原始输入，拼成可读命令行（优先取最长的 command + args 组合）。
+// 用于展开 tool_call 时补显实际执行的命令，避免只显示「Run command」这类工具标题。
+export function toolInputLineFromRaw(rawJSON: string): ToolInputLine {
+  if (!rawJSON) return { command: '', cwd: '' }
+  let bestCmd = ''
+  let bestCwd = ''
+  for (const part of rawJSON.split('\n')) {
+    const line = part.trim()
+    if (!line) continue
+    try {
+      const raw = JSON.parse(line) as Record<string, any>
+      const ri = raw.rawInput
+      if (!ri || typeof ri !== 'object') continue
+      const cmd = typeof ri.command === 'string' ? ri.command.trim() : ''
+      if (!cmd) continue
+      const args = Array.isArray(ri.args)
+        ? ri.args
+          .filter((a: any) => typeof a === 'string' || typeof a === 'number')
+          .map((a: any) => String(a))
+          .join(' ')
+        : ''
+      const lineCmd = args ? `${cmd} ${args}` : cmd
+      if (lineCmd.length >= bestCmd.length) {
+        bestCmd = lineCmd
+        if (typeof ri.cwd === 'string' && ri.cwd) bestCwd = ri.cwd
+      }
+    } catch {
+      /* 跳过无法解析的行 */
+    }
+  }
+  return { command: bestCmd, cwd: bestCwd }
+}
+
 export function isBareToolName(title: string): boolean {
   return /^(bash|shell|read|write|edit|grep|glob|search|execute|other|(read|write|edit|create)\s+file)$/i.test(title.trim())
 }
@@ -196,6 +234,12 @@ function MessageBubble({ message, defaultOpen = false, forceCollapsed = false, s
     [message],
   )
 
+  // 工具原始输入命令行（rawInput.command + args），展开时补显，避免只显示工具标题
+  const toolInput = useMemo(
+    () => (message.role === 'tool' ? toolInputLineFromRaw(message.raw_json) : { command: '', cwd: '' }),
+    [message],
+  )
+
   // 该 tool_call 关联的 ACP 终端：在气泡输出位置内嵌实时终端窗口
   const terminalIds = useMemo(
     () => (message.role === 'tool' ? terminalIdsFromRaw(message.raw_json) : []),
@@ -316,13 +360,21 @@ function MessageBubble({ message, defaultOpen = false, forceCollapsed = false, s
                 {restoreMenu}
               </div>
             ) : isTool ? (
-              toolOutput ? (
-                <pre className={styles.toolOutput}>
-                  {toolOutput.length > 4000 ? `${toolOutput.slice(0, 4000)}\n…` : toolOutput}
-                </pre>
-              ) : !hasDiff ? (
-                <div className={styles.contentMuted}>{t('common.noData')}</div>
-              ) : null
+              <>
+                {(toolInput.command || toolInput.cwd) && (
+                  <div className={styles.toolInput}>
+                    {toolInput.cwd && <span className={styles.toolCwd} title={toolInput.cwd}>{toolInput.cwd}</span>}
+                    {toolInput.command && <code className={styles.toolCommand}>{toolInput.command}</code>}
+                  </div>
+                )}
+                {toolOutput ? (
+                  <pre className={styles.toolOutput}>
+                    {toolOutput.length > 4000 ? `${toolOutput.slice(0, 4000)}\n…` : toolOutput}
+                  </pre>
+                ) : !hasDiff ? (
+                  <div className={styles.contentMuted}>{t('common.noData')}</div>
+                ) : null}
+              </>
             ) : (
               <>
                 {message.content && (

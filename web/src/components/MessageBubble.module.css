@@ -172,6 +172,36 @@
   color: var(--code-text);
 }
 
+/* 工具原始输入（rawInput command + args + cwd），展开时显示 */
+.toolInput {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 4px 0 0;
+  padding: 6px 8px;
+  background: var(--code-bg);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  font-size: 12px;
+  line-height: 1.5;
+  word-break: break-word;
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+}
+
+.toolCwd {
+  opacity: 0.85;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.toolCommand {
+  color: var(--code-text);
+  background: none;
+  font-family: inherit;
+}
+
 .rawBtn {
   margin-left: auto;
   background: none;
