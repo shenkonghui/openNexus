@@ -3,8 +3,17 @@ import { Terminal as XTerm } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import { useTranslation } from 'react-i18next'
+import { useTheme } from '../context/ThemeContext'
 import '@xterm/xterm/css/xterm.css'
 import styles from './Terminal.module.css'
+
+/** 根据主题返回 xterm 配色 */
+function getXTermTheme(dark: boolean) {
+  if (dark) {
+    return { background: '#1a1a18', foreground: '#e7e5e4', cursor: '#5eaa8a' }
+  }
+  return { background: '#ffffff', foreground: '#000000', cursor: '#2d6a4f' }
+}
 
 /** agent 聚合终端的写入句柄：由父组件（TerminalPanel）按事件顺序调用。 */
 export interface AgentTerminalHandle {
@@ -26,8 +35,10 @@ export interface AgentTerminalInstanceProps {
  */
 export default function AgentTerminalInstance({ active, onReady }: AgentTerminalInstanceProps) {
   const { t } = useTranslation()
+  const { theme } = useTheme()
   const containerRef = useRef<HTMLDivElement>(null)
   const fitRef = useRef<FitAddon | null>(null)
+  const termRef = useRef<XTerm | null>(null)
   // onReady / t 用 ref 持有最新值，避免作为挂载 effect 依赖导致 xterm 重建
   const onReadyRef = useRef(onReady)
   onReadyRef.current = onReady
@@ -39,10 +50,10 @@ export default function AgentTerminalInstance({ active, onReady }: AgentTerminal
     if (!container) return
     const term = new XTerm({
       fontSize: 13,
-      fontFamily: "'Monaco', 'Menlo', 'Courier New', monospace",
+      fontFamily: "'Geist Mono', 'Monaco', 'Menlo', 'Courier New', monospace",
       cursorBlink: false,
       disableStdin: true,
-      theme: { background: '#1e1e2e', foreground: '#cdd6f4', cursor: '#f5e0dc' },
+      theme: getXTermTheme(theme === 'dark'),
     })
     const fit = new FitAddon()
     term.loadAddon(fit)
@@ -50,6 +61,7 @@ export default function AgentTerminalInstance({ active, onReady }: AgentTerminal
     term.open(container)
     try { fit.fit() } catch {}
     fitRef.current = fit
+    termRef.current = term
 
     const resizeObserver = new ResizeObserver(() => { try { fit.fit() } catch {} })
     resizeObserver.observe(container)
@@ -77,9 +89,17 @@ export default function AgentTerminalInstance({ active, onReady }: AgentTerminal
       resizeObserver.disconnect()
       term.dispose()
       fitRef.current = null
+      termRef.current = null
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // 主题切换时动态更新 xterm 配色
+  useEffect(() => {
+    const term = termRef.current
+    if (!term) return
+    term.options.theme = getXTermTheme(theme === 'dark')
+  }, [theme])
 
   useEffect(() => {
     if (!active) return

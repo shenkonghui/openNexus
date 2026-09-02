@@ -13,7 +13,7 @@
   align-items: center;
   justify-content: space-between;
   min-height: var(--topbar-height);
-  padding: 4px 24px;
+  padding: 6px 20px;
   background: var(--bg-surface);
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
@@ -28,7 +28,9 @@
 
 .title {
   font-size: 20px;
-  font-weight: 600;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  font-family: var(--font-sans);
   color: var(--text-primary);
 }
 
@@ -73,7 +75,7 @@
 .body {
   flex: 1;
   overflow: auto;
-  padding: 24px;
+  padding: 20px 24px;
 }
 
 .bodyInner {
@@ -164,6 +166,8 @@
   width: 110px;
   white-space: nowrap;
   color: var(--text-secondary);
+  font-family: var(--font-sans);
+  font-size: 11px;
 }
 
 .colKind {
@@ -195,11 +199,14 @@
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  padding: 2px 8px;
-  font-size: 12px;
+  padding: 2px 7px;
+  font-size: 11px;
   color: var(--text-secondary);
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-sans);
+  
+  
 }
 
 .command {

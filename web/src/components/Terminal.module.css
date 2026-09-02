@@ -44,7 +44,7 @@
 
 .terminal {
   flex: 1;
-  background: #1e1e2e;
+  background: var(--code-bg);
   padding: 4px 8px;
   overflow: hidden;
 }

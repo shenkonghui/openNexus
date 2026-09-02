@@ -352,15 +352,16 @@ export default function SessionSidebar({ sessions, workspaceId, currentId, onDel
 
         {/* 任务管理入口：置于「任务」分组上方（原在左下角 footer） */}
         <div className={styles.group}>
-          <Link
-            to={taskManagerUrl(workspaceId)}
-            className={`${styles.groupHeader} ${location.pathname.endsWith('/taskmanager') ? styles.itemActive : ''}`}
-          >
-            <span className={styles.groupTitle}>
-              <Network size={13} style={{ marginRight: 4, verticalAlign: '-2px' }} />
-              {t('nav.taskmanager')}
-            </span>
-          </Link>
+          <div className={`${styles.item} ${location.pathname.endsWith('/taskmanager') ? styles.itemActive : ''}`}>
+            <Link to={taskManagerUrl(workspaceId)} className={styles.itemLink}>
+              <div className={styles.itemRow}>
+                <span className={styles.itemTitle}>
+                  <Network size={13} style={{ marginRight: 4, verticalAlign: '-2px' }} />
+                  {t('nav.taskmanager')}
+                </span>
+              </div>
+            </Link>
+          </div>
         </div>
 
         <div className={styles.group}>

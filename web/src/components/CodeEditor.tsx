@@ -8,6 +8,7 @@ import { autocompletion, completionKeymap, closeBrackets, closeBracketsKeymap } 
 import { lintKeymap } from '@codemirror/lint'
 import { oneDark } from '@codemirror/theme-one-dark'
 import type { Extension } from '@codemirror/state'
+import { useTheme } from '../context/ThemeContext'
 import { go } from '@codemirror/lang-go'
 import { javascript } from '@codemirror/lang-javascript'
 import { json } from '@codemirror/lang-json'
@@ -30,6 +31,29 @@ interface CodeEditorProps {
   /** 是否只读 */
   readOnly?: boolean
 }
+
+// 浅色主题：与 global.css 浅色变量对齐
+const lightTheme = EditorView.theme({
+  '&': {
+    backgroundColor: 'var(--code-bg)',
+    color: 'var(--code-text)',
+  },
+  '.cm-gutters': {
+    backgroundColor: 'var(--code-bg)',
+    borderRight: '1px solid var(--border)',
+    color: 'var(--text-muted)',
+  },
+  '.cm-activeLine': { backgroundColor: 'var(--bg-hover)' },
+  '.cm-activeLineGutter': { backgroundColor: 'var(--bg-hover)' },
+  '.cm-selectionBackground': { backgroundColor: 'var(--accent-subtle)' },
+  '&.cm-focused .cm-selectionBackground': { backgroundColor: 'var(--accent-subtle)' },
+  '.cm-cursor': { borderLeftColor: 'var(--accent)' },
+  '.cm-foldPlaceholder': {
+    backgroundColor: 'var(--bg-hover)',
+    border: 'none',
+    color: 'var(--text-muted)',
+  },
+}, { dark: false })
 
 // 根据文件扩展名同步返回对应的语言扩展（直接使用 @codemirror/lang-* 包，无需异步加载）
 function langFromPath(path: string): Extension | null {
@@ -83,6 +107,7 @@ export default function CodeEditor({ value, onChange, filePath, readOnly }: Code
   const viewRef = useRef<EditorView | null>(null)
   const onChangeRef = useRef(onChange)
   onChangeRef.current = onChange
+  const { theme } = useTheme()
 
   // 语言扩展：按扩展名同步匹配对应的 LanguageSupport
   const langExtension = useMemo<Extension[]>(() => {
@@ -122,7 +147,7 @@ export default function CodeEditor({ value, onChange, filePath, readOnly }: Code
           ...completionKeymap,
           ...lintKeymap,
         ]),
-        oneDark,
+        theme === 'dark' ? oneDark : lightTheme,
         EditorView.lineWrapping,
         EditorState.readOnly.of(!!readOnly),
         updateListener,
@@ -137,9 +162,9 @@ export default function CodeEditor({ value, onChange, filePath, readOnly }: Code
       view.destroy()
       viewRef.current = null
     }
-    // 仅在 filePath/readOnly 变化时重建编辑器
+    // 仅在 filePath/readOnly/theme 变化时重建编辑器
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filePath, readOnly, langExtension])
+  }, [filePath, readOnly, langExtension, theme])
 
   // 外部 value 变化时更新编辑器内容（避免循环更新）
   useEffect(() => {

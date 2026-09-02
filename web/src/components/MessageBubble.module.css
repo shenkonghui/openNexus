@@ -13,11 +13,11 @@
   justify-content: flex-start;
 }
 
-/* OpenHands 风格：用户消息右对齐气泡，agent 消息全宽透明背景 */
+/* 用户消息右对齐气泡，agent 消息全宽透明背景 */
 .bubble {
   max-width: 70%;
-  border-radius: 12px;
-  padding: 6px 14px;
+  border-radius: var(--radius-lg);
+  padding: 8px 14px;
   position: relative;
 }
 
@@ -27,8 +27,8 @@
   color: var(--bubble-user-text);
   width: 100%;
   max-width: 100%;
-  padding: 5px 12px;
-  border-radius: 12px;
+  padding: 7px 14px;
+  border-radius: var(--radius-md);
 }
 
 .assistantBubble {
@@ -80,14 +80,17 @@
   font-weight: 600;
   opacity: 0.7;
   flex-shrink: 0;
+  font-family: var(--font-sans);
 }
 
 .badge {
-  font-size: 10px;
-  padding: 1px 6px;
+  font-size: 11px;
+  padding: 2px 8px;
   background: var(--bg-hover);
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   color: var(--text-secondary);
+  font-family: var(--font-sans);
+  font-weight: 500;
 }
 
 /* 工具调用折叠态的单行摘要 */
@@ -253,7 +256,7 @@
   margin-top: 4px;
   background: var(--bg-elevated);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   box-shadow: var(--shadow-md);
   z-index: 100;
   min-width: 140px;

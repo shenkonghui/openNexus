@@ -1,137 +1,150 @@
-/* 字体：Inter（UI）+ JetBrains Mono（代码）+ Noto Sans SC（非 macOS 中文回退） */
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:ital,wght@0,300;0,400;0,500;0,600;1,400&family=Noto+Sans+SC:wght@300;400;500;700&display=swap');
+/* 字体：Geist（UI 主体）+ Geist Mono（代码/数据）+ Noto Sans SC（中文回退） */
+@import url('https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&family=Geist+Mono:wght@400;500;600&family=Noto+Sans+SC:wght@400;500;700&display=swap');
 
 /* ===== 字体栈（主题无关） ===== */
 :root {
-  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans SC', 'Microsoft YaHei', sans-serif;
-  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Monaco, Consolas, monospace;
+  --font-sans: 'Geist', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans SC', 'Microsoft YaHei', sans-serif;
+  --font-mono: 'Geist Mono', ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Monaco, Consolas, monospace;
+  --font-prose: 'Geist', -apple-system, 'PingFang SC', 'Noto Sans SC', sans-serif;
 }
 
-/* ===== 深色主题（默认，参考 OpenHands） ===== */
+/* ===== 浅色主题（默认：暖白 + 深翡翠绿 accent） ===== */
 :root,
-[data-theme='dark'] {
-  --bg-base: #0c0e10;
-  --bg-surface: #1f2228;
-  --bg-elevated: #24272e;
-  --bg-input: #393939;
-  --bg-sidebar: #16181c;
-  --bg-hover: #2a2d35;
-  --bg-active: #31343d;
-  --bg-muted: #1a1d23;
-
-  --border: #3c3c4a;
-  --border-subtle: #2a2d35;
-  --border-strong: #525252;
-
-  --text-primary: #c4cbda;
-  --text-secondary: #9099ac;
-  --text-muted: #6b7280;
-  --text-on-accent: #1a1a1a;
-
-  --accent: #f3ce49;
-  --accent-hover: #e0b830;
-  --accent-subtle: rgba(243, 206, 73, 0.12);
-  --accent-border: rgba(243, 206, 73, 0.4);
-
-  --success: #4ade80;
-  --success-bg: rgba(74, 222, 128, 0.15);
-  --warning: #fbbf24;
-  --warning-bg: rgba(251, 191, 36, 0.15);
-  --danger: #f87171;
-  --danger-bg: rgba(248, 113, 113, 0.15);
-  --info: #60a5fa;
-  --info-bg: rgba(96, 165, 250, 0.15);
-
-  /* 消息气泡 */
-  --bubble-user-bg: var(--bg-hover);
-  --bubble-user-text: var(--text-secondary);
-  --bubble-assistant-bg: #1f2228;
-  --bubble-assistant-text: #c4cbda;
-  --bubble-assistant-border: #3c3c4a;
-  --bubble-tool-bg: #1f2228;
-  --bubble-tool-border: #3c3c4a;
-  --bubble-thought-bg: #16181c;
-  --bubble-thought-border: #525252;
-
-  /* 代码块 */
-  --code-bg: #2a3038;
-  --code-border: #30363d;
-  --code-text: #e6edf3;
-
-  /* 阴影 */
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
-  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.4);
-  --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.5);
-
-  --scrollbar-thumb: #3c3c4a;
-  --scrollbar-track: transparent;
-
-  /* 配置栏控件统一尺寸（所有模式的 Agent/模式/模型选择器共用） */
-  --config-control-height: 30px;
-  --config-control-width: 110px;
-  --config-control-font: 12px;
-  /* 顶栏统一高度（含下边框）：左侧侧栏顶栏与右侧页面顶栏共用，保证两侧对齐 */
-  --topbar-height: 39px;
-}
-
-/* ===== 浅色主题 ===== */
 [data-theme='light'] {
-  --bg-base: #f5f5f7;
+  --bg-base: #ffffff;
   --bg-surface: #ffffff;
   --bg-elevated: #ffffff;
   --bg-input: #ffffff;
-  --bg-sidebar: #f0f0f2;
-  --bg-hover: #ececf0;
-  --bg-active: #e0e0e6;
-  --bg-muted: #f8f8fa;
+  --bg-sidebar: #ffffff;
+  --bg-hover: #f5f5f5;
+  --bg-active: #ebebeb;
+  --bg-muted: #fafafa;
 
-  --border: #e0e0e6;
-  --border-subtle: #eeeeee;
-  --border-strong: #c8c8d0;
+  --border: #e5e5e5;
+  --border-subtle: #f0f0f0;
+  --border-strong: #cccccc;
 
-  --text-primary: #1a1d23;
-  --text-secondary: #4b5563;
-  --text-muted: #8a8a98;
+  --text-primary: #000000;
+  --text-secondary: #404040;
+  --text-muted: #808080;
   --text-on-accent: #ffffff;
 
-  --accent: #d4a718;
-  --accent-hover: #b8941a;
-  --accent-subtle: rgba(212, 167, 24, 0.12);
-  --accent-border: rgba(212, 167, 24, 0.45);
+  --accent: #2d6a4f;
+  --accent-hover: #245340;
+  --accent-subtle: rgba(45, 106, 79, 0.08);
+  --accent-border: rgba(45, 106, 79, 0.3);
+  --accent-ring: rgba(45, 106, 79, 0.15);
 
-  --success: #16a34a;
-  --success-bg: rgba(22, 163, 74, 0.12);
-  --warning: #d97706;
-  --warning-bg: rgba(217, 119, 6, 0.12);
-  --danger: #dc2626;
-  --danger-bg: rgba(220, 38, 38, 0.12);
-  --info: #2563eb;
-  --info-bg: rgba(37, 99, 235, 0.12);
+  --success: #2d6a4f;
+  --success-bg: rgba(45, 106, 79, 0.08);
+  --warning: #b45309;
+  --warning-bg: rgba(180, 83, 9, 0.08);
+  --danger: #b91c1c;
+  --danger-bg: rgba(185, 28, 28, 0.06);
+  --info: #1d4ed8;
+  --info-bg: rgba(29, 78, 216, 0.06);
 
-  --bubble-user-bg: var(--bg-hover);
-  --bubble-user-text: var(--text-secondary);
-  --bubble-assistant-bg: #ffffff;
-  --bubble-assistant-text: #1a1d23;
-  --bubble-assistant-border: #e0e0e6;
-  --bubble-tool-bg: #ffffff;
-  --bubble-tool-border: #e0e0e6;
-  --bubble-thought-bg: #f8f8fa;
-  --bubble-thought-border: #c8c8d0;
+  /* 消息气泡 */
+  --bubble-user-bg: #f5f5f5;
+  --bubble-user-text: #404040;
+  --bubble-assistant-bg: transparent;
+  --bubble-assistant-text: #000000;
+  --bubble-assistant-border: #e5e5e5;
+  --bubble-tool-bg: #fafafa;
+  --bubble-tool-border: #e5e5e5;
+  --bubble-thought-bg: transparent;
+  --bubble-thought-border: #cccccc;
 
-  --code-bg: #f3f4f6;
-  --code-border: #d1d5db;
-  --code-text: #1f2937;
+  /* 代码块 */
+  --code-bg: #f5f5f5;
+  --code-border: #e5e5e5;
+  --code-text: #1a1a1a;
 
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.06);
-  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.1);
-  --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.14);
+  /* 阴影：暖灰调，非纯黑 */
+  --shadow-sm: 0 1px 2px rgba(28, 25, 23, 0.04);
+  --shadow-md: 0 4px 12px rgba(28, 25, 23, 0.06);
+  --shadow-lg: 0 12px 32px rgba(28, 25, 23, 0.08);
 
-  --scrollbar-thumb: #c8c8d0;
+  --scrollbar-thumb: #d6d3d1;
   --scrollbar-track: transparent;
 
-  --config-control-height: 30px;
-  --config-control-width: 110px;
-  --config-control-font: 12px;
+  /* 圆角刻度：内紧外柔 */
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+
+  /* 配置栏控件统一尺寸 */
+  --config-control-height: 32px;
+  --config-control-width: 120px;
+  --config-control-font: 13px;
+  /* 顶栏统一高度 */
+  --topbar-height: 44px;
+}
+
+/* ===== 深色主题（暖调炭灰 + 浅翡翠绿 accent，非纯黑） ===== */
+[data-theme='dark'] {
+  --bg-base: #1a1a18;
+  --bg-surface: #242422;
+  --bg-elevated: #2a2a28;
+  --bg-input: #1e1e1c;
+  --bg-sidebar: #1a1a18;
+  --bg-hover: #2e2e2c;
+  --bg-active: #353533;
+  --bg-muted: #1e1e1c;
+
+  --border: #353533;
+  --border-subtle: #2a2a28;
+  --border-strong: #4a4a46;
+
+  --text-primary: #e7e5e4;
+  --text-secondary: #a8a29e;
+  --text-muted: #78716c;
+  --text-on-accent: #ffffff;
+
+  --accent: #5eaa8a;
+  --accent-hover: #6bbb9a;
+  --accent-subtle: rgba(94, 170, 138, 0.1);
+  --accent-border: rgba(94, 170, 138, 0.3);
+  --accent-ring: rgba(94, 170, 138, 0.2);
+
+  --success: #5eaa8a;
+  --success-bg: rgba(94, 170, 138, 0.1);
+  --warning: #d4a843;
+  --warning-bg: rgba(212, 168, 67, 0.1);
+  --danger: #e57373;
+  --danger-bg: rgba(229, 115, 115, 0.1);
+  --info: #6b94e5;
+  --info-bg: rgba(107, 148, 229, 0.1);
+
+  --bubble-user-bg: #2a2a28;
+  --bubble-user-text: #a8a29e;
+  --bubble-assistant-bg: transparent;
+  --bubble-assistant-text: #e7e5e4;
+  --bubble-assistant-border: #353533;
+  --bubble-tool-bg: #242422;
+  --bubble-tool-border: #353533;
+  --bubble-thought-bg: transparent;
+  --bubble-thought-border: #4a4a46;
+
+  --code-bg: #1e1e1c;
+  --code-border: #353533;
+  --code-text: #d6d3d1;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.2);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.3);
+  --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.4);
+
+  --scrollbar-thumb: #4a4a46;
+  --scrollbar-track: transparent;
+
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+
+  --config-control-height: 32px;
+  --config-control-width: 120px;
+  --config-control-font: 13px;
+  --topbar-height: 44px;
 }
 
 * {
@@ -148,7 +161,10 @@ body {
   background-color: var(--bg-base);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  transition: background-color 0.2s, color 0.2s;
+  font-feature-settings: 'tnum';
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.006em;
+  scroll-behavior: smooth;
 }
 
 #root {
@@ -176,6 +192,18 @@ pre,
   font-family: var(--font-mono);
 }
 
+/* 选区 */
+::selection {
+  background: var(--accent-subtle);
+  color: var(--text-primary);
+}
+
+/* 键盘焦点环 */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
 /* 滚动条 */
 ::-webkit-scrollbar {
   width: 8px;
@@ -188,7 +216,7 @@ pre,
 
 ::-webkit-scrollbar-thumb {
   background: var(--scrollbar-thumb);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
 }
 
 ::-webkit-scrollbar-thumb:hover {
@@ -197,16 +225,15 @@ pre,
 
 /* markdown 代码块 */
 .markdown-body code {
-  padding: 0.2em 0.4em;
+  padding: 0.15em 0.35em;
   margin: 0;
   font-size: 85%;
   white-space: break-spaces;
   background-color: var(--code-bg);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   color: var(--code-text);
   border: 1px solid var(--code-border);
   font-family: var(--font-mono);
-  letter-spacing: -0.2px;
 }
 
 .markdown-body pre code {
@@ -217,16 +244,17 @@ pre,
 
 .markdown-body pre {
   margin: 8px 0;
-  padding: 12px;
+  padding: 12px 14px;
   overflow-x: auto;
   background-color: var(--code-bg);
   border: 1px solid var(--code-border);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   white-space: pre;
 }
 
 .markdown-body {
-  line-height: 1.6;
+  line-height: 1.65;
+  font-family: var(--font-prose);
 }
 
 .markdown-body th {
@@ -235,5 +263,5 @@ pre,
 
 .markdown-body th,
 .markdown-body td {
-  padding: 0.1rem 1rem;
+  padding: 0.2rem 0.75rem;
 }

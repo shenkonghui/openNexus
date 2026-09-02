@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { Terminal as XTerm } from '@xterm/xterm'
 import type { FitAddon } from '@xterm/addon-fit'
+import { useTheme } from '../context/ThemeContext'
 import { buildWSURL, startTerminal } from './TerminalInstance'
 import styles from './AgentAcpCapsPanel.module.css'
 
@@ -18,6 +19,7 @@ interface Props {
  */
 export default function AgentAuthTerminal({ agentType, methodId, methodName, onClose }: Props) {
   const { t } = useTranslation()
+  const { theme } = useTheme()
   const containerRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<XTerm | null>(null)
   const wsRef = useRef<WebSocket | null>(null)
@@ -26,7 +28,7 @@ export default function AgentAuthTerminal({ agentType, methodId, methodName, onC
   useEffect(() => {
     if (!containerRef.current) return
     const url = buildWSURL(`/agents/${encodeURIComponent(agentType)}/auth-terminal?method_id=${encodeURIComponent(methodId)}`)
-    return startTerminal(url, containerRef.current, termRef, wsRef, fitRef)
+    return startTerminal(url, containerRef.current, termRef, wsRef, fitRef, theme === 'dark')
   }, [agentType, methodId])
 
   return (

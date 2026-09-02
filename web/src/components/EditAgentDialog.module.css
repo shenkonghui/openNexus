@@ -1,7 +1,9 @@
 .overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.45);
+  background: rgba(6, 8, 12, 0.55);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -16,9 +18,9 @@
   overflow-y: auto;
   background: var(--bg-elevated);
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
   padding: 24px;
-  box-shadow: var(--shadow-md);
+  box-shadow: var(--shadow-lg);
   display: flex;
   flex-direction: column;
   gap: 16px;
@@ -34,7 +36,8 @@
 .title {
   margin: 0;
   font-size: 18px;
-  font-weight: 600;
+  font-weight: 700;
+  letter-spacing: -0.02em;
   color: var(--text-primary);
 }
 
@@ -53,6 +56,10 @@
 .closeBtn:hover {
   background: var(--bg-hover);
   color: var(--text-primary);
+}
+
+.closeBtn:active {
+  transform: scale(0.92);
 }
 
 .grid {
@@ -107,17 +114,19 @@
 .input {
   padding: 10px 12px;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   font-size: 14px;
   background: var(--bg-input);
   color: var(--text-primary);
   width: 100%;
   box-sizing: border-box;
+  transition: border-color 0.18s, box-shadow 0.18s;
 }
 
 .input:focus {
   outline: none;
   border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-ring);
 }
 
 .input:disabled {
@@ -129,7 +138,7 @@
 .textarea {
   padding: 10px 12px;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   font-size: 14px;
   font-family: var(--font-mono);
   resize: vertical;
@@ -137,11 +146,13 @@
   color: var(--text-primary);
   width: 100%;
   box-sizing: border-box;
+  transition: border-color 0.18s, box-shadow 0.18s;
 }
 
 .textarea:focus {
   outline: none;
   border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-ring);
 }
 
 .hint {
@@ -216,6 +227,12 @@
 
 .submitBtn:hover:not(:disabled) {
   background: var(--accent-hover);
+}
+
+.submitBtn:active:not(:disabled),
+.deleteBtn:active:not(:disabled),
+.cancelBtn:active:not(:disabled) {
+  transform: translateY(1px);
 }
 
 .submitBtn:disabled,

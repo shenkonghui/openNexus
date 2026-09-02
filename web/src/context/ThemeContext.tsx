@@ -20,14 +20,11 @@ interface ThemeContextValue {
 
 const ThemeContext = createContext<ThemeContextValue | null>(null)
 
-// 读取初始主题：localStorage > 系统偏好 > 默认深色
+// 读取初始主题：localStorage > 默认浅色（白色背景）
 function getInitialTheme(): Theme {
   const stored = localStorage.getItem('theme')
   if (stored === 'dark' || stored === 'light') return stored
-  if (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) {
-    return 'light'
-  }
-  return 'dark'
+  return 'light'
 }
 
 // 读取初始字体大小：localStorage > 默认 medium

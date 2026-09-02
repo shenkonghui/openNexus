@@ -195,20 +195,24 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 36px;
-  height: 36px;
+  width: 34px;
+  height: 34px;
   padding: 0;
   background: var(--accent);
   color: var(--text-on-accent);
   border: none;
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   flex-shrink: 0;
   cursor: pointer;
-  transition: background 0.2s, opacity 0.2s;
+  transition: background 0.2s, opacity 0.2s, transform 0.1s;
 }
 
 .sendBtn:hover:not(:disabled) {
   background: var(--accent-hover);
+}
+
+.sendBtn:active:not(:disabled) {
+  transform: scale(0.94);
 }
 
 .sendBtn:disabled {
@@ -221,13 +225,13 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 36px;
-  height: 36px;
+  width: 34px;
+  height: 34px;
   padding: 0;
   background: var(--danger);
   color: var(--text-on-accent);
   border: none;
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   flex-shrink: 0;
   cursor: pointer;
 }
@@ -235,6 +239,10 @@
 .cancelBtn:hover {
   background: var(--danger);
   opacity: 0.85;
+}
+
+.cancelBtn:active {
+  transform: scale(0.94);
 }
 
 .embedded {

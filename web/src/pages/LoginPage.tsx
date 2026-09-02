@@ -50,8 +50,10 @@ export default function LoginPage() {
   return (
     <div className={styles.container}>
       <div className={styles.card}>
-        <h1 className={styles.title}>openNexus</h1>
-        <p className={styles.subtitle}>{t('auth.subtitle')}</p>
+        <div className={styles.brand}>
+          <h1 className={styles.title}>openNexus</h1>
+          <p className={styles.subtitle}>{t('auth.subtitle')}</p>
+        </div>
 
         <div className={styles.tabs}>
           <button

@@ -13,7 +13,7 @@
   align-items: center;
   justify-content: space-between;
   min-height: var(--topbar-height);
-  padding: 4px 24px;
+  padding: 6px 20px;
   background: var(--bg-surface);
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
@@ -72,7 +72,9 @@
 
 .title {
   font-size: 20px;
-  font-weight: 600;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  font-family: var(--font-sans);
   color: var(--text-primary);
 }
 
@@ -81,8 +83,8 @@
   flex-direction: row;
   align-items: center;
   flex-wrap: wrap;
-  gap: 12px;
-  padding: 10px 20px;
+  gap: 10px;
+  padding: 8px 14px;
   background: var(--bg-muted);
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
@@ -92,15 +94,17 @@
   flex: 0 1 380px;
   padding: 7px 12px;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   font-size: 13px;
   background: var(--bg-base);
   color: var(--text-primary);
+  transition: border-color 0.18s, box-shadow 0.18s;
 }
 
 .searchInput:focus {
   outline: none;
   border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-ring);
 }
 
 .tagBar {
@@ -120,6 +124,12 @@
   background: var(--bg-base);
   color: var(--text-secondary);
   cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
+}
+
+.tagChip:hover {
+  border-color: var(--border-strong);
+  color: var(--text-primary);
 }
 
 .tagChipActive {
@@ -135,7 +145,7 @@
   padding: 16px 20px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 8px;
 }
 
 .empty {
@@ -170,10 +180,15 @@
 }
 
 .noteCard {
-  padding: 12px 14px;
+  padding: 16px 20px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: var(--bg-surface);
+  transition: border-color 0.18s;
+}
+
+.noteCard:hover {
+  border-color: var(--border-strong);
 }
 
 .noteHeader {
@@ -211,19 +226,23 @@
 }
 
 .noteTag {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--accent);
+  font-weight: 500;
+  font-family: var(--font-sans);
 }
 
 .classifyingBadge {
   font-size: 11px;
   color: var(--text-muted);
   font-style: italic;
+  font-family: var(--font-sans);
 }
 
 .noteTime {
   font-size: 11px;
   color: var(--text-muted);
+  font-family: var(--font-sans);
 }
 
 .noteContent {
@@ -353,6 +372,10 @@
   background: var(--accent-hover);
 }
 
+.editSaveBtn:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
 .editCancelBtn:disabled,
 .editSaveBtn:disabled {
   opacity: 0.5;
@@ -361,7 +384,7 @@
 
 .inputBar {
   flex-shrink: 0;
-  padding: 12px 20px 16px;
+  padding: 10px 14px 12px;
   background: var(--bg-surface);
   border-top: 1px solid var(--border);
 }
@@ -378,7 +401,7 @@
   width: 100%;
   padding: 10px 14px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   font-size: 14px;
   resize: none;
   min-height: 84px;
@@ -388,11 +411,13 @@
   background: var(--bg-input, var(--bg-base));
   color: var(--text-primary);
   font-family: inherit;
+  transition: border-color 0.18s, box-shadow 0.18s;
 }
 
 .input:focus {
   outline: none;
   border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-ring);
 }
 
 .inputHint {
@@ -417,6 +442,10 @@
 
 .sendBtn:hover:not(:disabled) {
   background: var(--accent-hover);
+}
+
+.sendBtn:active:not(:disabled) {
+  transform: translateY(1px);
 }
 
 .sendBtn:disabled {

@@ -1,34 +1,52 @@
 .overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0,0,0,0.4);
+  background: rgba(6, 8, 12, 0.55);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
   display: flex;
   align-items: center;
   justify-content: center;
   z-index: 1000;
+  padding: 24px;
 }
 
 .dialog {
-  background: #fff;
-  border-radius: 8px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
   padding: 24px;
   min-width: 400px;
-  box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+  max-width: 520px;
+  width: 100%;
+  box-shadow: var(--shadow-lg);
 }
 
 .dialog h3 {
   margin: 0 0 16px;
   font-size: 16px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--text-primary);
 }
 
 .input {
   width: 100%;
-  padding: 8px 12px;
-  border: 1px solid #d9d9d9;
-  border-radius: 4px;
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
   font-size: 14px;
   box-sizing: border-box;
   margin-bottom: 12px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  transition: border-color 0.18s, box-shadow 0.18s;
+}
+
+.input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-ring);
 }
 
 .dirRow {
@@ -43,12 +61,20 @@
 }
 
 .browseBtn {
-  padding: 8px 12px;
-  border: 1px solid #d9d9d9;
-  border-radius: 4px;
-  background: #fff;
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+  color: var(--text-secondary);
   cursor: pointer;
   white-space: nowrap;
+  font-size: 13px;
+  transition: border-color 0.15s, color 0.15s;
+}
+
+.browseBtn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 .actions {
@@ -59,21 +85,38 @@
 }
 
 .actions button {
-  padding: 6px 16px;
-  border-radius: 4px;
+  padding: 8px 16px;
+  border-radius: var(--radius-md);
   cursor: pointer;
   font-size: 14px;
+  font-weight: 500;
+  transition: background 0.18s, transform 0.1s;
+}
+
+.actions button:active:not(:disabled) {
+  transform: translateY(1px);
 }
 
 .actions button[type="button"] {
-  border: 1px solid #d9d9d9;
-  background: #fff;
+  border: 1px solid var(--border);
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+}
+
+.actions button[type="button"]:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
 }
 
 .actions button[type="submit"] {
   border: none;
-  background: #1677ff;
-  color: #fff;
+  background: var(--accent);
+  color: var(--text-on-accent);
+  font-weight: 600;
+}
+
+.actions button[type="submit"]:hover:not(:disabled) {
+  background: var(--accent-hover);
 }
 
 .actions button[type="submit"]:disabled {
@@ -84,7 +127,7 @@
 .sectionLabel {
   font-size: 13px;
   font-weight: 500;
-  color: #666;
+  color: var(--text-secondary);
   margin: 16px 0 8px;
 }
 
@@ -99,11 +142,13 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 6px 10px;
-  border: 1px solid #e8e8e8;
-  border-radius: 4px;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
   font-size: 13px;
-  background: #fafafa;
+  background: var(--bg-muted);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
 }
 
 .dirItemPath {
@@ -117,32 +162,34 @@
   border: none;
   background: none;
   cursor: pointer;
-  color: #999;
+  color: var(--text-muted);
   font-size: 16px;
   padding: 0 4px;
   line-height: 1;
+  transition: color 0.15s;
 }
 
 .dirItemRemove:hover {
-  color: #ff4d4f;
+  color: var(--danger);
 }
 
 .addDirBtn {
   display: flex;
   align-items: center;
   gap: 4px;
-  padding: 6px 12px;
-  border: 1px dashed #d9d9d9;
-  border-radius: 4px;
+  padding: 7px 12px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-sm);
   background: transparent;
   cursor: pointer;
   font-size: 13px;
-  color: #666;
+  color: var(--text-muted);
   width: 100%;
   justify-content: center;
+  transition: border-color 0.15s, color 0.15s;
 }
 
 .addDirBtn:hover {
-  border-color: #1677ff;
-  color: #1677ff;
+  border-color: var(--accent);
+  color: var(--accent);
 }

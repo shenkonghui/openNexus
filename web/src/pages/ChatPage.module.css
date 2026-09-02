@@ -35,7 +35,7 @@
   align-items: center;
   justify-content: space-between;
   min-height: var(--topbar-height);
-  padding: 4px 24px;
+  padding: 4px 16px;
 }
 
 .headerSingle .sessionInfo {
@@ -46,10 +46,11 @@
 .sysBar {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
   min-height: var(--topbar-height);
-  padding: 4px 24px;
+  padding: 4px 16px;
   border-bottom: 1px solid var(--border);
+  font-family: var(--font-sans);
 }
 
 /* 纯图标按钮（如折叠/展开左侧面板列） */
@@ -86,14 +87,16 @@
 .sessionInfo {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 4px 24px;
+  gap: 10px;
+  padding: 6px 16px;
 }
 
 .agentType {
-  font-size: 16px;
+  font-size: 15px;
   font-weight: 600;
   color: var(--text-primary);
+  font-family: var(--font-sans);
+  letter-spacing: -0.02em;
 }
 
 .cwd {
@@ -163,6 +166,11 @@
   background: var(--accent-hover);
   border-color: var(--accent-hover);
   color: var(--text-on-accent);
+}
+
+.fileBtn:active,
+.fileBtnActive:active {
+  transform: translateY(1px);
 }
 
 /* ====== 无会话模式（首页选择 agent/模型/路径）样式 ====== */
@@ -255,40 +263,47 @@
 
 .homeHero {
   text-align: center;
-  padding: 40px 24px;
+  padding: 48px 24px;
 }
 
 .homeTitle {
-  margin: 0 0 8px 0;
-  font-size: 22px;
-  font-weight: 600;
+  margin: 0 0 10px 0;
+  font-size: 28px;
+  font-weight: 700;
+  letter-spacing: -0.03em;
   color: var(--text-primary);
+  font-family: var(--font-sans);
 }
 
 .homeSubtitle {
   margin: 0;
-  font-size: 13px;
+  font-size: 14px;
   color: var(--text-muted);
+  font-family: var(--font-sans);
 }
 
 .newTaskBtn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  height: 32px;
+  width: 36px;
+  height: 36px;
   padding: 0;
   border: 1px solid var(--accent);
   background: var(--bg-surface);
   color: var(--accent);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   cursor: pointer;
-  transition: background 0.2s, color 0.2s;
+  transition: background 0.2s, color 0.2s, transform 0.1s;
 }
 
 .newTaskBtn:hover {
   background: var(--accent);
   color: var(--text-on-accent);
+}
+
+.newTaskBtn:active {
+  transform: scale(0.94);
 }
 
 .listContent {
@@ -298,37 +313,43 @@
 }
 
 .listTitle {
-  margin: 0 0 8px 0;
-  font-size: 14px;
+  margin: 0 0 12px 0;
+  font-size: 15px;
   font-weight: 600;
   color: var(--text-secondary);
+  font-family: var(--font-sans);
 }
 
 .sessionList {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
 }
 
 .listEmpty {
   text-align: center;
   color: var(--text-muted);
-  padding: 24px;
+  padding: 32px;
   font-size: 14px;
+  font-family: var(--font-sans);
 }
 
 .sessionCard {
   background: var(--bg-surface);
   border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 10px 14px;
+  border-radius: var(--radius-md);
+  padding: 12px 16px;
   cursor: pointer;
-  transition: border-color 0.2s, box-shadow 0.2s;
+  transition: border-color 0.2s, box-shadow 0.2s, transform 0.1s;
 }
 
 .sessionCard:hover {
   border-color: var(--accent-border);
-  box-shadow: 0 1px 4px var(--accent-subtle);
+  box-shadow: var(--shadow-sm);
+}
+
+.sessionCard:active {
+  transform: translateY(1px);
 }
 
 .sessionHeader {
@@ -342,13 +363,15 @@
   font-size: 14px;
   font-weight: 600;
   color: var(--text-primary);
+  font-family: var(--font-sans);
 }
 
 .sessionStatus {
   font-size: 11px;
-  padding: 1px 8px;
-  border-radius: 8px;
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
   font-weight: 500;
+  font-family: var(--font-sans);
 }
 
 .status_active {
@@ -369,8 +392,10 @@
 .convStatus {
   font-size: 11px;
   padding: 2px 8px;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   font-weight: 500;
+  font-family: var(--font-sans);
+  text-transform: uppercase;
   animation: convPulse 1.5s ease-in-out infinite;
 }
 
@@ -409,8 +434,9 @@
 }
 
 .sessionTime {
-  font-size: 11px;
+  font-size: 10px;
   color: var(--text-muted);
+  font-family: var(--font-mono);
 }
 
 .sessionFooter {
@@ -434,6 +460,10 @@
 .listDeleteBtn:hover {
   background: var(--danger);
   color: var(--text-on-accent);
+}
+
+.listDeleteBtn:active {
+  transform: translateY(1px);
 }
 
 .classifyViewHint {

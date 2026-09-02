@@ -2,7 +2,9 @@
 .overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.45);
+  background: rgba(6, 8, 12, 0.55);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -17,8 +19,8 @@
   height: min(720px, calc(100vh - 80px));
   background: var(--bg-elevated);
   border: 1px solid var(--border);
-  border-radius: 12px;
-  box-shadow: var(--shadow-md);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
   overflow: hidden;
 }
 
@@ -145,6 +147,10 @@
 .closeBtn:hover {
   background: var(--bg-hover);
   color: var(--text-primary);
+}
+
+.closeBtn:active {
+  transform: scale(0.92);
 }
 
 .content {
@@ -326,11 +332,13 @@
   font-size: 12px;
   background: var(--bg-input);
   color: var(--text-primary);
+  transition: border-color 0.18s, box-shadow 0.18s;
 }
 
 .input:focus {
   outline: none;
   border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-ring);
 }
 
 .textarea {
@@ -344,11 +352,13 @@
   resize: vertical;
   background: var(--bg-input);
   color: var(--text-primary);
+  transition: border-color 0.18s, box-shadow 0.18s;
 }
 
 .textarea:focus {
   outline: none;
   border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-ring);
 }
 
 .configList {
@@ -406,6 +416,7 @@
 
 .configSearch:focus {
   border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-ring);
 }
 
 .sectionTitle {

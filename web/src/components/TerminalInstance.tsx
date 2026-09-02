@@ -3,7 +3,16 @@ import { Terminal as XTerm } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import '@xterm/xterm/css/xterm.css'
+import { useTheme } from '../context/ThemeContext'
 import styles from './Terminal.module.css'
+
+/** 根据主题返回 xterm 配色 */
+function getXTermTheme(dark: boolean) {
+  if (dark) {
+    return { background: '#1a1a18', foreground: '#e7e5e4', cursor: '#5eaa8a' }
+  }
+  return { background: '#ffffff', foreground: '#000000', cursor: '#2d6a4f' }
+}
 
 export interface TerminalInstanceProps {
   /** 会话终端：在会话工作目录（含 worktree）下启动 shell */
@@ -60,13 +69,14 @@ export function startTerminal(
   container: HTMLDivElement,
   termRef: React.MutableRefObject<XTerm | null>,
   wsRef: React.MutableRefObject<WebSocket | null>,
-  fitRef: React.MutableRefObject<FitAddon | null>
+  fitRef: React.MutableRefObject<FitAddon | null>,
+  dark: boolean
 ): () => void {
   const term = new XTerm({
     fontSize: 13,
-    fontFamily: "'Monaco', 'Menlo', 'Courier New', monospace",
+    fontFamily: "'Geist Mono', 'Monaco', 'Menlo', 'Courier New', monospace",
     cursorBlink: true,
-    theme: { background: '#1e1e2e', foreground: '#cdd6f4', cursor: '#f5e0dc' },
+    theme: getXTermTheme(dark),
   })
   const fit = new FitAddon()
   term.loadAddon(fit)
@@ -150,12 +160,20 @@ export default function TerminalInstance({ sessionId, workspaceId, active }: Ter
   const termRef = useRef<XTerm | null>(null)
   const wsRef = useRef<WebSocket | null>(null)
   const fitRef = useRef<FitAddon | null>(null)
+  const { theme } = useTheme()
 
   useEffect(() => {
     if (!containerRef.current) return
     if (sessionId == null && workspaceId == null) return
-    return startTerminal(buildTerminalURL(sessionId, workspaceId), containerRef.current, termRef, wsRef, fitRef)
+    return startTerminal(buildTerminalURL(sessionId, workspaceId), containerRef.current, termRef, wsRef, fitRef, theme === 'dark')
   }, [sessionId, workspaceId])
+
+  // 主题切换时动态更新 xterm 配色
+  useEffect(() => {
+    const term = termRef.current
+    if (!term) return
+    term.options.theme = getXTermTheme(theme === 'dark')
+  }, [theme])
 
   useEffect(() => {
     if (!active) return

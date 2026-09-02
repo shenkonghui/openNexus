@@ -121,7 +121,7 @@
 
 .authTermBody {
   height: 320px;
-  background: #1e1e2e;
+  background: var(--code-bg);
   padding: 4px;
 }
 

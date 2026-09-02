@@ -21,12 +21,13 @@
 .header {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
   flex-shrink: 0;
   min-height: var(--topbar-height);
-  padding: 3px 8px 3px 10px;
+  padding: 4px 8px 4px 10px;
   border-bottom: 1px solid var(--border);
   background: var(--bg-sidebar);
+  font-family: var(--font-sans);
 }
 
 .logo {
@@ -43,8 +44,12 @@
 }
 
 .logo:hover {
-  background: var(--bg-hover);
+  background: var(--accent-subtle);
   color: var(--accent);
+}
+
+.logo:active {
+  transform: scale(0.96);
 }
 
 /* 图标开关推到右侧，与折叠按钮成组 */
@@ -103,6 +108,10 @@
 .collapseBtn:hover {
   background: var(--bg-hover);
   color: var(--accent);
+}
+
+.collapseBtn:active {
+  transform: scale(0.94);
 }
 
 /* 侧边栏主体：菜单/文件两个视图共享区域 */
@@ -184,4 +193,8 @@
 .iconBtn:hover {
   background: var(--bg-hover);
   color: var(--accent);
+}
+
+.iconBtn:active {
+  transform: scale(0.96);
 }

@@ -43,6 +43,10 @@
   background: var(--bg-hover);
 }
 
+.btn:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
 .btn:disabled {
   opacity: 0.6;
   cursor: not-allowed;
