@@ -4,8 +4,11 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sync"
 
 	"github.com/coder/acp-go-sdk"
@@ -18,6 +21,12 @@ type subscriber struct {
 	ch chan acp.SessionUpdate
 }
 
+// ElicitationEvent 表示一次 elicitation（如浏览器登录）完成事件。
+// 由 agent 发送 UnstableCompleteElicitation 通知时产生，供前端 SSE 订阅感知登录结束。
+type ElicitationEvent struct {
+	ElicitationId string
+}
+
 // Client 实现 acp.Client 接口，处理权限交互并按 sessionID 路由 session update。
 // streams 采用 fan-out 设计：每个会话可有多个订阅者，支持多客户端同时监听（如断点续传重连）。
 type Client struct {
@@ -27,15 +36,24 @@ type Client struct {
 	rec     *fileRecorder
 	// term 可选：ACP terminal 能力桥接器（Service 级共享）。nil 时 terminal/* 为 no-op。
 	term *TerminalBridge
+	// elicitationCh 缓冲 agent 发来的 elicitation 完成通知，供前端 SSE 消费。
+	// buffer 满时丢弃旧事件（非阻塞），避免拖慢 JSON-RPC 处理。
+	elicitationCh chan ElicitationEvent
 }
 
 // NewClient 创建一个新的 Client。
 func NewClient() *Client {
 	return &Client{
-		streams: make(map[acp.SessionId]map[*subscriber]struct{}),
-		perm:    newPermissionBroker(),
-		rec:     newFileRecorder(),
+		streams:       make(map[acp.SessionId]map[*subscriber]struct{}),
+		perm:          newPermissionBroker(),
+		rec:           newFileRecorder(),
+		elicitationCh: make(chan ElicitationEvent, 16),
 	}
+}
+
+// ElicitationEvents 返回 elicitation 完成事件的只读 channel（agent → client 通知）。
+func (c *Client) ElicitationEvents() <-chan ElicitationEvent {
+	return c.elicitationCh
 }
 
 // Subscribe 为指定 session 注册一个新订阅者，返回该订阅者。
@@ -255,4 +273,73 @@ func (c *Client) KillTerminal(ctx context.Context, params acp.KillTerminalReques
 		return acp.KillTerminalResponse{}, nil
 	}
 	return c.term.Kill(params)
+}
+
+// UnstableCreateElicitation 处理 agent 发起的 elicitation 请求。
+// URL 类型：校验 scheme 后用系统默认浏览器打开 URL 让用户完成登录，返回 accept 表示用户已开始流程。
+// Form 类型：暂不支持，返回 cancel。
+func (c *Client) UnstableCreateElicitation(ctx context.Context, params acp.UnstableCreateElicitationRequest) (acp.UnstableCreateElicitationResponse, error) {
+	if params.Url != nil {
+		slog.Info("ACP elicitation: 打开浏览器认证", "url", params.Url.Url, "message", params.Url.Message)
+		// 校验 URL scheme：仅允许 http/https，防止恶意 agent 利用 file:/javascript: 等协议
+		if !isSafeBrowserURL(params.Url.Url) {
+			slog.Warn("ACP elicitation: URL scheme 不允许，已拒绝打开", "url", params.Url.Url)
+			return acp.UnstableCreateElicitationResponse{
+				Cancel: &acp.UnstableCreateElicitationCancel{
+					Action: "cancel",
+				},
+			}, nil
+		}
+		if err := openBrowser(params.Url.Url); err != nil {
+			slog.Warn("ACP elicitation: 打开浏览器失败", "url", params.Url.Url, "err", err)
+		}
+		// 返回 accept：用户已开始浏览器登录流程，agent 会等待回调完成后发 elicitation/complete
+		return acp.UnstableCreateElicitationResponse{
+			Accept: &acp.UnstableCreateElicitationAccept{
+				Action: "accept",
+			},
+		}, nil
+	}
+	// Form 类型暂不支持
+	return acp.UnstableCreateElicitationResponse{
+		Cancel: &acp.UnstableCreateElicitationCancel{
+			Action: "cancel",
+		},
+	}, nil
+}
+
+// UnstableCompleteElicitation 处理 agent 发送的 elicitation 完成通知。
+// 通常表示浏览器登录流程已完成（用户已认证或取消）。
+// 将事件推入 elicitationCh 供前端 SSE 消费，buffer 满时丢弃（非阻塞）。
+func (c *Client) UnstableCompleteElicitation(ctx context.Context, params acp.UnstableCompleteElicitationNotification) error {
+	slog.Info("ACP elicitation 完成", "elicitation_id", params.ElicitationId)
+	select {
+	case c.elicitationCh <- ElicitationEvent{ElicitationId: string(params.ElicitationId)}:
+	default:
+		slog.Warn("ACP elicitation 事件 channel 满，丢弃完成通知", "elicitation_id", params.ElicitationId)
+	}
+	return nil
+}
+
+// isSafeBrowserURL 校验 URL 仅使用 http/https scheme，防止 file:/javascript: 等危险协议。
+func isSafeBrowserURL(raw string) bool {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return false
+	}
+	return u.Scheme == "http" || u.Scheme == "https"
+}
+
+// openBrowser 用系统默认浏览器打开 URL。
+func openBrowser(rawURL string) error {
+	switch runtime.GOOS {
+	case "darwin":
+		return exec.Command("open", rawURL).Start()
+	case "linux":
+		return exec.Command("xdg-open", rawURL).Start()
+	case "windows":
+		return exec.Command("rundll32", "url.dll,FileProtocolHandler", rawURL).Start()
+	default:
+		return fmt.Errorf("unsupported platform: %s", runtime.GOOS)
+	}
 }

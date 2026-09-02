@@ -2,9 +2,11 @@ package acp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"strings"
 
 	"github.com/coder/acp-go-sdk"
 
@@ -109,6 +111,13 @@ func clientCapabilities(terminalEnabled bool) acp.ClientCapabilities {
 			WriteTextFile: true,
 		},
 		Terminal: terminalEnabled,
+		Auth: acp.AuthCapabilities{
+			Terminal: terminalEnabled,
+		},
+		// 声明 URL elicitation 能力：agent 类型认证方式（如 Devin 浏览器 PKCE 登录）需要
+		Elicitation: &acp.ElicitationCapabilities{
+			Url: &acp.ElicitationUrlCapabilities{},
+		},
 	}
 }
 
@@ -190,11 +199,72 @@ func (c *Connection) AuthenticateIfRequired(ctx context.Context, initResp acp.In
 	return nil
 }
 
+// Authenticate 对指定认证方式调用 ACP authenticate。
+// 用于 agent 类型认证方式（agent 自行处理认证，如打开浏览器 PKCE 流程）。
+// meta 可选：传入 meta.api_key 等认证参数。
+func (c *Connection) Authenticate(ctx context.Context, methodID string, meta map[string]any) error {
+	req := acp.AuthenticateRequest{MethodId: methodID}
+	if meta != nil {
+		req.Meta = meta
+	}
+	_, err := c.conn.Authenticate(ctx, req)
+	return err
+}
+
+// authenticateIfNotAuthenticated 在 NewSession 报未认证时自动尝试所有非 env_var 认证方式。
+// 仅对 agent 类型调用 authenticate（agent 自行拉起浏览器登录流程）；
+// terminal 类型需要交互式 TUI，不在此自动触发。
+// 不自动读取或传递任何本地凭证文件——凭证应由用户通过前端交互显式提供。
+// 返回 true 表示已尝试认证（调用方应重试 NewSession）。
+func (c *Connection) authenticateIfNotAuthenticated(ctx context.Context) bool {
+	for _, m := range c.initResp.AuthMethods {
+		if m.EnvVar != nil {
+			continue // env_var 已在握手后自动认证
+		}
+		if m.Agent == nil {
+			continue // terminal 类型需交互式 TUI，不自动触发
+		}
+		methodID := m.Agent.Id
+		if methodID == "" {
+			continue
+		}
+		slog.Info("NewSession 未认证，自动 authenticate（agent 类型）", "method", methodID)
+		if err := c.Authenticate(ctx, methodID, nil); err != nil {
+			slog.Warn("自动 authenticate 失败", "method", methodID, "err", err)
+			continue
+		}
+		slog.Info("自动 authenticate 完成", "method", methodID)
+		return true
+	}
+	return false
+}
+
+// ElicitationEvents 返回底层 Client 的 elicitation 完成事件 channel。
+// 供前端 SSE 端点订阅，感知浏览器登录流程结束。
+func (c *Connection) ElicitationEvents() <-chan ElicitationEvent {
+	return c.client.ElicitationEvents()
+}
+
+// isAuthRequiredError 判断错误是否表示"未认证"。
+// 优先检查类型化的 *acp.RequestError Code（-32000 = Authentication required），
+// 回退到消息字符串匹配以兼容不同 agent 实现的措辞（如 "has not authenticated"）。
+func isAuthRequiredError(err error) bool {
+	var re *acp.RequestError
+	if errors.As(err, &re) {
+		if re.Code == -32000 {
+			return true
+		}
+	}
+	return strings.Contains(err.Error(), "has not authenticated") ||
+		strings.Contains(err.Error(), "Authentication required")
+}
+
 // NewSession 在当前连接上创建新的 ACP session，返回 session ID、初始 config options 和初始 modes。
 // additionalDirectories 为 ACP 额外可访问根目录（如 skills 目录），路径须为绝对路径。
 // mcpServers 为可选 MCP 配置；nil 时传空数组。
 // systemPrompt 非空时写入 _meta.systemPrompt，由支持该扩展的 Agent 注入为系统提示词。
 // 同一 Connection 可多次调用，每次返回不同的 session ID。
+// 若 NewSession 因未认证失败，自动尝试 authenticate 后重试一次。
 func (c *Connection) NewSession(ctx context.Context, cwd string, additionalDirectories []string, mcpServers []acp.McpServer, systemPrompt string) (string, []acp.SessionConfigOption, []acp.SessionMode, error) {
 	slog.Info("ACP newSession", "cwd", cwd, "extra_dirs", len(additionalDirectories), "mcp_servers", len(mcpServers), "mcp_server_names", mcpServerNames(mcpServers), "system_prompt_chars", len(systemPrompt))
 	if mcpServers == nil {
@@ -209,6 +279,14 @@ func (c *Connection) NewSession(ctx context.Context, cwd string, additionalDirec
 		req.Meta = map[string]any{"systemPrompt": systemPrompt}
 	}
 	resp, err := c.conn.NewSession(ctx, req)
+	if err != nil {
+		// 未认证时自动 authenticate 再重试一次。
+		// 优先用类型化的 *acp.RequestError Code 判断（-32000 = Authentication required），
+		// 回退到消息字符串匹配以兼容不同 agent 实现的措辞。
+		if isAuthRequiredError(err) && c.authenticateIfNotAuthenticated(ctx) {
+			resp, err = c.conn.NewSession(ctx, req)
+		}
+	}
 	if err != nil {
 		return "", nil, nil, fmt.Errorf("ACP newSession: %w", err)
 	}

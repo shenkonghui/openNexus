@@ -270,6 +270,15 @@ permissions:
 
 侧边栏会实时展示各 Agent 的连接状态（已连接 / 连接中 / 已断开）。连接失败时查看后端日志（agent 子进程 stderr 会输出到服务端控制台）。
 
+#### agent 类型认证（浏览器登录）
+
+`agent` 类型认证方式（如 Devin PKCE 浏览器登录）需要用户交互：
+
+- 设置页 ACP 能力面板中，`agent` 类型认证方式旁有「登录」按钮
+- 点击后后端调用 ACP `authenticate`，agent 自行发起 URL elicitation，客户端用系统默认浏览器打开登录页（仅允许 `http`/`https` URL）
+- 登录完成后 agent 发送 `elicitation/complete` 通知，前端通过 SSE（`GET /api/v1/agents/:type/auth-events`）实时感知并刷新状态
+- 若 `NewSession` 时仍未认证，后端自动重试一次 `authenticate`（仅 agent 类型，不自动读取本地凭证）
+
 ### 分发类型与二进制
 
 | 分发类型 | 启动方式 | 前置条件 |

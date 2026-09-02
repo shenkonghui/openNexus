@@ -216,6 +216,28 @@ func (r *Router) PreconnectAgent(agentType, cwd string) error {
 	return nil
 }
 
+// AuthenticateAgent 对指定 agent 调用 ACP authenticate（agent 类型认证方式），委托 service。
+func (r *Router) AuthenticateAgent(ctx context.Context, agentType, methodID string) error {
+	if _, err := r.registry.Get(agentType); err != nil {
+		return err
+	}
+	if r.service == nil {
+		return errors.New("service 未配置")
+	}
+	return r.service.AuthenticateAgent(ctx, agentType, methodID)
+}
+
+// SubscribeElicitationEvents 返回指定 agent 类型的 elicitation 完成事件 channel，委托 service。
+func (r *Router) SubscribeElicitationEvents(agentType string) (<-chan acp.ElicitationEvent, error) {
+	if _, err := r.registry.Get(agentType); err != nil {
+		return nil, err
+	}
+	if r.service == nil {
+		return nil, errors.New("service 未配置")
+	}
+	return r.service.SubscribeElicitationEvents(agentType)
+}
+
 // ListModes 返回会话可用的 mode 列表（agent skill/模式），委托 service。
 func (r *Router) ListModes(sessionID string) ([]acpsdk.SessionMode, error) {
 	if r.service == nil {

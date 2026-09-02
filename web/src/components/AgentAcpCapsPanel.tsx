@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { getAgentCapabilities, preconnectAgent } from '../api/agents'
+import { getAgentCapabilities, preconnectAgent, authenticateAgent, streamAgentAuthEvents } from '../api/agents'
 import type { AgentAcpCapabilities, AcpMethodItem, AcpAuthMethodItem } from '../types'
 import AgentAuthTerminal from './AgentAuthTerminal'
 import styles from './AgentAcpCapsPanel.module.css'
@@ -53,7 +53,13 @@ export default function AgentAcpCapsPanel({ agentType }: Props) {
   const [connecting, setConnecting] = useState(false)
   // 当前打开登录终端的 terminal 认证方式（null 表示未打开）
   const [loginMethod, setLoginMethod] = useState<AcpAuthMethodItem | null>(null)
+  // agent 类型认证的触发状态（agent 自行拉起浏览器登录）
+  const [agentAuthPending, setAgentAuthPending] = useState('')
+  // agent 类型认证完成后展示的成功提示（elicitation/complete 收到后设置）
+  const [agentAuthDone, setAgentAuthDone] = useState(false)
   const pollTimer = useRef<number | null>(null)
+  // auth-events SSE 断开函数（组件卸载或重新触发时调用）
+  const authEventsCleanup = useRef<(() => void) | null>(null)
 
   const load = useCallback(async () => {
     try {
@@ -70,10 +76,11 @@ export default function AgentAcpCapsPanel({ agentType }: Props) {
   }, [agentType, t])
 
   useEffect(() => {
-    setCaps(null); setLoading(true); setError(''); setConnecting(false); setLoginMethod(null)
+    setCaps(null); setLoading(true); setError(''); setConnecting(false); setLoginMethod(null); setAgentAuthDone(false)
     load()
     return () => {
       if (pollTimer.current !== null) window.clearTimeout(pollTimer.current)
+      if (authEventsCleanup.current) { authEventsCleanup.current(); authEventsCleanup.current = null }
     }
   }, [load])
 
@@ -93,6 +100,34 @@ export default function AgentAcpCapsPanel({ agentType }: Props) {
       pollTimer.current = window.setTimeout(poll, 2000)
     }
     pollTimer.current = window.setTimeout(poll, 2000)
+  }
+
+  // 触发 agent 类型认证：后端调用 ACP authenticate，agent 自行打开浏览器 PKCE 流程。
+  // 触发后订阅 auth-events SSE，收到 elicitation/complete 后刷新能力面板并提示登录完成。
+  async function handleAgentAuth(method: AcpAuthMethodItem) {
+    if (agentAuthPending) return
+    setAgentAuthPending(method.id)
+    setAgentAuthDone(false)
+    // 断开上一次未完成的 SSE 订阅
+    if (authEventsCleanup.current) { authEventsCleanup.current(); authEventsCleanup.current = null }
+    try {
+      await authenticateAgent(agentType, method.id)
+      setError('')
+      // 订阅 elicitation 完成事件：浏览器登录结束后 agent 发 complete 通知
+      authEventsCleanup.current = streamAgentAuthEvents(
+        agentType,
+        () => {
+          setAgentAuthPending('')
+          setAgentAuthDone(true)
+          load()
+          if (authEventsCleanup.current) { authEventsCleanup.current(); authEventsCleanup.current = null }
+        },
+        (err) => { setError(err.message); setAgentAuthPending('') },
+      )
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t('common.failed'))
+      setAgentAuthPending('')
+    }
   }
 
   if (loading) return <div className={styles.panel}><span className={styles.hint}>{t('common.loading')}</span></div>
@@ -149,6 +184,19 @@ export default function AgentAcpCapsPanel({ agentType }: Props) {
                   >
                     {t('settings.acpCaps.login')}
                   </button>
+                )}
+                {a.type === 'agent' && (
+                  <button
+                    type="button"
+                    className={styles.loginBtn}
+                    disabled={agentAuthPending === a.id}
+                    onClick={() => handleAgentAuth(a)}
+                  >
+                    {agentAuthPending === a.id ? t('settings.acpCaps.connecting') : t('settings.acpCaps.login')}
+                  </button>
+                )}
+                {a.type === 'agent' && agentAuthDone && !agentAuthPending && (
+                  <span className={styles.hint}>✓</span>
                 )}
               </span>
             ))}

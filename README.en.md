@@ -270,6 +270,15 @@ After enabling an agent, openNexus automatically performs these steps in the bac
 
 Connection status (connected / connecting / disconnected) is shown in the sidebar. Check backend logs on failure (agent stderr is forwarded to the server console).
 
+#### Agent-type authentication (browser login)
+
+`agent`-type auth methods (e.g. Devin PKCE browser login) require user interaction:
+
+- In the ACP capabilities panel on the settings page, `agent`-type auth methods have a "Login" button
+- Clicking it triggers ACP `authenticate` on the backend; the agent initiates a URL elicitation and the client opens the login page in the system default browser (only `http`/`https` URLs are allowed)
+- When login completes, the agent sends an `elicitation/complete` notification; the frontend receives it in real time via SSE (`GET /api/v1/agents/:type/auth-events`) and refreshes the status
+- If `NewSession` is called while still unauthenticated, the backend automatically retries `authenticate` once (agent type only; no local credentials are read automatically)
+
 ### Distribution Types & Binaries
 
 | Type | Launch | Prerequisites |

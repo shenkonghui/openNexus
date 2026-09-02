@@ -1,5 +1,5 @@
 import type { Agent, ModelOption, ConfigOption, AgentStatus, AgentCommand, SessionMode, AgentAcpCapabilities, CapabilityTestReport, CapabilityTestBatchResult, SecurityTestReport, SecurityTestBatchResult } from '../types'
-import { apiFetch } from './client'
+import { apiFetch, getBaseURL, getAuthHeaders } from './client'
 
 // 获取可用 agent 列表（selector_filters 为 agent+模型 合并下拉的显示过滤正则，来自 config.yaml）
 export function listAgents(): Promise<{ data: { agents: Agent[]; selector_filters?: string[] } }> {
@@ -90,6 +90,72 @@ export function preconnectAgent(agentType: string, cwd?: string): void {
     method: 'POST',
     body,
   }).catch(() => { })
+}
+
+// 触发 ACP authenticate（agent 类型认证方式：agent 自行拉起浏览器 PKCE 登录流程）。
+export function authenticateAgent(agentType: string, methodId: string): Promise<{ data: { status: string } }> {
+  return apiFetch(`/agents/${encodeURIComponent(agentType)}/authenticate`, {
+    method: 'POST',
+    body: JSON.stringify({ method_id: methodId }),
+  })
+}
+
+// 订阅 agent 类型认证的 elicitation 完成事件 SSE 流。
+// 前端在触发 authenticate 后订阅，收到 complete 事件即表示浏览器登录流程结束。
+// 返回断开函数。
+export function streamAgentAuthEvents(
+  agentType: string,
+  onComplete: (elicitationId: string) => void,
+  onError?: (err: Error) => void,
+  signal?: AbortSignal,
+): () => void {
+  const controller = new AbortController()
+  const onExternalAbort = () => controller.abort()
+  signal?.addEventListener('abort', onExternalAbort, { once: true })
+
+  const cleanup = () => {
+    signal?.removeEventListener('abort', onExternalAbort)
+    controller.abort()
+  }
+
+  ;(async () => {
+    try {
+      const resp = await fetch(`${getBaseURL()}/agents/${encodeURIComponent(agentType)}/auth-events`, {
+        method: 'GET',
+        headers: { ...getAuthHeaders(), Accept: 'text/event-stream' },
+        signal: controller.signal,
+      })
+      if (!resp.ok || !resp.body) {
+        onError?.(new Error(`认证事件流连接失败 (${resp.status})`))
+        return
+      }
+      const reader = resp.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        const events = buffer.split('\n\n')
+        buffer = events.pop() || ''
+        for (const event of events) {
+          for (const line of event.split('\n')) {
+            if (line.startsWith('data: ')) {
+              try {
+                const ev = JSON.parse(line.slice(6)) as { elicitation_id: string }
+                onComplete(ev.elicitation_id)
+              } catch { /* 忽略无法解析的行 */ }
+            }
+          }
+        }
+      }
+    } catch (err) {
+      if (controller.signal.aborted) return
+      onError?.(err instanceof Error ? err : new Error('认证事件流读取失败'))
+    }
+  })()
+
+  return cleanup
 }
 
 // 获取指定 agent 类型 slash command（Agent 原生 + 配置 commands；可选 cwd 扫描项目级）

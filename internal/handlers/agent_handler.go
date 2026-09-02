@@ -2,7 +2,10 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"net/http"
 	"strings"
 
@@ -63,15 +66,17 @@ type AgentModeLister interface {
 
 // AgentHandler 处理 agent 列表相关请求。
 type AgentHandler struct {
-	lister       AgentLister
-	prober       AgentModelProber
-	cfgProber    AgentConfigProber
-	preconnector AgentPreconnector
-	cmdLister    AgentCommandLister
-	modeLister   AgentModeLister
-	statusLister AgentStatusLister
-	acpInfo      AgentACPInfoProvider
-	capTester    AgentCapabilityTester
+	lister         AgentLister
+	prober         AgentModelProber
+	cfgProber      AgentConfigProber
+	preconnector   AgentPreconnector
+	authenticator  AgentAuthenticator
+	elicitStreamer AgentElicitationEventStreamer
+	cmdLister      AgentCommandLister
+	modeLister     AgentModeLister
+	statusLister   AgentStatusLister
+	acpInfo        AgentACPInfoProvider
+	capTester      AgentCapabilityTester
 	// selectorFilters 是 config.yaml 中 agents.selector.filters 的正则列表，
 	// 随 GET /agents 透出，由前端对 agent+模型 合并下拉项做显示过滤。
 	selectorFilters []string
@@ -88,6 +93,12 @@ func NewAgentHandler(lister AgentLister, prober AgentModelProber, cfgProber Agen
 	}
 	if pc, ok := lister.(AgentPreconnector); ok {
 		h.preconnector = pc
+	}
+	if au, ok := lister.(AgentAuthenticator); ok {
+		h.authenticator = au
+	}
+	if es, ok := lister.(AgentElicitationEventStreamer); ok {
+		h.elicitStreamer = es
 	}
 	if ip, ok := statusLister.(AgentACPInfoProvider); ok {
 		h.acpInfo = ip
@@ -425,6 +436,82 @@ func (h *AgentHandler) Preconnect(c *gin.Context) {
 		return
 	}
 	Success(c, http.StatusAccepted, gin.H{"status": "accepted"})
+}
+
+// AgentAuthenticator 对指定 agent 调用 ACP authenticate（*acp.Service 实现）。
+type AgentAuthenticator interface {
+	AuthenticateAgent(ctx context.Context, agentType, methodID string) error
+}
+
+// AgentElicitationEventStreamer 暴露 elicitation 完成事件 channel（*acp.Service 实现）。
+// 用于前端 SSE 订阅浏览器登录流程的完成通知。
+type AgentElicitationEventStreamer interface {
+	SubscribeElicitationEvents(agentType string) (<-chan acplocal.ElicitationEvent, error)
+}
+
+// Authenticate POST /api/v1/agents/:type/authenticate — 触发 ACP authenticate。
+// 用于 agent 类型认证方式：agent 自行处理认证（如打开浏览器 PKCE 流程）。
+func (h *AgentHandler) Authenticate(c *gin.Context) {
+	agentType := strings.TrimSpace(c.Param("type"))
+	if agentType == "" {
+		Fail(c, http.StatusBadRequest, "INVALID_REQUEST", "缺少 agent 类型")
+		return
+	}
+	if h.authenticator == nil {
+		Fail(c, http.StatusServiceUnavailable, "AUTH_UNAVAILABLE", "当前服务不支持 ACP 认证")
+		return
+	}
+	var req struct {
+		MethodID string `json:"method_id"`
+	}
+	_ = c.ShouldBindJSON(&req)
+	if err := h.authenticator.AuthenticateAgent(c.Request.Context(), agentType, req.MethodID); err != nil {
+		Fail(c, http.StatusInternalServerError, "AUTH_FAILED", err.Error())
+		return
+	}
+	Success(c, http.StatusOK, gin.H{"status": "authenticated"})
+}
+
+// AuthEvents GET /api/v1/agents/:type/auth-events — SSE 推送 elicitation 完成事件。
+// 前端在触发 agent 类型认证（浏览器登录）后订阅此流，收到 complete 事件即刷新认证状态。
+// 响应格式：data: {"elicitation_id":"..."}\n\n
+func (h *AgentHandler) AuthEvents(c *gin.Context) {
+	agentType := strings.TrimSpace(c.Param("type"))
+	if agentType == "" {
+		Fail(c, http.StatusBadRequest, "INVALID_REQUEST", "缺少 agent 类型")
+		return
+	}
+	if h.elicitStreamer == nil {
+		Fail(c, http.StatusServiceUnavailable, "AUTH_EVENTS_UNAVAILABLE", "当前服务不支持认证事件流")
+		return
+	}
+	ch, err := h.elicitStreamer.SubscribeElicitationEvents(agentType)
+	if err != nil {
+		Fail(c, http.StatusServiceUnavailable, "NO_CONNECTION", err.Error())
+		return
+	}
+
+	c.Header("Content-Type", "text/event-stream")
+	c.Header("Cache-Control", "no-cache")
+	c.Header("Connection", "keep-alive")
+	c.Header("X-Accel-Buffering", "no")
+	c.Status(http.StatusOK)
+	c.Writer.Flush()
+
+	ctx := c.Request.Context()
+	c.Stream(func(w io.Writer) bool {
+		select {
+		case <-ctx.Done():
+			return false
+		case ev, ok := <-ch:
+			if !ok {
+				return false
+			}
+			b, _ := json.Marshal(ev)
+			_, _ = fmt.Fprintf(w, "data: %s\n\n", b)
+			return true
+		}
+	})
 }
 
 // Commands GET /api/v1/agents/:type/commands — 返回 agent 类型缓存的 slash command（新建任务页用）。

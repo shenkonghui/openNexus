@@ -3642,6 +3642,58 @@ func (s *Service) AgentAuthTerminalSpec(agentType, methodID string) (AuthTermina
 	return AuthTerminalSpec{}, fmt.Errorf("agent %s 未声明 terminal 类型认证方式", agentType)
 }
 
+// AuthenticateAgent 对指定 agent 调用 ACP authenticate。
+// 用于 agent 类型认证方式（agent 自行处理认证，如打开浏览器 PKCE 流程）：
+// 客户端只需携带 methodId 调用 authenticate，agent 会自行拉起登录流程。
+// methodID 为空时取第一个 agent 类型认证方式。
+func (s *Service) AuthenticateAgent(ctx context.Context, agentType, methodID string) error {
+	s.mu.RLock()
+	initResp, ok := s.agentInitInfo[agentType]
+	s.mu.RUnlock()
+	if !ok {
+		return fmt.Errorf("agent %s 尚未完成 ACP 握手，无法获取认证方式", agentType)
+	}
+	if methodID == "" {
+		for _, m := range initResp.AuthMethods {
+			if m.Agent != nil && m.Agent.Id != "" {
+				methodID = m.Agent.Id
+				break
+			}
+		}
+	}
+	if methodID == "" {
+		return fmt.Errorf("agent %s 未声明 agent 类型认证方式", agentType)
+	}
+	conn, err := s.ensureConnection(ctx, agentType, s.probeCwd())
+	if err != nil {
+		return fmt.Errorf("建立连接失败: %w", err)
+	}
+	if err := conn.Authenticate(ctx, methodID, nil); err != nil {
+		return fmt.Errorf("authenticate 失败: %w", err)
+	}
+	slog.Info("ACP authenticate 完成（agent 类型）", "agent", agentType, "method", methodID)
+	return nil
+}
+
+// SubscribeElicitationEvents 返回指定 agent 类型的 elicitation 完成事件 channel。
+// 用于前端 SSE 订阅浏览器登录流程的完成通知（agent → client UnstableCompleteElicitation）。
+// 若该 agent 类型尚无活跃连接，返回错误。
+func (s *Service) SubscribeElicitationEvents(agentType string) (<-chan ElicitationEvent, error) {
+	key := connectionKey(agentType, s.probeCwd())
+	s.mu.RLock()
+	conn, ok := s.pool[key]
+	s.mu.RUnlock()
+	if !ok {
+		return nil, fmt.Errorf("agent %s 尚无活跃连接", agentType)
+	}
+	select {
+	case <-conn.Done():
+		return nil, fmt.Errorf("agent %s 连接已断开", agentType)
+	default:
+	}
+	return conn.ElicitationEvents(), nil
+}
+
 // ListAgentStatus 返回所有已注册后端的连接状态与活跃会话数。
 // status=connected 表示该 agent 类型至少有一条 ACP 连接已建立且进程存活。
 func (s *Service) ListAgentStatus() []AgentStatus {

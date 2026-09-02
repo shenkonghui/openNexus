@@ -18,6 +18,7 @@
     "appId": "com.opennexus.app",
     "productName": "openNexus",
     "afterSign": "notarize.cjs",
+    "afterPack": "after-pack.cjs",
     "directories": {
       "output": "dist",
       "buildResources": "."
