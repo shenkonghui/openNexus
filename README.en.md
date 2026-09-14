@@ -206,7 +206,7 @@ The configuration file is `config.yaml`. Environment variable overrides:
 | `tunnel.hostname` | - | Public hostname of the named tunnel (optional, for display/copy in the UI) |
 | `tunnel.cloudflared_path` | - | Custom path to the cloudflared binary; empty searches PATH and common install locations |
 
-Config file lookup: `CONFIG_PATH` → `~/.openNexus/config.yaml` → `./config.yaml`. Database and session data default to `~/.openNexus/`.
+Config file lookup: `CONFIG_PATH` → `./config.yaml` (project-level, takes precedence when present) → `~/.openNexus/config.yaml`. Database and session data default to `~/.openNexus/`.
 
 Agent commands, arguments, and API keys can be managed dynamically in the Settings page — changes take effect immediately. Skills, commands, rules, sub-agents, and MCP servers are also configurable via user and project directories in `config.yaml`.
 

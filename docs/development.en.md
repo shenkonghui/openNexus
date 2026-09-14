@@ -93,8 +93,8 @@ openNexus/
 The backend reads `config.yaml`. Lookup order:
 
 1. `CONFIG_PATH` environment variable
-2. `~/.openNexus/config.yaml`
-3. `./config.yaml` (project root)
+2. `./config.yaml` (project root, takes precedence when present)
+3. `~/.openNexus/config.yaml`
 
 Common environment overrides:
 

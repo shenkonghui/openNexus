@@ -55,7 +55,7 @@ make electron-uninstall
 
 目录内容：`opennexus.db`（数据库）、`session/`（临时会话工作区）、可选 `config.yaml`。
 
-配置加载顺序：`CONFIG_PATH` → `~/.openNexus/config.yaml` → 安装包/项目旁的 `config.yaml`。
+配置加载顺序：启动器显式指定 `CONFIG_PATH`（`~/.openNexus/config.yaml` 存在时用它，否则用安装包/项目旁的 `config.yaml`）。
 
 后端日志写入 `~/.openNexus/launcher.log`，启动失败时可在此排查。
 

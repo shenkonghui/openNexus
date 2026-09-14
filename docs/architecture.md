@@ -130,4 +130,4 @@ MCP 服务器扩展了 Agent 的能力。openNexus 为笔记和子 Agent 提供�
 
 ## 配置
 
-配置从 `config.yaml` 加载（搜索顺序：`CONFIG_PATH` → `~/.openNexus/config.yaml` → `./config.yaml`）。环境变量可覆盖大部分配置项。详见 [`development.md`](development.md) 和根目录 `README.zh-CN.md`。
+配置从 `config.yaml` 加载（搜索顺序：`CONFIG_PATH` → `./config.yaml`（项目级，存在时优先）→ `~/.openNexus/config.yaml`）。环境变量可覆盖大部分配置项。详见 [`development.md`](development.md) 和根目录 `README.zh-CN.md`。

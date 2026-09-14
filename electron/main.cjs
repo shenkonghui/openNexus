@@ -84,8 +84,11 @@ function startBackend(port) {
       ? path.join(process.resourcesPath, 'web')
       : path.join(__dirname, '..', 'web', 'dist'),
   }
-  // 用户目录无配置时，回退到 bundle/项目 config（CONFIG_PATH 优先于 ResolveConfigPath 的用户目录）
-  if (!fs.existsSync(userCfg)) {
+  // 用户目录有配置则始终显式指定（后端 ResolveConfigPath 项目优先，
+  // 不显式指定会被 cwd 下的项目级 config.yaml 抢占）；无则回退 bundle/项目 config
+  if (fs.existsSync(userCfg)) {
+    env.CONFIG_PATH = userCfg
+  } else {
     env.CONFIG_PATH = fallbackConfigPath()
   }
 

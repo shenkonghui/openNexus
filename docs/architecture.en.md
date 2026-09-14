@@ -128,4 +128,4 @@ MCP servers extend what agents can do. openNexus provides built-in MCP servers f
 
 ## Configuration
 
-Configuration is loaded from `config.yaml` (search order: `CONFIG_PATH` → `~/.openNexus/config.yaml` → `./config.yaml`). Environment variables can override most values. See [`development.en.md`](development.en.md) and root `README.md` for details.
+Configuration is loaded from `config.yaml` (search order: `CONFIG_PATH` → `./config.yaml` (project-level, takes precedence when present) → `~/.openNexus/config.yaml`). Environment variables can override most values. See [`development.en.md`](development.en.md) and root `README.md` for details.

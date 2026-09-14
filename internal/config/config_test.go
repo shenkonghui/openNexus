@@ -249,6 +249,8 @@ func TestResolveConfigPath_Env(t *testing.T) {
 
 func TestResolveConfigPath_Fallback(t *testing.T) {
 	t.Setenv("CONFIG_PATH", "")
+	// 切到无 config.yaml 的临时目录，排除测试进程 cwd 恰好有项目配置的干扰
+	t.Chdir(t.TempDir())
 	got := ResolveConfigPath()
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -263,6 +265,18 @@ func TestResolveConfigPath_Fallback(t *testing.T) {
 	}
 	if got != "config.yaml" {
 		t.Errorf("ResolveConfigPath = %q, 期望 config.yaml", got)
+	}
+}
+
+func TestResolveConfigPath_ProjectOverGlobal(t *testing.T) {
+	t.Setenv("CONFIG_PATH", "")
+	// 项目目录存在 config.yaml 时优先于全局 ~/.openNexus/config.yaml
+	t.Chdir(t.TempDir())
+	if err := os.WriteFile("config.yaml", []byte("server:\n    port: 8008\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := ResolveConfigPath(); got != "config.yaml" {
+		t.Errorf("ResolveConfigPath = %q, 期望项目级 config.yaml", got)
 	}
 }
 

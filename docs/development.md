@@ -92,8 +92,8 @@ openNexus/
 后端读取 `config.yaml`。查找顺序：
 
 1. 环境变量 `CONFIG_PATH`
-2. `~/.openNexus/config.yaml`
-3. `./config.yaml`（项目根目录）
+2. `./config.yaml`（项目根目录，存在时优先）
+3. `~/.openNexus/config.yaml`
 
 常用环境变量覆盖：
 

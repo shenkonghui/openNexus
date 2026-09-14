@@ -358,11 +358,14 @@ type ClaudeCodeConfig struct {
 	Timeout   time.Duration `yaml:"timeout"`
 }
 
-// ResolveConfigPath 按优先级解析配置文件路径：
-// CONFIG_PATH → ~/.openNexus/config.yaml（存在时）→ ./config.yaml
+// ResolveConfigPath 按优先级解析配置文件路径（项目配置优先于全局配置）：
+// CONFIG_PATH → ./config.yaml（存在时）→ ~/.openNexus/config.yaml
 func ResolveConfigPath() string {
 	if p := os.Getenv("CONFIG_PATH"); p != "" {
 		return p
+	}
+	if _, err := os.Stat("config.yaml"); err == nil {
+		return "config.yaml"
 	}
 	home, err := os.UserHomeDir()
 	if err == nil {
