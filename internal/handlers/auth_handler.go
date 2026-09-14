@@ -33,6 +33,24 @@ func (h *AuthHandler) AutoLogin(c *gin.Context) {
 	Success(c, http.StatusOK, result)
 }
 
+// TokenLogin POST /api/v1/auth/token — 静态访问令牌登录（config.yaml auth.static_token）。
+// 浏览器通过 ?token=xxx 一次性授权后长期保存此令牌并自动换取 JWT。
+func (h *AuthHandler) TokenLogin(c *gin.Context) {
+	var req struct {
+		Token string `json:"token" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		Fail(c, http.StatusBadRequest, "INVALID_REQUEST", "请求参数无效")
+		return
+	}
+	result, err := h.svc.LoginWithStaticToken(req.Token, c.Request.UserAgent(), c.ClientIP())
+	if err != nil {
+		h.writeAuthError(c, err)
+		return
+	}
+	Success(c, http.StatusOK, result)
+}
+
 type registerRequest struct {
 	Username string `json:"username" binding:"required"`
 	Email    string `json:"email" binding:"required"`

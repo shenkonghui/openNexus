@@ -130,6 +130,9 @@ export default function LoginPage() {
             {submitting ? t('common.saving') : mode === 'login' ? t('auth.loginBtn') : t('auth.registerBtn')}
           </button>
         </form>
+
+        {/* 静态访问令牌提示：管理员配置 auth.static_token 后，带 ?token= 的链接可免密登录 */}
+        {mode === 'login' && <p className={styles.tokenHint}>{t('auth.tokenHint')}</p>}
       </div>
     </div>
   )

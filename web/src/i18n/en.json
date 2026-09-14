@@ -176,7 +176,8 @@
     "registerSuccess": "Registration successful",
     "invalidCredentials": "Invalid username or password",
     "usernameRequired": "Username is required",
-    "passwordRequired": "Password is required"
+    "passwordRequired": "Password is required",
+    "tokenHint": "Access token supported: open a link with ?token= to sign in without a password"
   },
   "profile": {
     "title": "Profile",

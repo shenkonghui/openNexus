@@ -29,7 +29,7 @@
 - **文件变更对比**：会话中文件变更的左右对比视图
 - **Drawio 渲染**：对话中嵌入 ` ```drawio ` 代码块自动渲染图表
 - **Excel 处理**：内置 `excel` Skill（随程序释放到 `~/.openNexus/builtin-skills`，开箱即用），指导 Agent 用 pandas/openpyxl/xlsxwriter 读写分析 Excel；右侧新增「Excel」面板，点击 `.xlsx/.xlsm/.xls/.csv` 文件自动激活，浏览器端用 SheetJS 解析渲染（sheet 切换、行列标号），支持鼠标拖选单元格区域，一键将选区转为 markdown 表格插入对话输入框
-- **用户认证**：JWT 鉴权，支持注册 / 登录 / 密码修改 / 个人资料
+- **用户认证**：JWT 鉴权，支持注册 / 登录 / 密码修改 / 个人资料；支持静态访问令牌（`auth.static_token`），浏览器打开带 `?token=` 的链接一次即自动登录，此后无需再输密码
 - **主题切换**：内置亮色 / 暗色主题
 - **国际化**：支持中文和英文界面，在设置页可切换语言
 - **单端口部署**：生产模式下前端构建产物由后端直接服务，前后端同一端口；同时支持 Docker 化部署
@@ -189,6 +189,7 @@ make electron-run     # 启动已安装的应用
 | `jwt.access_ttl` | `JWT_ACCESS_TTL` | 访问令牌有效期，默认 `15m` |
 | `jwt.refresh_ttl` | `JWT_REFRESH_TTL` | 刷新令牌有效期，默认 `168h` |
 | `auth.auto_login` | `AUTH_AUTO_LOGIN` | 自动以 admin 登录，默认 `true` |
+| `auth.static_token` | `AUTH_STATIC_TOKEN` | 静态访问令牌：浏览器打开带 `?token=<值>` 的链接一次性授权后，该设备自动登录（长期设备凭证）。留空禁用 |
 | `debug.acp.enabled` | `DEBUG_ACP_ENABLED` | 启用 ACP 调试日志，默认 `true` |
 | `debug.acp.dir` | `DEBUG_ACP_DIR` | ACP 调试日志存储目录 |
 | `agents.workspace.session_dir` | `AGENTS_WORKSPACE_SESSION_DIR` | 会话工作区根目录，默认 `~/.openNexus/session` |

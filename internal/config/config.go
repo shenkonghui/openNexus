@@ -138,6 +138,9 @@ type LoggingConfig struct {
 
 type AuthConfig struct {
 	AutoLogin bool `yaml:"auto_login"`
+	// StaticToken 静态访问令牌：浏览器通过 ?token=xxx 链接一次性授权后，
+	// 前端长期保存并自动换取 JWT（设备级凭证，等同长期密码）。
+	StaticToken string `yaml:"static_token"`
 }
 
 type ServerConfig struct {
@@ -419,6 +422,9 @@ func (c *Config) applyEnv() {
 	}
 	if v := os.Getenv("CLAUDE_CODE_COMMAND"); v != "" {
 		c.Agents.ClaudeCode.Command = v
+	}
+	if v := os.Getenv("AUTH_STATIC_TOKEN"); v != "" {
+		c.Auth.StaticToken = v
 	}
 	if v := os.Getenv("WEB_DIST"); v != "" {
 		c.Server.WebDist = v

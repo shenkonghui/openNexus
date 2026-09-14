@@ -1,6 +1,7 @@
 package services
 
 import (
+	"crypto/subtle"
 	"errors"
 	"regexp"
 	"strings"
@@ -28,11 +29,12 @@ var (
 )
 
 type AuthService struct {
-	db         *gorm.DB
-	users      *repository.UserRepository
-	tokens     *repository.RefreshTokenRepository
-	jwt        *JWTService
-	bcryptCost int
+	db          *gorm.DB
+	users       *repository.UserRepository
+	tokens      *repository.RefreshTokenRepository
+	jwt         *JWTService
+	bcryptCost  int
+	staticToken string
 }
 
 func NewAuthService(db *gorm.DB, jwtSvc *JWTService, bcryptCost int) *AuthService {
@@ -43,6 +45,11 @@ func NewAuthService(db *gorm.DB, jwtSvc *JWTService, bcryptCost int) *AuthServic
 		jwt:        jwtSvc,
 		bcryptCost: bcryptCost,
 	}
+}
+
+// SetStaticToken 注入静态访问令牌（config.yaml auth.static_token，可被 AUTH_STATIC_TOKEN 覆盖）。
+func (s *AuthService) SetStaticToken(token string) {
+	s.staticToken = strings.TrimSpace(token)
 }
 
 // SeedAdminUser 确保内置 admin 用户存在，不存在时自动创建。
@@ -148,6 +155,16 @@ func (s *AuthService) AutoLoginAsAdmin(userAgent, ip string) (*AuthResult, error
 		return nil, ErrUserDisabled
 	}
 	return s.issueTokens(user, userAgent, ip)
+}
+
+// LoginWithStaticToken 用静态访问令牌登录：匹配即以 admin 身份签发 JWT。
+// 浏览器通过 ?token=xxx 一次性授权后长期保存自动换取 JWT（设备级凭证）。
+func (s *AuthService) LoginWithStaticToken(token, userAgent, ip string) (*AuthResult, error) {
+	if s.staticToken == "" || token == "" ||
+		subtle.ConstantTimeCompare([]byte(token), []byte(s.staticToken)) != 1 {
+		return nil, ErrInvalidCreds // 统一错误，防探测
+	}
+	return s.AutoLoginAsAdmin(userAgent, ip)
 }
 
 func (s *AuthService) findUserByAccount(account string) (*models.User, error) {

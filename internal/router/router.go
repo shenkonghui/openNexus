@@ -36,6 +36,7 @@ func Setup(authSvc *services.AuthService, jwtSvc *services.JWTService, agentRout
 			auth.POST("/register", authHandler.Register)
 			auth.POST("/login", authHandler.Login)
 			auth.GET("/auto-login", authHandler.AutoLogin)
+			auth.POST("/token", authHandler.TokenLogin)
 			auth.POST("/refresh", authHandler.Refresh)
 			auth.POST("/logout", authHandler.Logout)
 		}

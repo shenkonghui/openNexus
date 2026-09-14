@@ -42,6 +42,15 @@ export function autoLogin(): Promise<AuthResponse> {
   return apiFetch<{ data: AuthResponse }>('/auth/auto-login', { method: 'GET', skipAuthRedirect: true }).then(r => r.data)
 }
 
+// 静态访问令牌登录（config.yaml auth.static_token；?token=xxx 一次性授权后长期使用）
+export function tokenLogin(token: string): Promise<AuthResponse> {
+  return apiFetch<{ data: AuthResponse }>('/auth/token', {
+    method: 'POST',
+    skipAuthRedirect: true,
+    body: JSON.stringify({ token }),
+  }).then(r => r.data)
+}
+
 // 修改当前用户密码
 export function changePassword(oldPassword: string, newPassword: string): Promise<void> {
   return apiFetch('/me/password', {

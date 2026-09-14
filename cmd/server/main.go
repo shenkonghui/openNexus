@@ -180,6 +180,8 @@ func main() {
 	jwtSvc := services.NewJWTService(cfg.JWT.Secret, cfg.JWT.AccessTTL, cfg.JWT.RefreshTTL)
 	authSvc := services.NewAuthService(db, jwtSvc, cfg.Password.BcryptCost)
 	authSvc.SeedAdminUser()
+	// 静态访问令牌（auth.static_token）：浏览器 ?token=xxx 一次性授权后长期自动登录
+	authSvc.SetStaticToken(cfg.Auth.StaticToken)
 
 	// P1: ACP 服务
 	messagesDir := filepath.Join(filepath.Dir(cfg.Database.Path), "messages")

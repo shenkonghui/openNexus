@@ -29,7 +29,7 @@ A multi-Agent orchestration and conversation platform based on the [Agent Client
 - **Change Diff**: Side-by-side diff view for file changes made during a session.
 - **Drawio Rendering**: Render drawio diagrams (embed ` ```drawio ` code blocks) in conversations.
 - **Excel Support**: Built-in `excel` Skill (released to `~/.openNexus/builtin-skills` on startup, ready out of the box) guides Agents to read/write/analyze Excel via pandas/openpyxl/xlsxwriter; a new "Excel" panel on the right auto-activates when clicking `.xlsx/.xlsm/.xls/.csv` files, parsing and rendering them in-browser via SheetJS (sheet tabs, row/column headers), with mouse-drag cell-range selection and one-click conversion of the selection into a markdown table inserted into the chat input.
-- **User Authentication**: JWT-based auth with registration, login, password change, and profile management.
+- **User Authentication**: JWT-based auth with registration, login, password change, and profile management; supports a static access token (`auth.static_token`) — open a link with `?token=` once in the browser and it signs in automatically from then on.
 - **Theme Toggle**: Light and dark theme support.
 - **Internationalization**: Chinese and English UI. Switch language in the Settings page.
 - **Single-Port Deployment**: Production mode serves the frontend build directly from the backend. Docker support included.
@@ -189,6 +189,7 @@ The configuration file is `config.yaml`. Environment variable overrides:
 | `jwt.access_ttl` | `JWT_ACCESS_TTL` | Access token TTL (default: `15m`) |
 | `jwt.refresh_ttl` | `JWT_REFRESH_TTL` | Refresh token TTL (default: `168h`) |
 | `auth.auto_login` | `AUTH_AUTO_LOGIN` | Auto-login as admin (default: `true`) |
+| `auth.static_token` | `AUTH_STATIC_TOKEN` | Static access token: open a link with `?token=<value>` once to authorize the device, which then signs in automatically (long-lived device credential). Empty disables |
 | `debug.acp.enabled` | `DEBUG_ACP_ENABLED` | Enable ACP debug logging (default: `true`) |
 | `debug.acp.dir` | `DEBUG_ACP_DIR` | ACP debug log directory |
 | `agents.workspace.session_dir` | `AGENTS_WORKSPACE_SESSION_DIR` | Session workspace root (default: `~/.openNexus/session`) |

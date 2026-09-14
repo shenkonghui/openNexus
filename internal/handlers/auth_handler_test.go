@@ -32,6 +32,7 @@ func setupRouter(t *testing.T) (*gin.Engine, *services.AuthService) {
 	auth := v1.Group("/auth")
 	auth.POST("/register", h.Register)
 	auth.POST("/login", h.Login)
+	auth.POST("/token", h.TokenLogin)
 	auth.POST("/refresh", h.Refresh)
 	auth.POST("/logout", h.Logout)
 	v1.GET("/me", h.Me) // 未经中间件保护，仅测 handler 内部逻辑
@@ -141,5 +142,44 @@ func TestHandler_Logout_Success(t *testing.T) {
 	w := doJSON(t, r, "POST", "/api/v1/auth/logout", gin.H{"refresh_token": login.Data.RefreshToken})
 	if w.Code != http.StatusOK {
 		t.Fatalf("状态码 = %d, 期望 200", w.Code)
+	}
+}
+
+func TestHandler_TokenLogin(t *testing.T) {
+	r, authSvc := setupRouter(t)
+	authSvc.SeedAdminUser()
+	authSvc.SetStaticToken("e2e-static-token")
+
+	// 错误令牌 → 401
+	w := doJSON(t, r, "POST", "/api/v1/auth/token", gin.H{"token": "wrong"})
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("错误令牌状态码 = %d, 期望 401, body=%s", w.Code, w.Body.String())
+	}
+
+	// 正确令牌 → 200 且签发 access/refresh token
+	w = doJSON(t, r, "POST", "/api/v1/auth/token", gin.H{"token": "e2e-static-token"})
+	if w.Code != http.StatusOK {
+		t.Fatalf("正确令牌状态码 = %d, 期望 200, body=%s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Data struct {
+			AccessToken  string `json:"access_token"`
+			RefreshToken string `json:"refresh_token"`
+			User         struct {
+				Username string `json:"username"`
+			} `json:"user"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Data.AccessToken == "" || resp.Data.RefreshToken == "" || resp.Data.User.Username != "admin" {
+		t.Fatalf("签发结果异常: %+v", resp.Data)
+	}
+
+	// 空请求体 → 400
+	w = doJSON(t, r, "POST", "/api/v1/auth/token", nil)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("空请求体状态码 = %d, 期望 400", w.Code)
 	}
 }

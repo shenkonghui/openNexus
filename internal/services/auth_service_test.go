@@ -191,3 +191,32 @@ func TestAuthService_GetUserByID(t *testing.T) {
 		t.Errorf("Username = %q", got.Username)
 	}
 }
+
+func TestAuthService_LoginWithStaticToken(t *testing.T) {
+	svc, _ := newAuthSvc(t)
+	svc.SeedAdminUser()
+	svc.SetStaticToken("my-static-token-123")
+
+	// 正确令牌 → 以 admin 身份签发 JWT
+	result, err := svc.LoginWithStaticToken("my-static-token-123", "ua", "127.0.0.1")
+	if err != nil {
+		t.Fatalf("正确令牌登录失败: %v", err)
+	}
+	if result.AccessToken == "" || result.RefreshToken == "" || result.User == nil || result.User.Username != "admin" {
+		t.Fatalf("签发结果异常: %+v", result)
+	}
+
+	// 错误令牌 → 统一 ErrInvalidCreds（防探测）
+	if _, err := svc.LoginWithStaticToken("wrong-token", "ua", "127.0.0.1"); err != ErrInvalidCreds {
+		t.Errorf("期望 ErrInvalidCreds，实际 %v", err)
+	}
+}
+
+func TestAuthService_LoginWithStaticToken_Disabled(t *testing.T) {
+	svc, _ := newAuthSvc(t)
+	svc.SeedAdminUser()
+	// 未配置静态令牌时任何值都应拒绝
+	if _, err := svc.LoginWithStaticToken("anything", "ua", "127.0.0.1"); err != ErrInvalidCreds {
+		t.Errorf("未配置令牌时期望 ErrInvalidCreds，实际 %v", err)
+	}
+}

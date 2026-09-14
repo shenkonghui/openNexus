@@ -16,6 +16,9 @@ jwt:
 auth:
     # 开启后无需登录，自动使用内置 admin 用户
     auto_login: true
+    # 静态访问令牌：浏览器打开 http://<host>:<port>/?token=<该值> 一次性授权后，
+    # 该设备此后自动登录（长期设备凭证，等同密码）。留空禁用。
+    static_token: ""
 password:
     bcrypt_cost: 12
 debug:
