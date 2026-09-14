@@ -1,7 +1,10 @@
 package config
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -380,7 +383,18 @@ func ResolveConfigPath() string {
 func Load(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("读取配置文件: %w", err)
+		if !os.IsNotExist(err) {
+			return nil, fmt.Errorf("读取配置文件: %w", err)
+		}
+		// 首次启动无配置：生成一份含随机 JWT secret 的默认模板后照常加载，
+		// 开箱即用（与 gateway.yaml 的 bootstrap 行为一致）。
+		if err := writeDefaultConfig(path); err != nil {
+			return nil, fmt.Errorf("生成默认配置失败 (%s): %w", path, err)
+		}
+		slog.Warn("配置文件不存在，已生成默认配置，可按需编辑", "path", path)
+		if data, err = os.ReadFile(path); err != nil {
+			return nil, fmt.Errorf("读取配置文件: %w", err)
+		}
 	}
 	cfg := &Config{}
 	if err := yaml.Unmarshal(data, cfg); err != nil {
@@ -388,6 +402,61 @@ func Load(path string) (*Config, error) {
 	}
 	cfg.applyEnv()
 	return cfg, nil
+}
+
+// writeDefaultConfig 在 path 写入一份基础默认配置（含随机 JWT secret）。
+// 父目录不存在会自动创建；仅在文件不存在时由 Load 调用，不覆盖已有配置。
+func writeDefaultConfig(path string) error {
+	if dir := filepath.Dir(path); dir != "" && dir != "." {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return fmt.Errorf("创建配置目录失败: %w", err)
+		}
+	}
+	secret, err := randomSecret()
+	if err != nil {
+		return err
+	}
+	tmpl := `# openNexus 默认配置（首次启动自动生成）
+# 完整配置项与说明见项目仓库的 config.yaml.example
+
+server:
+    port: 8008
+    # debug=开发（gin 调试日志）；release=生产
+    mode: debug
+    web_dist: ./web/dist
+
+logging:
+    # 日志等级：debug | info | warn | error
+    level: info
+
+database:
+    path: ~/.openNexus/opennexus.db
+
+jwt:
+    # 签名密钥：首次启动已自动生成随机值；泄露或更换后所有已登录设备需重新登录
+    secret: "` + secret + `"
+    access_ttl: 15m
+    refresh_ttl: 168h
+
+auth:
+    # 开启后无需登录，自动使用内置 admin 用户；公网/隧道场景务必关闭
+    auto_login: true
+    # 静态访问令牌：浏览器打开带 ?token=<该值> 的链接一次性授权后该设备自动登录。留空禁用
+    static_token: ""
+
+password:
+    bcrypt_cost: 12
+`
+	return os.WriteFile(path, []byte(tmpl), 0o600)
+}
+
+// randomSecret 生成 32 字节 hex 编码的随机 JWT 签名密钥（64 字符，满足 >=32 字节校验）。
+func randomSecret() (string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("生成随机 JWT secret 失败: %w", err)
+	}
+	return hex.EncodeToString(b), nil
 }
 
 func (c *Config) applyEnv() {

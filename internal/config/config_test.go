@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -277,6 +278,35 @@ func TestResolveConfigPath_ProjectOverGlobal(t *testing.T) {
 	}
 	if got := ResolveConfigPath(); got != "config.yaml" {
 		t.Errorf("ResolveConfigPath = %q, 期望项目级 config.yaml", got)
+	}
+}
+
+func TestLoad_BootstrapDefaultConfig(t *testing.T) {
+	t.Chdir(t.TempDir())
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load 错误: %v", err)
+	}
+	if len(cfg.JWT.Secret) < 32 {
+		t.Errorf("生成的 JWT secret 长度 %d, 期望 >= 32", len(cfg.JWT.Secret))
+	}
+	if cfg.Server.Port != 8008 {
+		t.Errorf("默认端口 = %d, 期望 8008", cfg.Server.Port)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("生成的默认配置未通过 Validate: %v", err)
+	}
+	// 已有配置不被覆盖
+	if err := os.WriteFile(path, []byte("server:\n    port: 9999\njwt:\n    secret: \""+strings.Repeat("x", 32)+"\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg2, err := Load(path)
+	if err != nil {
+		t.Fatalf("二次 Load 错误: %v", err)
+	}
+	if cfg2.Server.Port != 9999 {
+		t.Errorf("已有配置被覆盖: port = %d, 期望 9999", cfg2.Server.Port)
 	}
 }
 

@@ -96,6 +96,8 @@ The backend reads `config.yaml`. Lookup order:
 2. `./config.yaml` (project root, takes precedence when present)
 3. `~/.openNexus/config.yaml`
 
+A missing config file is auto-generated with a random JWT secret on first start (see `config.yaml.example` for all options).
+
 Common environment overrides:
 
 | Variable | Description |

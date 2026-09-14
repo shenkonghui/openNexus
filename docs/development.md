@@ -95,6 +95,8 @@ openNexus/
 2. `./config.yaml`（项目根目录，存在时优先）
 3. `~/.openNexus/config.yaml`
 
+配置文件不存在时，首次启动会自动生成一份含随机 JWT 密钥的默认配置（完整配置项见 `config.yaml.example`）。
+
 常用环境变量覆盖：
 
 | 变量 | 说明 |

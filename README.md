@@ -206,7 +206,7 @@ make electron-run     # 启动已安装的应用
 | `tunnel.hostname` | - | 具名隧道对外域名（可选，用于界面展示与复制） |
 | `tunnel.cloudflared_path` | - | 自定义 cloudflared 可执行文件路径，空则按 PATH 与常见安装位置查找 |
 
-配置文件查找顺序：`CONFIG_PATH` → `./config.yaml`（项目级，存在时优先）→ `~/.openNexus/config.yaml`。数据库与会话数据默认均在 `~/.openNexus/`。
+配置文件查找顺序：`CONFIG_PATH` → `./config.yaml`（项目级，存在时优先）→ `~/.openNexus/config.yaml`。配置文件不存在时，首次启动会自动生成一份含随机 JWT 密钥的默认配置（完整配置项与说明见 `config.yaml.example`）。数据库与会话数据默认均在 `~/.openNexus/`。
 
 Agent 的连接命令、参数、API Key 等可在前端「设置」页面动态管理，修改后实时生效。Skills、Commands、Rules、Sub-Agents、MCP 等均可通过 `config.yaml` 中的用户/项目目录配置。
 
