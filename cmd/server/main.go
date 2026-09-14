@@ -180,7 +180,13 @@ func main() {
 	jwtSvc := services.NewJWTService(cfg.JWT.Secret, cfg.JWT.AccessTTL, cfg.JWT.RefreshTTL)
 	authSvc := services.NewAuthService(db, jwtSvc, cfg.Password.BcryptCost)
 	authSvc.SeedAdminUser()
-	// 静态访问令牌（auth.static_token）：浏览器 ?token=xxx 一次性授权后长期自动登录
+	// 静态访问令牌（auth.static_token）：浏览器 ?token=xxx 一次性授权后长期自动登录。
+	// 未配置时自动生成随机令牌并写回配置文件（设备级免密登录凭证）。
+	if generated, err := cfg.EnsureStaticToken(cfgPath); err != nil {
+		log.Printf("生成静态访问令牌失败（不影响启动）: %v", err)
+	} else if generated {
+		log.Printf("auth.static_token 未配置，已自动生成随机令牌并写回 %s", cfgPath)
+	}
 	authSvc.SetStaticToken(cfg.Auth.StaticToken)
 
 	// P1: ACP 服务

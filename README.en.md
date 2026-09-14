@@ -189,7 +189,7 @@ The configuration file is `config.yaml`. Environment variable overrides:
 | `jwt.access_ttl` | `JWT_ACCESS_TTL` | Access token TTL (default: `15m`) |
 | `jwt.refresh_ttl` | `JWT_REFRESH_TTL` | Refresh token TTL (default: `168h`) |
 | `auth.auto_login` | `AUTH_AUTO_LOGIN` | Auto-login as admin (default: `true`) |
-| `auth.static_token` | `AUTH_STATIC_TOKEN` | Static access token: open a link with `?token=<value>` once to authorize the device, which then signs in automatically (long-lived device credential). Empty disables |
+| `auth.static_token` | `AUTH_STATIC_TOKEN` | Static access token: open a link with `?token=<value>` once to authorize the device, which then signs in automatically (long-lived device credential). Left empty, a random token is generated and written back to the config file on startup |
 | `debug.acp.enabled` | `DEBUG_ACP_ENABLED` | Enable ACP debug logging (default: `true`) |
 | `debug.acp.dir` | `DEBUG_ACP_DIR` | ACP debug log directory |
 | `agents.workspace.session_dir` | `AGENTS_WORKSPACE_SESSION_DIR` | Session workspace root (default: `~/.openNexus/session`) |

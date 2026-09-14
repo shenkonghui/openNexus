@@ -310,6 +310,42 @@ func TestLoad_BootstrapDefaultConfig(t *testing.T) {
 	}
 }
 
+func TestEnsureStaticToken(t *testing.T) {
+	t.Chdir(t.TempDir())
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	// 无 auth 段的极简配置：应生成 static_token 并写回
+	if err := os.WriteFile(path, []byte("server:\n    port: 8008\njwt:\n    secret: \""+strings.Repeat("x", 32)+"\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load 错误: %v", err)
+	}
+	generated, err := cfg.EnsureStaticToken(path)
+	if err != nil {
+		t.Fatalf("EnsureStaticToken 错误: %v", err)
+	}
+	if !generated || cfg.Auth.StaticToken == "" {
+		t.Fatalf("期望生成令牌, generated=%v token=%q", generated, cfg.Auth.StaticToken)
+	}
+	// 写回后重新加载应读到同一令牌（已持久化）
+	cfg2, err := Load(path)
+	if err != nil {
+		t.Fatalf("重载配置错误: %v", err)
+	}
+	if cfg2.Auth.StaticToken != cfg.Auth.StaticToken {
+		t.Errorf("令牌未持久化: %q != %q", cfg2.Auth.StaticToken, cfg.Auth.StaticToken)
+	}
+	// 已有令牌不重新生成
+	generated2, err := cfg2.EnsureStaticToken(path)
+	if err != nil {
+		t.Fatalf("二次 EnsureStaticToken 错误: %v", err)
+	}
+	if generated2 {
+		t.Errorf("已有令牌被重新生成")
+	}
+}
+
 func TestValidate_SkillsUserDirsDefault(t *testing.T) {
 	cfg := &Config{JWT: JWTConfig{Secret: "this-is-a-very-long-jwt-secret-key-32+bytes!"}}
 	if err := cfg.Validate(); err != nil {

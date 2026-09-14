@@ -189,7 +189,7 @@ make electron-run     # 启动已安装的应用
 | `jwt.access_ttl` | `JWT_ACCESS_TTL` | 访问令牌有效期，默认 `15m` |
 | `jwt.refresh_ttl` | `JWT_REFRESH_TTL` | 刷新令牌有效期，默认 `168h` |
 | `auth.auto_login` | `AUTH_AUTO_LOGIN` | 自动以 admin 登录，默认 `true` |
-| `auth.static_token` | `AUTH_STATIC_TOKEN` | 静态访问令牌：浏览器打开带 `?token=<值>` 的链接一次性授权后，该设备自动登录（长期设备凭证）。留空禁用 |
+| `auth.static_token` | `AUTH_STATIC_TOKEN` | 静态访问令牌：浏览器打开带 `?token=<值>` 的链接一次性授权后，该设备自动登录（长期设备凭证）。留空时启动自动生成随机令牌并写回配置文件 |
 | `debug.acp.enabled` | `DEBUG_ACP_ENABLED` | 启用 ACP 调试日志，默认 `true` |
 | `debug.acp.dir` | `DEBUG_ACP_DIR` | ACP 调试日志存储目录 |
 | `agents.workspace.session_dir` | `AGENTS_WORKSPACE_SESSION_DIR` | 会话工作区根目录，默认 `~/.openNexus/session` |

@@ -441,7 +441,8 @@ jwt:
 auth:
     # 开启后无需登录，自动使用内置 admin 用户；公网/隧道场景务必关闭
     auto_login: true
-    # 静态访问令牌：浏览器打开带 ?token=<该值> 的链接一次性授权后该设备自动登录。留空禁用
+    # 静态访问令牌：浏览器打开带 ?token=<该值> 的链接一次性授权后该设备自动登录。
+    # 留空时启动会自动生成随机令牌并写回此处
     static_token: ""
 
 password:
@@ -457,6 +458,73 @@ func randomSecret() (string, error) {
 		return "", fmt.Errorf("生成随机 JWT secret 失败: %w", err)
 	}
 	return hex.EncodeToString(b), nil
+}
+
+// EnsureStaticToken 在 auth.static_token 为空时生成随机令牌并写回配置文件，
+// 同时更新 cfg.Auth.StaticToken。已有令牌（含 AUTH_STATIC_TOKEN 环境变量注入的）
+// 不变，返回 false 表示无需生成。写回按 yaml.Node 原位修改，保留注释与其他配置。
+// 失败（文件不可写等）返回错误，调用方记日志即可，不影响启动。
+func (c *Config) EnsureStaticToken(path string) (bool, error) {
+	if strings.TrimSpace(c.Auth.StaticToken) != "" {
+		return false, nil
+	}
+	token, err := randomSecret()
+	if err != nil {
+		return false, err
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false, fmt.Errorf("读取配置文件失败: %w", err)
+	}
+	var root yaml.Node
+	if err := yaml.Unmarshal(data, &root); err != nil {
+		return false, fmt.Errorf("解析配置文件失败: %w", err)
+	}
+	if root.Kind == 0 { // 空文件
+		root = yaml.Node{Kind: yaml.DocumentNode, Content: []*yaml.Node{{Kind: yaml.MappingNode, Tag: "!!map"}}}
+	}
+	if root.Kind != yaml.DocumentNode || len(root.Content) == 0 || root.Content[0].Kind != yaml.MappingNode {
+		return false, fmt.Errorf("config.yaml 根节点结构异常")
+	}
+	mapping := root.Content[0]
+	authNode := mappingValue(mapping, "auth")
+	if authNode == nil || authNode.Kind != yaml.MappingNode {
+		authNode = &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+		mapping.Content = append(mapping.Content,
+			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "auth"}, authNode)
+	}
+	strNode := func(v string) *yaml.Node { return &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: v} }
+	for i := 0; i+1 < len(authNode.Content); i += 2 {
+		if authNode.Content[i].Value == "static_token" {
+			authNode.Content[i+1] = strNode(token)
+			return persistStaticToken(path, &root, c, token)
+		}
+	}
+	authNode.Content = append(authNode.Content, strNode("static_token"), strNode(token))
+	return persistStaticToken(path, &root, c, token)
+}
+
+// persistStaticToken 把根节点写回配置文件并更新内存中的 StaticToken。
+func persistStaticToken(path string, root *yaml.Node, c *Config, token string) (bool, error) {
+	out, err := yaml.Marshal(root)
+	if err != nil {
+		return false, fmt.Errorf("序列化配置失败: %w", err)
+	}
+	if err := os.WriteFile(path, out, 0o600); err != nil {
+		return false, fmt.Errorf("写回配置文件失败: %w", err)
+	}
+	c.Auth.StaticToken = token
+	return true, nil
+}
+
+// mappingValue 在映射节点中按 key 查找值节点，缺失返回 nil。
+func mappingValue(mapping *yaml.Node, key string) *yaml.Node {
+	for i := 0; i+1 < len(mapping.Content); i += 2 {
+		if mapping.Content[i].Value == key {
+			return mapping.Content[i+1]
+		}
+	}
+	return nil
 }
 
 func (c *Config) applyEnv() {
