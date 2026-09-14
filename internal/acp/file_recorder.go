@@ -19,6 +19,10 @@ type FileWriteNotify struct {
 	OldText   string // 旧内容；IsNew=true 时为空
 	NewText   string // 新内容
 	IsNew     bool   // 是否为新建文件
+	// NoOldSnapshot 标记"修改过但旧内容未捕获"（快照超内容预算）。
+	// 撤销/展示必须区分它和新文件：两者 OldText 均为空，
+	// 但按新文件处理会误删一个仍有内容的已修改文件。
+	NoOldSnapshot bool
 }
 
 // fileRecorder 管理 ACP WriteTextFile 回调与 Prompt 流之间的文件改动事件桥接。
@@ -89,6 +93,9 @@ func MapFileWrite(sessionID string, dbSessionID uint, seq int, notify FileWriteN
 	}
 	if !notify.IsNew {
 		diffItem["oldText"] = notify.OldText
+		if notify.NoOldSnapshot {
+			diffItem["noOldSnapshot"] = true
+		}
 	}
 
 	payload := map[string]any{
@@ -124,6 +131,9 @@ func MapFileWriteBatch(sessionID string, dbSessionID uint, seq int, notifies []F
 		}
 		if !n.IsNew {
 			item["oldText"] = n.OldText
+			if n.NoOldSnapshot {
+				item["noOldSnapshot"] = true
+			}
 		}
 		diffItems = append(diffItems, item)
 	}

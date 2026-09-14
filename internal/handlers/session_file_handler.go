@@ -276,6 +276,9 @@ type undoDiffItem struct {
 	Path    string `json:"path"`
 	OldText string `json:"oldText"` // 修改前内容；新文件时为空（字段缺失）
 	NewText string `json:"newText"`
+	// NoOldSnapshot 标记"修改过但旧内容未捕获"（快照超内容预算）。
+	// 与新文件同为 oldText 空，但撤销时不能按新文件删除。
+	NoOldSnapshot bool `json:"noOldSnapshot"`
 }
 
 // parseSnapshotDiffs 从消息 raw_json 中解析 content[] 的 diff 项。
@@ -302,6 +305,8 @@ type fileChangeEntry struct {
 	OldText string `json:"old_text"` // 修改前内容（新文件为空）
 	NewText string `json:"new_text"` // 修改后内容
 	IsNew   bool   `json:"is_new"`   // 是否为新建文件
+	// NoOldSnapshot 修改过但旧内容未捕获（快照超预算）：不可撤销，也不是新文件。
+	NoOldSnapshot bool `json:"no_old_snapshot,omitempty"`
 }
 
 // ListFileChanges GET /api/v1/sessions/:id/files/changes
@@ -337,10 +342,11 @@ func (h *SessionFileHandler) ListFileChanges(c *gin.Context) {
 	entries := make([]fileChangeEntry, 0, len(latest))
 	for _, item := range latest {
 		entries = append(entries, fileChangeEntry{
-			Path:    item.Path,
-			OldText: item.OldText,
-			NewText: item.NewText,
-			IsNew:   item.OldText == "",
+			Path:          item.Path,
+			OldText:       item.OldText,
+			NewText:       item.NewText,
+			IsNew:         item.OldText == "" && !item.NoOldSnapshot,
+			NoOldSnapshot: item.NoOldSnapshot,
 		})
 	}
 
@@ -364,7 +370,8 @@ func normalizeRelPath(path, cwd string) string {
 }
 
 // applyUndoDiffs 反向应用一组 diff 项，将文件恢复到修改前状态。
-// 有 oldText → 覆盖回去；无 oldText（新建文件）→ 删除。
+// 有 oldText → 覆盖回去；无 oldText 且标记 noOldSnapshot（超预算未捕获）→ 跳过；
+// 无 oldText 且无标记（新建文件）→ 删除。
 // 返回恢复的文件数、删除的文件数和错误列表。
 func applyUndoDiffs(cwd string, items []undoDiffItem) (restored, deleted int, errs []string) {
 	for _, item := range items {
@@ -374,6 +381,11 @@ func applyUndoDiffs(cwd string, items []undoDiffItem) (restored, deleted int, er
 			continue
 		}
 
+		if item.OldText == "" && item.NoOldSnapshot {
+			// 修改过但旧内容未捕获：不能按新文件删除，也无旧内容可恢复
+			errs = append(errs, item.Path+": 无快照内容，已跳过撤销")
+			continue
+		}
 		if item.OldText != "" {
 			// 修改的文件：恢复修改前内容
 			parent := filepath.Dir(absPath)
