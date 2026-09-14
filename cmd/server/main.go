@@ -213,6 +213,12 @@ func main() {
 	// 空闲 agent 连接自动回收：超过此时长未活动的连接杀进程释放内存，下次使用时按需重建。
 	// 默认 30min；负数关闭。避免常驻 agent 进程无限堆积占内存。
 	acpSvc.SetIdleTimeout(cfg.Agents.IdleTimeout)
+	// 建连/session-new 内部超时：兜底防挂起的握手把连接池钉死在 connecting
+	// 并拖垮串行健康检查循环。默认 3min。
+	acpSvc.SetConnectTimeout(cfg.Agents.ConnectTimeout)
+	// 权限请求响应超时：用户离开时不让 agent 无限阻塞在 request_permission。
+	// 默认 10min；负数=永不超时。
+	acp.SetPermissionRequestTimeout(cfg.Agents.PermissionTimeout)
 	// 失败任务自动重试一次：agent 运行中崩溃时 ResumeSession（断连则重连）并重发 prompt。
 	acpSvc.SetFailedTaskAutoRetryOnce(cfg.Agents.FailedTaskAutoRetryOnceEnabled())
 	// ACP terminal 能力：开启后 agent 的 shell 由本服务代执行并在网页终端面板展示。

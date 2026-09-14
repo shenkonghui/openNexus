@@ -29,7 +29,9 @@ func (s *Service) RunPromptOnceStream(ctx context.Context, agentType, modelValue
 		return "", err
 	}
 	cwd := s.probeCwd()
-	sessionID, configOptions, _, err := conn.NewSession(ctx, cwd, s.skillAdditionalDirs(cwd), nil, "")
+	sessCtx, sessCancel := context.WithTimeout(ctx, s.effectiveConnectTimeout())
+	sessionID, configOptions, _, err := conn.NewSession(sessCtx, cwd, s.skillAdditionalDirs(cwd), nil, "")
+	sessCancel()
 	if err != nil {
 		return "", fmt.Errorf("创建临时会话: %w", err)
 	}

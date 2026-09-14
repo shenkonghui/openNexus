@@ -198,6 +198,8 @@ make electron-run     # 启动已安装的应用
 | `agents.workspace.default_mode` | - | 工作区模式：`temporary` / `persistent` |
 | `agents.mcp.config_path` | `AGENTS_MCP_CONFIG_PATH` | 全局 MCP 配置路径，默认 `~/.agents/mcp.json` |
 | `agents.idle_timeout` | - | 空闲 agent 连接存活上限，超时自动回收进程释放内存，下次使用时按需重建。默认 `30m`；负数关闭 |
+| `agents.connect_timeout` | - | 建立 agent 连接（进程启动+ACP 握手+认证）与 session/new 的内部超时，防挂起的握手钉死连接并拖垮自动重连。默认 `3m` |
+| `agents.permission_timeout` | - | 权限请求等待用户响应的上限，超时自动取消。默认 `10m`；负数表示永不超时 |
 | `tunnel.enabled` | - | 服务启动时自动开启公网隧道，默认 `false` |
 | `tunnel.mode` | - | 隧道模式：`quick`（临时隧道，随机 `*.trycloudflare.com` 域名）/ `token`（具名隧道），默认 `quick` |
 | `tunnel.token` | - | 具名隧道 Token（`mode=token` 必填，由 Cloudflare Zero Trust 面板创建） |

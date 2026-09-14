@@ -198,6 +198,8 @@ The configuration file is `config.yaml`. Environment variable overrides:
 | `agents.workspace.default_mode` | - | Default workspace mode: `temporary` / `persistent` |
 | `agents.mcp.config_path` | `AGENTS_MCP_CONFIG_PATH` | Global MCP servers config path (default: `~/.agents/mcp.json`) |
 | `agents.idle_timeout` | - | Idle agent connection TTL — idle connections are reaped (process killed, memory freed) and rebuilt on next use. Default `30m`; negative disables |
+| `agents.connect_timeout` | - | Internal timeout for agent connect (process spawn + ACP handshake + auth) and session/new. Prevents a hung handshake from pinning a connection in "connecting" and stalling auto-reconnect. Default `3m` |
+| `agents.permission_timeout` | - | Max wait for a user response to a permission request before auto-cancelling. Default `10m`; negative means never time out |
 | `tunnel.enabled` | - | Auto-start the public tunnel on server start. Default `false` |
 | `tunnel.mode` | - | Tunnel mode: `quick` (random `*.trycloudflare.com` domain) / `token` (named tunnel). Default `quick` |
 | `tunnel.token` | - | Named tunnel token (required when `mode=token`; created in the Cloudflare Zero Trust dashboard) |

@@ -207,6 +207,12 @@ type AgentsConfig struct {
 	// IdleTimeout 空闲 agent 连接的存活上限：超过此时长未发 prompt 的连接将被自动回收
 	// （杀进程、释放内存），下次使用时自动重建。0=默认 30min；正数=该时长；负数=关闭回收。
 	IdleTimeout time.Duration `yaml:"idle_timeout"`
+	// ConnectTimeout 建立 agent 连接（进程启动+ACP 握手+认证）与 session/new 的内部超时。
+	// 兜底防挂起的握手把连接池键钉死在 connecting 并拖垮健康检查循环。0 或负值=默认 3min。
+	ConnectTimeout time.Duration `yaml:"connect_timeout"`
+	// PermissionTimeout 权限请求等待用户响应的上限，超时自动取消该请求。
+	// 防用户离开后 agent 一直阻塞在 request_permission。0=默认 10min；正数=该时长；负数=永不超时。
+	PermissionTimeout time.Duration `yaml:"permission_timeout"`
 	// FailedTaskAutoRetryOnce 运行中 agent 崩溃/断连时，是否自动 ResumeSession（重建连接）
 	// 并重发同一 prompt，仅一次。nil=默认 true（与历史硬编码行为一致）；显式 false 可关闭。
 	FailedTaskAutoRetryOnce *bool `yaml:"failed_task_auto_retry_once"`

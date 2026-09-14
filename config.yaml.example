@@ -98,6 +98,12 @@ agents:
     # 下次在该工作区发消息时按需重建。避免常驻 agent 进程无限堆积占用内存。
     # 默认 30m；正数=该时长；负数=关闭回收。
     idle_timeout: 30m
+    # 建立 agent 连接（进程启动+ACP 握手+认证）与 session/new 的内部超时。
+    # 兜底防挂起的握手把连接钉死在"连接中"并拖垮自动重连。默认 3m。
+    connect_timeout: 3m
+    # 权限请求等待用户响应的上限，超时自动取消该请求。
+    # 防用户离开后 agent 一直阻塞在权限确认。默认 10m；负数=永不超时。
+    permission_timeout: 10m
     # 运行中 agent 崩溃/断连时，是否自动重新连接并重发同一 prompt（仅一次）。
     # true=开启（默认）；false=直接标记 interrupted，由用户手动重发。
     failed_task_auto_retry_once: true

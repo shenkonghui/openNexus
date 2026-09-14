@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/coder/acp-go-sdk"
 
@@ -15,6 +17,31 @@ import (
 )
 
 var ErrPermissionNotFound = errors.New("权限请求不存在或已过期")
+
+// defaultPermissionRequestTimeout 是权限请求等待用户响应的默认上限。
+// agent 发出 request_permission 后阻塞等回答；用户已离开（关页面/合盖）时
+// 无超时会一直挂到 prompt 兜底超时（默认 30min），体感即"卡死"。
+// 超时按取消处理：agent 收到 Cancelled outcome，本轮继续走或终止由 agent 决定。
+const defaultPermissionRequestTimeout = 10 * time.Minute
+
+// permissionRequestTimeoutNs 当前生效的权限响应超时（纳秒，atomic 读写，热更新安全）。
+// 0=默认 10min；负数=永不超时（恢复旧行为）。由 SetPermissionRequestTimeout 注入。
+var permissionRequestTimeoutNs atomic.Int64
+
+// SetPermissionRequestTimeout 设置权限请求等待用户响应的上限。
+// d>0：该时长后自动取消；d=0：恢复默认 10min；d<0：永不超时（旧行为）。
+func SetPermissionRequestTimeout(d time.Duration) {
+	permissionRequestTimeoutNs.Store(int64(d))
+}
+
+// effectivePermissionRequestTimeout 返回生效的权限超时；返回值 <=0 表示永不超时。
+func effectivePermissionRequestTimeout() time.Duration {
+	d := time.Duration(permissionRequestTimeoutNs.Load())
+	if d == 0 {
+		return defaultPermissionRequestTimeout
+	}
+	return d
+}
 
 // PermissionNotify 推送给 Prompt 流的权限请求事件。
 type PermissionNotify struct {
@@ -154,9 +181,24 @@ func (b *permissionBroker) request(ctx context.Context, params acp.RequestPermis
 		return autoApprovePermission(params), nil
 	}
 
+	// 响应超时兜底：用户可能已离开，无限等待会让 agent 干等到 prompt 兜底超时。
+	var timeoutC <-chan time.Time
+	if d := effectivePermissionRequestTimeout(); d > 0 {
+		timer := time.NewTimer(d)
+		defer timer.Stop()
+		timeoutC = timer.C
+	}
+
 	select {
 	case resp := <-respCh:
 		return resp, nil
+	case <-timeoutC:
+		b.removePending(requestID)
+		slog.Warn("权限请求等待用户响应超时，自动取消",
+			"session", params.SessionId, "request_id", requestID, "tool", toolCallTitle(params))
+		return acp.RequestPermissionResponse{
+			Outcome: acp.RequestPermissionOutcome{Cancelled: &acp.RequestPermissionOutcomeCancelled{}},
+		}, nil
 	case <-ctx.Done():
 		b.removePending(requestID)
 		return acp.RequestPermissionResponse{

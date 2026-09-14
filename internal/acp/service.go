@@ -63,6 +63,17 @@ const defaultPromptMaxDuration = 30 * time.Minute
 // 见 effectiveIdleTimeout()：0/未配置→此默认；负数→关闭回收。
 const defaultIdleTimeout = 30 * time.Minute
 
+// defaultConnectTimeout 是建立 agent 连接（进程启动 + ACP 握手 + 认证）与
+// session/new 的默认最大等待时间。该超时作用于服务内部、不依赖调用方 ctx：
+// 健康检查用永不取消的 hcCtx 调 ensureConnection，若无内部超时，一个挂起的
+// 握手会把串行的健康检查循环永久卡死（所有连接的自动重连停摆）。
+// 默认 3min：覆盖 npx 首次下载依赖等慢冷启动；0/负值经 effectiveConnectTimeout 回落到此默认。
+const defaultConnectTimeout = 3 * time.Minute
+
+// historyInjectDrainTimeout 是 ResumeSession 等待历史注入 prompt 完成的上限。
+// 超时后放行用户 prompt（退化为并发 turn，与历史行为一致）。
+const historyInjectDrainTimeout = 90 * time.Second
+
 // Service 是 ACP 客户端高层服务，串联后端、连接、工作区与持久化。
 //
 // 连接池模型：每个 agent 类型 + 工作目录共享一条 ACP 连接（一个 agent 进程），
@@ -188,6 +199,10 @@ type Service struct {
 	// failedTaskAutoRetryOnce 运行中 agent 崩溃时是否自动重连并重发同一 prompt（仅一次）。
 	// 默认 true；由 SetFailedTaskAutoRetryOnce 注入。
 	failedTaskAutoRetryOnce bool
+
+	// connectTimeout 建连（进程启动+握手+认证）与 session/new 的内部超时上限。
+	// SetConnectTimeout 注入；0=默认 3min。见 defaultConnectTimeout。
+	connectTimeout time.Duration
 
 	// activePermRules 当前生效的全局权限规则（白/询问/黑名单，全局下发到所有连接的 broker）。
 	// 规则来自 config.yaml 的 permissions 段：启动时由 ApplyPermissions 下发，
@@ -591,6 +606,23 @@ func (s *Service) effectivePromptMaxDuration() time.Duration {
 	return defaultPromptMaxDuration
 }
 
+// SetConnectTimeout 注入建连/session-new 内部超时上限。d<=0 时恢复默认 3min。
+func (s *Service) SetConnectTimeout(d time.Duration) {
+	if d > 0 {
+		s.connectTimeout = d
+	} else {
+		s.connectTimeout = 0
+	}
+}
+
+// effectiveConnectTimeout 返回生效的建连超时（未设置时取默认）。
+func (s *Service) effectiveConnectTimeout() time.Duration {
+	if s.connectTimeout > 0 {
+		return s.connectTimeout
+	}
+	return defaultConnectTimeout
+}
+
 // SetIdleTimeout 注入空闲连接回收阈值。
 // 正数=按此时长回收；0=恢复默认 30min；负数=关闭回收。
 func (s *Service) SetIdleTimeout(d time.Duration) {
@@ -973,8 +1005,15 @@ func (s *Service) ensureConnection(ctx context.Context, agentType, cwd string) (
 	}
 	s.mu.Unlock()
 
-	// 在锁外执行耗时的进程启动与握手
-	conn, err := s.buildConnection(ctx, agentType, cwd)
+	// 在锁外执行耗时的进程启动与握手。建连挂内部超时兜底：调用方 ctx 可能永不
+	// 取消（健康检查的 hcCtx），无界阻塞会把 poolKey 永久钉在 connecting 并卡死
+	// 串行的健康检查循环。
+	buildCtx, buildCancel := context.WithTimeout(ctx, s.effectiveConnectTimeout())
+	conn, err := s.buildConnection(buildCtx, agentType, cwd)
+	buildCancel()
+	if errors.Is(err, context.DeadlineExceeded) {
+		err = fmt.Errorf("建立 agent 连接超时（%s）: %w", s.effectiveConnectTimeout(), err)
+	}
 	s.mu.Lock()
 	close(doneCh)
 	delete(s.connectDone, key)
@@ -1244,7 +1283,10 @@ func (s *Service) releaseConnection(agentType, cwd string) {
 	conn, ok := s.pool[key]
 	if ok {
 		delete(s.pool, key)
-		s.states[key] = connStateDisconnected
+		// 主动释放的连接不应被健康检查当作意外断开而重新拉起（探测 cwd 无会话使用），
+		// 否则每个探测池键都会复活出一个闲置 agent 进程直到空闲回收。
+		delete(s.states, key)
+		delete(s.reconnectSchedule, key)
 	}
 	s.mu.Unlock()
 	if !ok {
@@ -1564,26 +1606,28 @@ func (s *Service) checkConnectionKey(poolKey string, delays map[string]time.Dura
 		return
 	}
 
-	// disconnected → 尝试重连（带退避）
+	// disconnected → 到退避时间才重连。不把 sleep 放进健康检查循环：
+	// 多个死连接串行等待会把整个循环拖慢（每分钟最多过一个 key）；
+	// 且尝试本身已由 ensureConnection 内部 connectTimeout 兜底，不会永久阻塞。
 	delay, ok := delays[poolKey]
 	if !ok || delay == 0 {
 		delay = reconnectBaseDelay
 	}
 
-	// 登记重连计划：前端经 ConnectionStatusForSession 查询展示倒计时。
 	s.mu.Lock()
-	attempt := s.reconnectSchedule[poolKey].Attempt + 1
+	info := s.reconnectSchedule[poolKey]
+	if time.Now().Before(info.NextAttemptAt) {
+		s.mu.Unlock()
+		return // 未到计划时间，下个 tick 再看
+	}
+	attempt := info.Attempt + 1
+	// 先登记本次尝试（倒计时展示用）；尝试期间 state=connecting，后续 tick 自然跳过。
 	s.reconnectSchedule[poolKey] = reconnectInfo{NextAttemptAt: time.Now().Add(delay), Attempt: attempt}
 	s.mu.Unlock()
 
 	slog.Info("尝试重连 agent",
 		"agent", agentType, "cwd", cwd,
 		"poolKey", poolKey, "prevState", state, "delay", delay)
-	select {
-	case <-s.hcCtx.Done():
-		return
-	case <-time.After(delay):
-	}
 
 	if _, err := s.ensureConnection(s.hcCtx, agentType, cwd); err != nil {
 		// 指数退避，上限 reconnectMaxDelay
@@ -1592,10 +1636,8 @@ func (s *Service) checkConnectionKey(poolKey string, delays map[string]time.Dura
 			next = reconnectMaxDelay
 		}
 		delays[poolKey] = next
-		// 下一次尝试在下个健康检查周期再等待 next 后发起，近似刷新计划供倒计时展示；
-		// 实际尝试开始时会用精确时间覆写。
 		s.mu.Lock()
-		s.reconnectSchedule[poolKey] = reconnectInfo{NextAttemptAt: time.Now().Add(healthCheckInterval + next), Attempt: attempt}
+		s.reconnectSchedule[poolKey] = reconnectInfo{NextAttemptAt: time.Now().Add(next), Attempt: attempt}
 		s.mu.Unlock()
 		slog.Error("重连 agent 失败",
 			"agent", agentType,
@@ -1855,7 +1897,9 @@ func (s *Service) PromptWithExecution(ctx context.Context, sessionID, prompt str
 			return nil, fmt.Errorf("激活会话-建立连接: %w", actErr)
 		}
 		s.debugBindPending(session.AgentType, session.ID)
-		newAgentSID, configOptions, modes, actErr := conn.NewSession(ctx, cwd, s.sessionAdditionalDirs(session, cwd), s.sessionMCPServers(session.UserID, conn.McpCapabilities()), s.rulesSystemPromptForMeta(cwd))
+		sessCtx, sessCancel := context.WithTimeout(ctx, s.effectiveConnectTimeout())
+		newAgentSID, configOptions, modes, actErr := conn.NewSession(sessCtx, cwd, s.sessionAdditionalDirs(session, cwd), s.sessionMCPServers(session.UserID, conn.McpCapabilities()), s.rulesSystemPromptForMeta(cwd))
+		sessCancel()
 		s.debugClearPending(session.AgentType)
 		if actErr != nil {
 			return nil, fmt.Errorf("激活会话-创建 ACP 会话: %w", actErr)
@@ -2150,6 +2194,23 @@ func (s *Service) PromptWithExecution(ctx context.Context, sessionID, prompt str
 
 			for {
 				select {
+				case <-promptCtx.Done():
+					// prompt 生命周期超时：不再等 SDK 在可能卡死的连接上守约返回
+					// （updates 由 conn.Prompt goroutine 的 defer 关闭，SDK 调用若卡死
+					// 则 channel 永不关闭 → 本 goroutine 泄漏 → 会话永远 ErrSessionBusy）。
+					// 主动取消 agent 侧本轮、释放挂起权限、注销订阅后退出；
+					// 收尾 defer 依据 promptCtx.Err()==DeadlineExceeded 标记 interrupted。
+					conn.Client().CancelPermissions(sid)
+					conn.Client().UnsubscribeAll(sid)
+					cancelCtx, cancelFn := context.WithTimeout(context.Background(), 5*time.Second)
+					_ = conn.Cancel(cancelCtx, acpSID)
+					cancelFn()
+					return false
+				case <-conn.Done():
+					// agent 进程运行中退出：无论 updates 是否已排空都视为崩溃，
+					// 由外层决定是否自动重连重发。
+					conn.Client().CancelPermissions(sid)
+					return true
 				case u, ok := <-updates:
 					if !ok {
 						// 流关闭：判断是正常结束还是进程崩溃（攒批由 pw.close() 兜底 flush）
@@ -3323,7 +3384,9 @@ func (s *Service) ResumeSession(ctx context.Context, sessionID string) (*models.
 		conn.Client().CancelPermissions(acp.SessionId(oldAgentSID))
 	}
 	s.debugBindPending(session.AgentType, session.ID)
-	newAgentSID, configOptions, modes, err := conn.NewSession(ctx, cwd, s.sessionAdditionalDirs(session, cwd), s.sessionMCPServers(session.UserID, conn.McpCapabilities()), s.rulesSystemPromptForMeta(cwd))
+	sessCtx, sessCancel := context.WithTimeout(ctx, s.effectiveConnectTimeout())
+	newAgentSID, configOptions, modes, err := conn.NewSession(sessCtx, cwd, s.sessionAdditionalDirs(session, cwd), s.sessionMCPServers(session.UserID, conn.McpCapabilities()), s.rulesSystemPromptForMeta(cwd))
+	sessCancel()
 	s.debugClearPending(session.AgentType)
 	if err != nil {
 		return nil, fmt.Errorf("恢复会话-创建 ACP 会话: %w", err)
@@ -3347,17 +3410,41 @@ func (s *Service) ResumeSession(ctx context.Context, sessionID string) (*models.
 	history, _ := s.messages.FindBySessionIDLastN(session.SessionID, 100)
 	contextText := formatHistory(history)
 	if contextText != "" {
-		// 异步注入历史上下文，不等结果。
-		// 必须 drain 返回的 update channel：Prompt 内部注册了订阅者，
-		// 不消费会导致 buffer 满后持续丢弃消息（刷 WARN 日志）。
+		// 等待注入轮完成（有界）再放行：注入未完就返回会让用户 prompt 与注入
+		// 在同一 ACP 会话上并发两个 turn。注入期间注册权限 waiter 自动取消——
+		// 无 waiter 时权限请求会被静默自动批准，恢复上下文不该放开这个口子。
+		injectSID := acp.SessionId(newAgentSID)
+		permCh := conn.Client().RegisterPermissionWaiter(injectSID)
+		injectDone := make(chan struct{})
 		go func() {
+			defer close(injectDone)
+			defer conn.Client().UnregisterPermissionWaiter(injectSID)
 			updates, promptErr := conn.Prompt(ctx, newAgentSID, contextText)
 			if promptErr != nil {
 				return
 			}
-			for range updates {
+			for {
+				select {
+				case _, ok := <-updates:
+					if !ok {
+						return
+					}
+				case pn, ok := <-permCh:
+					if !ok {
+						permCh = nil
+						continue
+					}
+					_ = conn.Client().RespondPermission(pn.RequestID, "", true)
+				}
 			}
 		}()
+		select {
+		case <-injectDone:
+		case <-time.After(historyInjectDrainTimeout):
+			slog.Warn("历史注入未在限定时间内完成，放行用户 prompt",
+				"session", sessionID, "timeout", historyInjectDrainTimeout)
+		case <-ctx.Done():
+		}
 	}
 
 	// 更新 agent_session_id 和状态（closed_at 置空）；稳定 session_id 不变
@@ -3431,7 +3518,9 @@ func (s *Service) ClearContext(ctx context.Context, sessionID string) (*models.S
 
 	oldAgentSID := session.AgentSessionID
 	s.debugBindPending(session.AgentType, session.ID)
-	newAgentSID, configOptions, modes, err := conn.NewSession(ctx, cwd, s.sessionAdditionalDirs(session, cwd), s.sessionMCPServers(session.UserID, conn.McpCapabilities()), s.rulesSystemPromptForMeta(cwd))
+	sessCtx, sessCancel := context.WithTimeout(ctx, s.effectiveConnectTimeout())
+	newAgentSID, configOptions, modes, err := conn.NewSession(sessCtx, cwd, s.sessionAdditionalDirs(session, cwd), s.sessionMCPServers(session.UserID, conn.McpCapabilities()), s.rulesSystemPromptForMeta(cwd))
+	sessCancel()
 	s.debugClearPending(session.AgentType)
 	if err != nil {
 		return nil, fmt.Errorf("清理上下文-创建 ACP 会话: %w", err)
