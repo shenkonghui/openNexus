@@ -414,6 +414,21 @@ export interface SandboxSettings {
   mode: 'auto' | 'enforce';
 }
 
+// Cloudflare 公网隧道状态（GET /api/v1/tunnel，cloudflared 子进程）。
+// state: stopped=未运行；starting=进程拉起等待就绪；running=已建立；error=最近启动/运行失败。
+export interface TunnelStatus {
+  state: 'stopped' | 'starting' | 'running' | 'error';
+  mode: 'quick' | 'token';
+  url: string;              // 公网访问地址；token 模式取配置的 hostname（可能为空）
+  error?: string;           // 最近一次错误（含 cloudflared 尾部日志）
+  installed: boolean;       // cloudflared 是否可用
+  bin_path?: string;
+  enabled: boolean;         // 服务启动时自动开启（config.yaml tunnel.enabled）
+  hostname?: string;        // token 模式对外域名
+  has_token: boolean;       // 是否已配置 tunnel token（不回传明文）
+  cloudflared_path?: string;
+}
+
 // ===== 日志查看器 =====
 
 // 日志等级，与后端 models.LogEntry 的 level 字段一致

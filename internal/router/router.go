@@ -16,7 +16,7 @@ import (
 	"opennexus/internal/services"
 )
 
-func Setup(authSvc *services.AuthService, jwtSvc *services.JWTService, agentRouter *agent.Router, agentCfgH *handlers.AgentConfigHandler, registryH *handlers.RegistryHandler, schedTaskH *handlers.ScheduledTaskHandler, noteH *handlers.NoteHandler, taskSettingsH *handlers.TaskSettingsHandler, goalSettingsH *handlers.GoalSettingsHandler, agentPrefsH *handlers.AgentPrefsHandler, configH *handlers.ConfigHandler, mcpH *handlers.MCPHandler, logH *handlers.LogHandler, debugH *handlers.DebugHandler, subAgentH *handlers.SubAgentHandler, tmH *handlers.TaskManagerHandler, permSettingsH *handlers.PermissionSettingsHandler, toolCallH *handlers.ToolCallHandler, convH *handlers.ConversationHandler, tmSvc *services.TaskManagerService, securityTestH *handlers.SecurityTestHandler, skillsCfg config.SkillsConfig, commandsCfg config.CommandsConfig, rulesCfg config.RulesConfig, subAgentsCfg config.SubAgentsConfig, selectorCfg config.SelectorConfig, mode, webDist string, autoLogin bool) *gin.Engine {
+func Setup(authSvc *services.AuthService, jwtSvc *services.JWTService, agentRouter *agent.Router, agentCfgH *handlers.AgentConfigHandler, registryH *handlers.RegistryHandler, schedTaskH *handlers.ScheduledTaskHandler, noteH *handlers.NoteHandler, taskSettingsH *handlers.TaskSettingsHandler, goalSettingsH *handlers.GoalSettingsHandler, agentPrefsH *handlers.AgentPrefsHandler, configH *handlers.ConfigHandler, mcpH *handlers.MCPHandler, logH *handlers.LogHandler, debugH *handlers.DebugHandler, subAgentH *handlers.SubAgentHandler, tmH *handlers.TaskManagerHandler, permSettingsH *handlers.PermissionSettingsHandler, toolCallH *handlers.ToolCallHandler, convH *handlers.ConversationHandler, tmSvc *services.TaskManagerService, securityTestH *handlers.SecurityTestHandler, tunnelH *handlers.TunnelHandler, skillsCfg config.SkillsConfig, commandsCfg config.CommandsConfig, rulesCfg config.RulesConfig, subAgentsCfg config.SubAgentsConfig, selectorCfg config.SelectorConfig, mode, webDist string, autoLogin bool) *gin.Engine {
 	gin.SetMode(mode)
 	r := gin.New()
 	r.Use(gin.Recovery())
@@ -299,6 +299,17 @@ func Setup(authSvc *services.AuthService, jwtSvc *services.JWTService, agentRout
 			{
 				permissions.GET("/settings", permSettingsH.GetSettings)
 				permissions.PUT("/settings", permSettingsH.UpdateSettings)
+			}
+
+			// Cloudflare 公网隧道（cloudflared 子进程）：状态查询、启停与配置
+			if tunnelH != nil {
+				tunnel := protected.Group("/tunnel")
+				{
+					tunnel.GET("", tunnelH.Get)
+					tunnel.PUT("", tunnelH.Update)
+					tunnel.POST("/start", tunnelH.Start)
+					tunnel.POST("/stop", tunnelH.Stop)
+				}
 			}
 
 			// 用户 agent 最近使用偏好

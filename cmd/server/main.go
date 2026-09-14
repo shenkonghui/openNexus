@@ -386,6 +386,11 @@ func main() {
 
 	configH := handlers.NewConfigHandler(cfgPath, acpSvc)
 
+	// Cloudflare 公网隧道：cloudflared 子进程把本地服务暴露到公网。
+	// 配置持久化在 config.yaml 的 tunnel 段，启停与状态由 TunnelService 管理。
+	tunnelSvc := services.NewTunnelService(cfg.Tunnel, cfg.Server.Port)
+	tunnelH := handlers.NewTunnelHandler(cfgPath, tunnelSvc)
+
 	// MCP 聚合网关：把全局 mcp.json 里的 http/sse 上游汇聚成单一 endpoint。
 	// 很多 ACP agent 不实现 session/new 的 mcpServers 参数，只能在其原生配置里手工配置；
 	// 有了网关，这种手工配置只需做一次，之后增删 MCP server 不必再改 agent 配置。
@@ -420,7 +425,7 @@ func main() {
 	subAgentH := handlers.NewSubAgentHandler(noteSettingsRepo, cfg.Agents.MCP.ConfigPath, publicBase)
 	subAgentH.SyncAllSubagentMCP()
 
-	engine := router.Setup(authSvc, jwtSvc, agentRouter, agentCfgH, registryH, schedTaskH, noteH, taskSettingsH, goalSettingsH, agentPrefsH, configH, mcpH, logH, debugH, subAgentH, tmH, permSettingsH, toolCallH, convH, tmSvc, securityTestH, cfg.Agents.Skills, cfg.Agents.Commands, cfg.Agents.Rules, cfg.Agents.SubAgents, cfg.Agents.Selector, cfg.Server.Mode, cfg.Server.WebDist, cfg.Auth.AutoLogin)
+	engine := router.Setup(authSvc, jwtSvc, agentRouter, agentCfgH, registryH, schedTaskH, noteH, taskSettingsH, goalSettingsH, agentPrefsH, configH, mcpH, logH, debugH, subAgentH, tmH, permSettingsH, toolCallH, convH, tmSvc, securityTestH, tunnelH, cfg.Agents.Skills, cfg.Agents.Commands, cfg.Agents.Rules, cfg.Agents.SubAgents, cfg.Agents.Selector, cfg.Server.Mode, cfg.Server.WebDist, cfg.Auth.AutoLogin)
 	engine.Any("/mcp/notes", gin.WrapH(notesmcp.Handler(noteRepo, noteSettingsRepo)))
 	engine.Any("/mcp/notes/*path", gin.WrapH(notesmcp.Handler(noteRepo, noteSettingsRepo)))
 	// taskmanager MCP server：主 agent 通过 MCP 工具管理工作区任务（tasks.json）。
@@ -443,6 +448,15 @@ func main() {
 			log.Fatalf("服务器启动失败: %v", err)
 		}
 	}()
+
+	// tunnel.enabled=true 时服务启动后自动开启公网隧道（异步，失败仅记日志）。
+	if cfg.Tunnel.Enabled {
+		go func() {
+			if err := tunnelSvc.Start(); err != nil {
+				log.Printf("公网隧道自动启动失败: %v", err)
+			}
+		}()
+	}
 
 	// 桌面模式：自动打开浏览器
 	if *openBrowser {
@@ -468,6 +482,7 @@ func main() {
 
 	acpSvc.StopHealthCheck()
 	noteClassifyWorker.Stop()
+	tunnelSvc.Stop()
 	stopWithTimeout("定时任务调度器", 3*time.Second, schedulerSvc.Stop)
 	// 兜底清理：扫杀可能残留的 acp 孤儿进程（正常退出已由 StopHealthCheck 关闭内存连接，
 	// 此处覆盖崩溃恢复遗留或未被 pool 跟踪的进程）。

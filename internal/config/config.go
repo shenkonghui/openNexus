@@ -24,6 +24,7 @@ type Config struct {
 	Debug       DebugConfig       `yaml:"debug"`
 	Permissions PermissionsConfig `yaml:"permissions"`
 	Sandbox     SandboxConfig     `yaml:"sandbox"`
+	Tunnel      TunnelConfig      `yaml:"tunnel"`
 }
 
 // 全局权限模式常量。
@@ -75,6 +76,47 @@ func (s *SandboxConfig) normalize() {
 		mode = SandboxModeAuto
 	}
 	s.Mode = mode
+}
+
+// 公网隧道模式常量。
+const (
+	TunnelModeQuick = "quick" // 临时隧道：免账号，生成 *.trycloudflare.com 随机域名
+	TunnelModeToken = "token" // 具名隧道：使用 Cloudflare Zero Trust 面板的 tunnel token
+)
+
+// TunnelConfig 配置 Cloudflare 公网隧道（cloudflared 子进程），
+// 把本地服务暴露为公网 https 地址，供外网访问 web 界面与 API。
+// 隧道由本服务按需拉起/停止 cloudflared 子进程实现，退出时子进程被回收。
+type TunnelConfig struct {
+	// Enabled 服务启动时自动开启隧道。
+	Enabled bool `yaml:"enabled"`
+	// Mode 隧道模式：quick（默认）| token。
+	Mode string `yaml:"mode"`
+	// Token 具名隧道 token（mode=token 必填）。
+	Token string `yaml:"token"`
+	// Hostname 具名隧道对外域名（可选）：mode=token 时 cloudflared 日志不含域名，
+	// 配置后用于界面展示与复制，如 https://nexus.example.com。
+	Hostname string `yaml:"hostname"`
+	// CloudflaredPath 自定义 cloudflared 可执行文件路径，空则按 PATH 与常见安装位置查找。
+	CloudflaredPath string `yaml:"cloudflared_path"`
+}
+
+// normalize 校正隧道模式（空或非法值兜底为 quick）并展开自定义路径。
+func (t *TunnelConfig) normalize() error {
+	mode := strings.TrimSpace(t.Mode)
+	if mode != TunnelModeQuick && mode != TunnelModeToken {
+		mode = TunnelModeQuick
+	}
+	t.Mode = mode
+	t.Hostname = strings.TrimRight(strings.TrimSpace(t.Hostname), "/")
+	if t.CloudflaredPath != "" {
+		abs, err := expandPath(t.CloudflaredPath)
+		if err != nil {
+			return fmt.Errorf("tunnel.cloudflared_path 无效: %w", err)
+		}
+		t.CloudflaredPath = abs
+	}
+	return nil
 }
 
 // DebugConfig 控制调试能力（如 ACP 协议报文捕获）。
@@ -461,6 +503,9 @@ func (c *Config) Validate() error {
 	}
 	c.Permissions.normalize()
 	c.Sandbox.normalize()
+	if err := c.Tunnel.normalize(); err != nil {
+		return err
+	}
 	return nil
 }
 

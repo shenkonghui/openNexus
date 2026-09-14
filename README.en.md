@@ -22,6 +22,7 @@ A multi-Agent orchestration and conversation platform based on the [Agent Client
 - **Rule Scanning**: Automatically discovers and injects rules (`.mdc` / `.md`) from user and project directories into agent sessions; dual-channel injection via `_meta.systemPrompt` (Claude Code et al.) and first-turn prompt prefix (universal fallback, works with all agents).
 - **Health Check & Auto-Reconnect**: Background agent connection health monitoring with automatic reconnection on failure. Real-time status badges in the sidebar.
 - **Permission System**: User approval dialog for agent tool calls — inspect parameters before allowing execution.
+- **Public Tunnel (Cloudflare)**: Expose the local service to the internet with one click — supports account-free quick tunnels (random `*.trycloudflare.com` domain) and named tunnels (Tunnel Token, fixed domain). Toggle from the bottom-left sidebar switch; the public URL pops up for copying once ready.
 - **Sandbox Effect Test**: With the global sandbox enabled and the Agent process actually running inside the OS sandbox, sends preset command prompts to the Agent and auto-approves all tool calls so commands actually execute. Verifies via tool call exit codes whether the sandbox effectively isolates dangerous operations. Refuses to run when the sandbox is disabled or degraded to passthrough. Ships with 16 built-in default test cases across 6 filesystem boundary categories (write outside/inside workdir, write system dirs, write sensitive paths, write home dir, delete external files); commands are customizable via prompt, with expected blocked/allowed behavior per case, and can be run in parallel across all agents.
 - **Debug Panel**: Inspect raw ACP JSON-RPC messages and high-level events for each session.
 - **Log Panel**: Real-time streaming of backend logs via SSE.
@@ -196,6 +197,11 @@ The configuration file is `config.yaml`. Environment variable overrides:
 | `agents.workspace.default_mode` | - | Default workspace mode: `temporary` / `persistent` |
 | `agents.mcp.config_path` | `AGENTS_MCP_CONFIG_PATH` | Global MCP servers config path (default: `~/.agents/mcp.json`) |
 | `agents.idle_timeout` | - | Idle agent connection TTL — idle connections are reaped (process killed, memory freed) and rebuilt on next use. Default `30m`; negative disables |
+| `tunnel.enabled` | - | Auto-start the public tunnel on server start. Default `false` |
+| `tunnel.mode` | - | Tunnel mode: `quick` (random `*.trycloudflare.com` domain) / `token` (named tunnel). Default `quick` |
+| `tunnel.token` | - | Named tunnel token (required when `mode=token`; created in the Cloudflare Zero Trust dashboard) |
+| `tunnel.hostname` | - | Public hostname of the named tunnel (optional, for display/copy in the UI) |
+| `tunnel.cloudflared_path` | - | Custom path to the cloudflared binary; empty searches PATH and common install locations |
 
 Config file lookup: `CONFIG_PATH` → `~/.openNexus/config.yaml` → `./config.yaml`. Database and session data default to `~/.openNexus/`.
 
@@ -359,6 +365,22 @@ When an agent requests a potentially sensitive tool call (e.g., file write, comm
 - **Deny**: Reject the tool call
 
 This is configured per-agent via the `PermissionDialog` component. The permission backend (`internal/acp/permission.go`) handles the approval flow.
+
+## Public Tunnel (Cloudflare)
+
+Runs a `cloudflared` child process to expose the local service publicly, so the web UI and API are reachable over an https URL. Configuration persists in the `tunnel` section of `config.yaml`; runtime state is managed by the backend `TunnelService`.
+
+- **Quick tunnel (quick, default)**: No Cloudflare account required; generates a random `*.trycloudflare.com` domain on each start
+- **Named tunnel (token)**: Uses a Tunnel Token from the Cloudflare Zero Trust dashboard; fixed domain for long-term use. Set `tunnel.hostname` so the UI can display and copy the public URL
+
+Usage:
+
+- **Bottom-left 🌐 switch in the sidebar**: click to start; once ready the public URL pops up (copy / open / stop). The icon stays highlighted while the tunnel is running
+- **Settings → System**: configure mode, token, hostname, cloudflared path, and auto-start (written back to the `tunnel` section of `config.yaml`)
+
+Requires `cloudflared` installed locally (e.g. `brew install cloudflared`), or set the binary path in Settings.
+
+> **Security note**: once the tunnel is up, anyone with the URL can reach the login page. Use a strong password and keep `auth.auto_login` set to `false` (you can configure `auth.static_token` to hand out a token link instead of passwords).
 
 ## Sandbox Effect Test
 

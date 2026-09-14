@@ -23,6 +23,7 @@ import ConfigEditor from './ConfigEditor'
 import AgentCapabilityTest from './AgentCapabilityTest'
 import AgentSecurityTest from './AgentSecurityTest'
 import RawConfigCard from './RawConfigCard'
+import TunnelCard from './TunnelCard'
 import ErrorBanner from './ErrorBanner'
 import LoadingSpinner from './LoadingSpinner'
 import i18n from '../i18n'
@@ -1507,6 +1508,8 @@ export default function SettingsDialog({ initialTab = 'language', onClose }: Pro
                       {window.opennexus?.isElectron ? t('system.desktopHint') : t('system.browserHint')}
                     </p>
                   </div>
+                  {/* Cloudflare 公网隧道：启停 + config.yaml tunnel 段配置 */}
+                  <TunnelCard />
                   {/* config.yaml 原生编辑（保存前后端强制校验格式） */}
                   <RawConfigCard />
                 </>

@@ -22,6 +22,7 @@
 - **规则扫描**：自动发现用户和项目目录下的规则文件（`.mdc` / `.md`）并注入 Agent 会话；支持 `_meta.systemPrompt`（Claude Code 等）与首轮 prompt 前置（通用兜底，所有 Agent 生效）双通道注入
 - **连接健康检查与自动重连**：后台定期检测各 Agent 连接状态，断线自动重连；侧边栏实时展示连接状态
 - **权限系统**：Agent 发起敏感操作时弹出用户审批对话框，审查参数后决定是否放行
+- **公网隧道（Cloudflare）**：一键把本地服务暴露到公网，支持免账号临时隧道（随机 `*.trycloudflare.com` 域名）与具名隧道（Tunnel Token，固定域名）；侧边栏左下角开关一键启停，就绪后自动弹出公网地址供复制
 - **沙箱效果测试**：在全局沙箱开启且 Agent 进程真正运行在 OS 沙箱内的前提下，向 Agent 发送预设的命令 prompt 让其真正执行，通过工具调用的退出码验证沙箱是否有效隔离了危险操作。沙箱未开启或降级为直通执行时拒绝执行。内置 16 条默认用例覆盖 6 个文件系统边界类别（写工作目录外/内、写系统目录、写敏感路径、写主目录、删除外部文件），支持通过 prompt 自定义命令、设置期望被阻止/放行，可一键并行测试全部 Agent
 - **调试面板**：查看每次会话的原始 ACP JSON-RPC 报文与高层事件
 - **日志面板**：后端日志实时 SSE 推送到前端
@@ -196,6 +197,11 @@ make electron-run     # 启动已安装的应用
 | `agents.workspace.default_mode` | - | 工作区模式：`temporary` / `persistent` |
 | `agents.mcp.config_path` | `AGENTS_MCP_CONFIG_PATH` | 全局 MCP 配置路径，默认 `~/.agents/mcp.json` |
 | `agents.idle_timeout` | - | 空闲 agent 连接存活上限，超时自动回收进程释放内存，下次使用时按需重建。默认 `30m`；负数关闭 |
+| `tunnel.enabled` | - | 服务启动时自动开启公网隧道，默认 `false` |
+| `tunnel.mode` | - | 隧道模式：`quick`（临时隧道，随机 `*.trycloudflare.com` 域名）/ `token`（具名隧道），默认 `quick` |
+| `tunnel.token` | - | 具名隧道 Token（`mode=token` 必填，由 Cloudflare Zero Trust 面板创建） |
+| `tunnel.hostname` | - | 具名隧道对外域名（可选，用于界面展示与复制） |
+| `tunnel.cloudflared_path` | - | 自定义 cloudflared 可执行文件路径，空则按 PATH 与常见安装位置查找 |
 
 配置文件查找顺序：`CONFIG_PATH` → `~/.openNexus/config.yaml` → `./config.yaml`。数据库与会话数据默认均在 `~/.openNexus/`。
 
@@ -359,6 +365,22 @@ MCP 服务自动配置同步——已生成令牌的笔记自动写入全局 `mc
 - **拒绝**：拒绝本次调用
 
 权限按 Agent 分别配置，通过 `PermissionDialog` 组件交互，由 `internal/acp/permission.go` 处理后端审批流程。
+
+## 公网隧道（Cloudflare）
+
+通过 `cloudflared` 子进程把本地服务暴露到公网，外网可通过生成的 https 地址访问 web 界面与 API。配置持久化在 `config.yaml` 的 `tunnel` 段，运行状态由后端 `TunnelService` 管理。
+
+- **临时隧道（quick，默认）**：免 Cloudflare 账号，启动后生成随机 `*.trycloudflare.com` 域名（每次启动不同）
+- **具名隧道（token）**：使用 Cloudflare Zero Trust 面板创建的 Tunnel Token，域名固定适合长期使用；可在 `tunnel.hostname` 配置对外域名便于界面展示与复制
+
+使用方式：
+
+- **侧边栏左下角 🌐 开关**：点击启动，就绪后自动弹出公网地址（复制 / 打开 / 关闭）；图标高亮表示隧道运行中
+- **设置 → 系统**：配置模式、Token、对外域名、cloudflared 路径与开机自启（写回 `config.yaml` 的 `tunnel` 段）
+
+需要本机已安装 `cloudflared`（如 `brew install cloudflared`），或在设置中指定可执行文件路径。
+
+> **安全提示**：隧道开启后任何拿到地址的人都可访问登录页。请确保使用强密码并将 `auth.auto_login` 设为 `false`（可配置 `auth.static_token` 用访问令牌链接代替输密码）。
 
 ## 沙箱效果测试
 

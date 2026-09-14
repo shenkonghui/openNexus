@@ -230,3 +230,14 @@ permissions:
 sandbox:
     enabled: false
     mode: auto
+# Cloudflare 公网隧道（cloudflared 子进程）：把本地服务暴露到公网，
+# 也可在「设置 → 系统」或侧边栏左下角开关中启停（配置自动写回本段）。
+# mode: quick=临时隧道（免账号，随机 *.trycloudflare.com 域名）；
+#       token=具名隧道（Cloudflare Zero Trust 面板创建的 tunnel token，域名固定）。
+# 注意：隧道开启后任何拿到地址的人都可访问登录页，请确保强密码且 auth.auto_login 为 false。
+tunnel:
+    enabled: false        # 服务启动时自动开启隧道
+    mode: quick
+    token: ""             # mode=token 必填
+    hostname: ""          # 可选：具名隧道对外域名，用于界面展示与复制
+    cloudflared_path: ""  # 可选：自定义 cloudflared 路径，空则按 PATH/常见位置查找

@@ -3,12 +3,13 @@ import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { formatTimeAgo } from '../utils/time'
 import { sessionUrl, newTaskUrl, taskManagerUrl } from '../utils/routes'
-import type { Session, ScheduledTask } from '../types'
+import type { Session, ScheduledTask, TunnelStatus } from '../types'
 import { listScheduledTasks } from '../api/scheduledTasks'
 import { listSessions, listRunningSessions } from '../api/sessions'
 import { getTaskManager, getTaskStatus, startTaskManager, listArchivedTasks, type TaskManagerTask } from '../api/taskmanager'
+import { getTunnel, startTunnel, stopTunnel } from '../api/tunnel'
 import { useTaskEventsChanged } from '../context/TaskEventsContext'
-import { PanelLeftClose, Star, Pencil, X, Check, SquarePlus, FileText, Calendar, Settings, Zap, Loader2, CheckCircle2, XCircle, Clock3, CircleDashed, Network, Layers, History, Trash2, MessagesSquare } from 'lucide-react'
+import { PanelLeftClose, Star, Pencil, X, Check, SquarePlus, FileText, Calendar, Settings, Zap, Loader2, CheckCircle2, XCircle, Clock3, CircleDashed, Network, Layers, History, Trash2, MessagesSquare, Globe, Copy, ExternalLink } from 'lucide-react'
 import styles from './SessionSidebar.module.css'
 import NexusLogoIcon from './NexusLogoIcon'
 import UserMenu from './UserMenu'
@@ -96,6 +97,86 @@ export default function SessionSidebar({ sessions, workspaceId, currentId, onDel
   const [editTitle, setEditTitle] = useState('')
   const location = useLocation()
   const navigate = useNavigate()
+
+  // Cloudflare 公网隧道（左下角开关）：状态由后端 TunnelService 管理，
+  // starting 期间高频轮询等待就绪，running 期间低频轮询兜底检测进程退出。
+  const [tunnel, setTunnel] = useState<TunnelStatus | null>(null)
+  const [tunnelBusy, setTunnelBusy] = useState(false)
+  const [tunnelPop, setTunnelPop] = useState(false)
+  const tunnelPrevState = useRef<string>('stopped')
+
+  useEffect(() => {
+    getTunnel().then((r) => setTunnel(r.data)).catch(() => {})
+  }, [])
+
+  // 按状态轮询：starting→2s 等待就绪；running→15s 兜底发现进程退出
+  useEffect(() => {
+    const state = tunnel?.state
+    if (state !== 'starting' && state !== 'running') return
+    const ms = state === 'starting' ? 2000 : 15000
+    const timer = setInterval(() => {
+      getTunnel().then((r) => setTunnel(r.data)).catch(() => {})
+    }, ms)
+    return () => clearInterval(timer)
+  }, [tunnel?.state])
+
+  // 从 starting 变为 running 时自动展开 URL 弹层（用户能立即拿到公网地址）
+  useEffect(() => {
+    const state = tunnel?.state || 'stopped'
+    if (tunnelPrevState.current === 'starting' && state === 'running') setTunnelPop(true)
+    if (state === 'stopped') setTunnelPop(false)
+    tunnelPrevState.current = state
+  }, [tunnel?.state])
+
+  // 左下角开关点击：stopped→启动；running/error→展开弹层（URL/复制/停止/重试）
+  async function handleTunnelClick() {
+    if (tunnelBusy) return
+    if (tunnel?.state === 'running' || tunnel?.state === 'error') {
+      setTunnelPop((v) => !v)
+      return
+    }
+    await handleTunnelStart()
+  }
+
+  async function handleTunnelStart() {
+    if (tunnelBusy || tunnel?.state === 'starting') return
+    setTunnelBusy(true)
+    try {
+      const r = await startTunnel()
+      setTunnel(r.data)
+      if (r.data.state === 'error') setTunnelPop(true) // 立即失败（如未安装）直接展示原因
+    } catch {
+      setTunnel((prev) => ({
+        state: 'error',
+        mode: prev?.mode || 'quick',
+        url: '',
+        installed: prev?.installed ?? false,
+        enabled: prev?.enabled ?? false,
+        has_token: prev?.has_token ?? false,
+        error: t('sidebar.tunnelStartFailed'),
+      }))
+      setTunnelPop(true)
+    } finally {
+      setTunnelBusy(false)
+    }
+  }
+
+  async function handleTunnelStop() {
+    if (tunnelBusy) return
+    setTunnelBusy(true)
+    try {
+      const r = await stopTunnel()
+      setTunnel(r.data)
+      setTunnelPop(false)
+    } catch { /* 状态以下次轮询为准 */ } finally {
+      setTunnelBusy(false)
+    }
+  }
+
+  async function copyTunnelUrl() {
+    if (!tunnel?.url) return
+    try { await navigator.clipboard.writeText(tunnel.url) } catch { /* 剪贴板不可用时忽略 */ }
+  }
 
   const [collapsed, setCollapsed] = useState(loadCollapsed)
   const [favorites, setFavorites] = useState<number[]>(loadFavorites)
@@ -611,12 +692,65 @@ export default function SessionSidebar({ sessions, workspaceId, currentId, onDel
 
       </div>
 
-      {/* 左下角：用户信息 + YOLO + 设置，全部并为一行 */}
+      {/* 左下角：用户信息 + YOLO + 公网隧道 + 设置，全部并为一行 */}
       <div className={styles.footer}>
+        {/* 公网隧道弹层：running 显示公网地址与操作；error 显示失败原因 */}
+        {tunnelPop && tunnel && (tunnel.state === 'running' || tunnel.state === 'error') && (
+          <div className={styles.tunnelPop}>
+            <div className={styles.tunnelPopHead}>
+              <span className={styles.tunnelPopTitle}>{t('sidebar.tunnelTitle')}</span>
+              <button type="button" className={styles.tunnelPopClose} onClick={() => setTunnelPop(false)}>
+                <X size={13} />
+              </button>
+            </div>
+            {tunnel.state === 'running' && tunnel.url && (
+              <div className={styles.tunnelUrl}>{tunnel.url}</div>
+            )}
+            {tunnel.state === 'running' && !tunnel.url && (
+              <div className={styles.tunnelUrl}>{t('sidebar.tunnelConnected')}</div>
+            )}
+            {tunnel.state === 'error' && (
+              <div className={styles.tunnelErr}>{tunnel.error || t('sidebar.tunnelStartFailed')}</div>
+            )}
+            <div className={styles.tunnelPopActions}>
+              {tunnel.state === 'running' && tunnel.url && (
+                <>
+                  <button type="button" className={styles.tunnelPopBtn} onClick={copyTunnelUrl} title={t('sidebar.tunnelCopy')}>
+                    <Copy size={12} /> {t('sidebar.tunnelCopy')}
+                  </button>
+                  <button type="button" className={styles.tunnelPopBtn} onClick={() => window.open(tunnel.url, '_blank')} title={t('sidebar.tunnelOpen')}>
+                    <ExternalLink size={12} /> {t('sidebar.tunnelOpen')}
+                  </button>
+                </>
+              )}
+              {tunnel.state === 'running' && (
+                <button type="button" className={styles.tunnelPopBtn} onClick={handleTunnelStop} disabled={tunnelBusy}>
+                  {t('sidebar.tunnelStop')}
+                </button>
+              )}
+              {tunnel.state === 'error' && (
+                <button type="button" className={styles.tunnelPopBtn} onClick={handleTunnelStart} disabled={tunnelBusy}>
+                  {t('common.retry')}
+                </button>
+              )}
+            </div>
+          </div>
+        )}
         <div className={styles.footerBar}>
           <UserMenu variant="sidebar" />
           <div className={styles.footerActions}>
 
+            <button
+              type="button"
+              className={`${styles.footerIcon} ${tunnel?.state === 'running' ? styles.footerIconTunnel : ''}`}
+              onClick={handleTunnelClick}
+              disabled={tunnelBusy || tunnel?.state === 'starting'}
+              title={tunnel?.state === 'running' && tunnel.url
+                ? `${t('sidebar.tunnelHint')}：${tunnel.url}`
+                : t('sidebar.tunnelHint')}
+            >
+              {tunnel?.state === 'starting' ? <Loader2 size={15} className={styles.taskStatusIconSpin} /> : <Globe size={15} />}
+            </button>
             {onToggleYolo && (
               <button
                 type="button"
