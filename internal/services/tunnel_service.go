@@ -52,6 +52,8 @@ type TunnelService struct {
 	mu   sync.Mutex
 	cfg  config.TunnelConfig
 	port int
+	// guard 启动前安全检查（如 auto_login 开启时拒绝暴露公网）；nil 表示不检查。
+	guard func() error
 
 	cmd      *exec.Cmd
 	exitDone chan struct{} // 进程退出时由 waitExit 关闭（Wait 的唯一调用方）
@@ -64,6 +66,14 @@ type TunnelService struct {
 // NewTunnelService 创建隧道服务；port 为本地 HTTP 服务端口（quick 模式的回源地址）。
 func NewTunnelService(cfg config.TunnelConfig, port int) *TunnelService {
 	return &TunnelService{cfg: cfg, port: port, state: TunnelStateStopped}
+}
+
+// SetGuard 注入启动前安全检查：返回 error 时拒绝启动并进入 error 状态。
+// 每次 Start 时执行，使改密码这类运行期变化也能被及时感知。
+func (s *TunnelService) SetGuard(g func() error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.guard = g
 }
 
 // SetConfig 更新隧道配置（设置页保存后调用）；不影响已运行的隧道。
@@ -97,6 +107,13 @@ func (s *TunnelService) Start() error {
 	if s.state == TunnelStateStarting || s.state == TunnelStateRunning {
 		return nil
 	}
+	if s.guard != nil {
+		if err := s.guard(); err != nil {
+			s.state = TunnelStateError
+			s.errText = err.Error()
+			return err
+		}
+	}
 	bin, err := s.resolveBinary()
 	if err != nil {
 		s.state = TunnelStateError
@@ -105,19 +122,24 @@ func (s *TunnelService) Start() error {
 	}
 
 	args := []string{"tunnel", "--no-autoupdate"}
+	var token string
 	if s.cfg.Mode == config.TunnelModeToken {
-		token := strings.TrimSpace(s.cfg.Token)
+		token = strings.TrimSpace(s.cfg.Token)
 		if token == "" {
 			s.state = TunnelStateError
 			s.errText = "tunnel.mode=token 但未配置 token"
 			return errors.New(s.errText)
 		}
-		args = append(args, "run", "--token", token)
+		args = append(args, "run")
 	} else {
 		args = append(args, "--url", fmt.Sprintf("http://127.0.0.1:%d", s.port))
 	}
 
 	cmd := exec.Command(bin, args...)
+	if token != "" {
+		// 经环境变量传 token，避免 --token 出现在 ps 命令行里被本机其他用户读取。
+		cmd.Env = append(os.Environ(), "TUNNEL_TOKEN="+token)
+	}
 	// cloudflared 把日志（含 quick 域名）写到 stderr；合并 stdout 一并扫描。
 	stderr, err := cmd.StderrPipe()
 	if err != nil {

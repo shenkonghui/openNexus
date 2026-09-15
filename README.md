@@ -29,7 +29,7 @@
 - **文件变更对比**：会话中文件变更的左右对比视图
 - **Drawio 渲染**：对话中嵌入 ` ```drawio ` 代码块自动渲染图表
 - **Excel 处理**：内置 `excel` Skill（随程序释放到 `~/.openNexus/builtin-skills`，开箱即用），指导 Agent 用 pandas/openpyxl/xlsxwriter 读写分析 Excel；右侧新增「Excel」面板，点击 `.xlsx/.xlsm/.xls/.csv` 文件自动激活，浏览器端用 SheetJS 解析渲染（sheet 切换、行列标号），支持鼠标拖选单元格区域，一键将选区转为 markdown 表格插入对话输入框
-- **用户认证**：JWT 鉴权，支持注册 / 登录 / 密码修改 / 个人资料；支持静态访问令牌（`auth.static_token`），浏览器打开带 `?token=` 的链接一次即自动登录，此后无需再输密码
+- **用户认证**：JWT 鉴权，支持注册 / 登录 / 密码修改 / 个人资料；自助注册默认关闭，可通过 `auth.registration_enabled: true` 开启；支持静态访问令牌（`auth.static_token`），浏览器打开带 `?token=` 的链接一次即自动登录，此后无需再输密码。内置 admin 初始密码为随机值（登录请用 auto_login / 静态令牌 / 自助注册账号）；隧道、系统配置、终端、文件写、权限规则等管理面接口仅限 admin 角色
 - **主题切换**：内置亮色 / 暗色主题
 - **国际化**：支持中文和英文界面，在设置页可切换语言
 - **单端口部署**：生产模式下前端构建产物由后端直接服务，前后端同一端口；同时支持 Docker 化部署
@@ -188,7 +188,8 @@ make electron-run     # 启动已安装的应用
 | `jwt.secret` | `JWT_SECRET` | JWT 签名密钥（生产环境务必修改） |
 | `jwt.access_ttl` | `JWT_ACCESS_TTL` | 访问令牌有效期，默认 `15m` |
 | `jwt.refresh_ttl` | `JWT_REFRESH_TTL` | 刷新令牌有效期，默认 `168h` |
-| `auth.auto_login` | `AUTH_AUTO_LOGIN` | 自动以 admin 登录，默认 `true` |
+| `auth.auto_login` | `AUTH_AUTO_LOGIN` | 自动以 admin 登录，默认 `false`；开启后公网隧道会拒绝启动 |
+| `auth.registration_enabled` | `AUTH_REGISTRATION_ENABLED` | 是否开放自助注册，默认 `false`；设为 `true` 后任何访问者可创建账号 |
 | `auth.static_token` | `AUTH_STATIC_TOKEN` | 静态访问令牌：浏览器打开带 `?token=<值>` 的链接一次性授权后，该设备自动登录（长期设备凭证）。留空时启动自动生成随机令牌并写回配置文件 |
 | `debug.acp.enabled` | `DEBUG_ACP_ENABLED` | 启用 ACP 调试日志，默认 `true` |
 | `debug.acp.dir` | `DEBUG_ACP_DIR` | ACP 调试日志存储目录 |
@@ -383,7 +384,14 @@ MCP 服务自动配置同步——已生成令牌的笔记自动写入全局 `mc
 
 需要本机已安装 `cloudflared`（如 `brew install cloudflared`），或在设置中指定可执行文件路径。
 
-> **安全提示**：隧道开启后任何拿到地址的人都可访问登录页。请确保使用强密码并将 `auth.auto_login` 设为 `false`（可配置 `auth.static_token` 用访问令牌链接代替输密码）。
+> **安全提示**：隧道开启后任何拿到地址的人都可访问登录页，启动前系统强制安全检查：
+>
+> - `auth.auto_login=true` 或 admin 仍为默认密码（123456）时**拒绝启动**（错误显示在隧道状态里）
+> - `auth.registration_enabled=true` 时启动但记告警：任何访问者可注册账号，不过隧道 / 系统配置 / 终端 / 文件写 / 权限规则等管理面接口仅限 admin 角色
+> - 登录 / 注册 / 令牌登录接口有每 IP 每分钟 10 次限流
+> - `tunnel.token` 经 `TUNNEL_TOKEN` 环境变量传给 cloudflared，不出现在进程命令行中
+>
+> 长期访问建议配置 `auth.static_token`，用 `https://<域名>/?token=<值>` 链接免密登录，代替输密码。
 
 ## 沙箱效果测试
 

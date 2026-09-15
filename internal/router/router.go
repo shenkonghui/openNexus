@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -16,12 +17,12 @@ import (
 	"opennexus/internal/services"
 )
 
-func Setup(authSvc *services.AuthService, jwtSvc *services.JWTService, agentRouter *agent.Router, agentCfgH *handlers.AgentConfigHandler, registryH *handlers.RegistryHandler, schedTaskH *handlers.ScheduledTaskHandler, noteH *handlers.NoteHandler, taskSettingsH *handlers.TaskSettingsHandler, goalSettingsH *handlers.GoalSettingsHandler, agentPrefsH *handlers.AgentPrefsHandler, configH *handlers.ConfigHandler, mcpH *handlers.MCPHandler, logH *handlers.LogHandler, debugH *handlers.DebugHandler, subAgentH *handlers.SubAgentHandler, tmH *handlers.TaskManagerHandler, permSettingsH *handlers.PermissionSettingsHandler, toolCallH *handlers.ToolCallHandler, convH *handlers.ConversationHandler, tmSvc *services.TaskManagerService, securityTestH *handlers.SecurityTestHandler, tunnelH *handlers.TunnelHandler, skillsCfg config.SkillsConfig, commandsCfg config.CommandsConfig, rulesCfg config.RulesConfig, subAgentsCfg config.SubAgentsConfig, selectorCfg config.SelectorConfig, mode, webDist string, autoLogin bool) *gin.Engine {
+func Setup(authSvc *services.AuthService, jwtSvc *services.JWTService, agentRouter *agent.Router, agentCfgH *handlers.AgentConfigHandler, registryH *handlers.RegistryHandler, schedTaskH *handlers.ScheduledTaskHandler, noteH *handlers.NoteHandler, taskSettingsH *handlers.TaskSettingsHandler, goalSettingsH *handlers.GoalSettingsHandler, agentPrefsH *handlers.AgentPrefsHandler, configH *handlers.ConfigHandler, mcpH *handlers.MCPHandler, logH *handlers.LogHandler, debugH *handlers.DebugHandler, subAgentH *handlers.SubAgentHandler, tmH *handlers.TaskManagerHandler, permSettingsH *handlers.PermissionSettingsHandler, toolCallH *handlers.ToolCallHandler, convH *handlers.ConversationHandler, tmSvc *services.TaskManagerService, securityTestH *handlers.SecurityTestHandler, tunnelH *handlers.TunnelHandler, skillsCfg config.SkillsConfig, commandsCfg config.CommandsConfig, rulesCfg config.RulesConfig, subAgentsCfg config.SubAgentsConfig, selectorCfg config.SelectorConfig, mode, webDist string, autoLogin, registrationEnabled bool) *gin.Engine {
 	gin.SetMode(mode)
 	r := gin.New()
 	r.Use(gin.Recovery())
 
-	authHandler := handlers.NewAuthHandler(authSvc, autoLogin)
+	authHandler := handlers.NewAuthHandler(authSvc, autoLogin, registrationEnabled)
 	fsHandler := handlers.NewFileSystemHandler(skillsCfg, commandsCfg, rulesCfg, subAgentsCfg)
 	browserH := handlers.NewBrowserHandler()
 	// 把 FileSystemHandler 注入 ConfigHandler，使软重载能同时刷新两处扫描目录副本。
@@ -33,16 +34,25 @@ func Setup(authSvc *services.AuthService, jwtSvc *services.JWTService, agentRout
 	{
 		auth := v1.Group("/auth")
 		{
-			auth.POST("/register", authHandler.Register)
-			auth.POST("/login", authHandler.Login)
+			// 凭证端点限流：公网隧道暴露时防在线爆破（每 IP 10 次/分钟）。
+			credLimit := middleware.RateLimitByIP(10, time.Minute)
+			auth.POST("/register", credLimit, authHandler.Register)
+			auth.POST("/login", credLimit, authHandler.Login)
 			auth.GET("/auto-login", authHandler.AutoLogin)
-			auth.POST("/token", authHandler.TokenLogin)
+			auth.GET("/registration-status", authHandler.RegistrationStatus)
+			auth.POST("/token", credLimit, authHandler.TokenLogin)
 			auth.POST("/refresh", authHandler.Refresh)
 			auth.POST("/logout", authHandler.Logout)
 		}
 
 		protected := v1.Group("")
 		protected.Use(middleware.AuthRequired(jwtSvc))
+
+		// 管理面路由：除需登录外还要求 admin 角色。公网隧道/自助注册场景下，
+		// 普通注册用户可使用会话与 agent，但不能触碰系统配置与主机级能力
+		// （原始 shell、任意文件写、agent 二进制路径、权限规则、隧道等）。
+		adminOnly := v1.Group("")
+		adminOnly.Use(middleware.AuthRequired(jwtSvc), middleware.RequireRole("admin"))
 		{
 			protected.GET("/me", authHandler.Me)
 			protected.PUT("/me", authHandler.UpdateProfile)
@@ -63,28 +73,31 @@ func Setup(authSvc *services.AuthService, jwtSvc *services.JWTService, agentRout
 			protected.GET("/agents/:type/modes", agentH.Modes)
 			protected.POST("/agents/:type/probe", agentH.Probe)
 			protected.POST("/agents/:type/preconnect", agentH.Preconnect)
-			protected.POST("/agents/:type/authenticate", agentH.Authenticate)
-			protected.GET("/agents/:type/auth-events", agentH.AuthEvents)
+			// agent 登录认证会在宿主机拉起交互式登录进程并写凭证，限 admin
+			adminOnly.POST("/agents/:type/authenticate", agentH.Authenticate)
+			adminOnly.GET("/agents/:type/auth-events", agentH.AuthEvents)
 			// rule/skill/mcp 能力接入测试（静态 + 端到端）与最近一次报告
 			protected.POST("/agents/:type/capability-test", agentH.CapabilityTest)
 			protected.GET("/agents/:type/capability-test", agentH.LastCapabilityTest)
 			// 一键并行测试全部已接入 agent
 			protected.POST("/agents/capability-test-all", agentH.CapabilityTestAll)
 
-			// 沙箱效果测试：沙箱开启时发送命令 prompt 让 agent 真正执行，通过退出码验证沙箱隔离效果
-			protected.POST("/agents/:type/security-test", securityTestH.RunTest)
-			protected.GET("/agents/:type/security-test", securityTestH.LastTest)
+			// 沙箱效果测试：沙箱开启时发送命令 prompt 让 agent 真正执行，通过退出码验证沙箱隔离效果。
+			// 测试自动批准工具调用（绕过权限规则），限 admin。
+			adminOnly.POST("/agents/:type/security-test", securityTestH.RunTest)
+			adminOnly.GET("/agents/:type/security-test", securityTestH.LastTest)
 			// 一键并行沙箱测试全部已接入 agent（独立 literal 路径避免与 :type 冲突）
-			protected.POST("/agents/security-test-all", securityTestH.RunAllTests)
+			adminOnly.POST("/agents/security-test-all", securityTestH.RunAllTests)
 
 			// 沙箱测试用例管理（用户级 CRUD）
-			secTests := protected.Group("/security-tests")
+			secTests := adminOnly.Group("/security-tests")
 			{
 				secTests.GET("/cases", securityTestH.GetCases)
 				secTests.PUT("/cases", securityTestH.UpdateCases)
 			}
 
-			agentCfg := protected.Group("/agent-configs")
+			// agent 配置管理：可指定任意二进制路径/参数（等效命令执行），限 admin
+			agentCfg := adminOnly.Group("/agent-configs")
 			{
 				agentCfg.GET("", agentCfgH.List)
 				agentCfg.POST("", agentCfgH.Create)
@@ -160,8 +173,9 @@ func Setup(authSvc *services.AuthService, jwtSvc *services.JWTService, agentRout
 				protected.GET("/sessions/:id/debug/raw", debugH.Raw)
 			}
 
-			// 配置管理（config.yaml agents 块下的 skills/commands/rules 配置）
-			configG := protected.Group("/config")
+			// 配置管理（config.yaml agents 块下的 skills/commands/rules 配置）。
+			// /config/raw 可读写含 JWT secret 的配置全文，整组限 admin。
+			configG := adminOnly.Group("/config")
 			{
 				configG.GET("/agents", configH.GetAgentsConfig)
 				configG.PUT("/agents", configH.UpdateAgentsConfig)
@@ -192,19 +206,20 @@ func Setup(authSvc *services.AuthService, jwtSvc *services.JWTService, agentRout
 			// 文件系统目录浏览（用于前端目录选择器）
 			protected.GET("/filesystem/dirs", fsHandler.ListDirs)
 			protected.GET("/filesystem/worktrees", fsHandler.ListWorktrees)
-			protected.POST("/filesystem/worktrees", fsHandler.CreateWorktree)
+			adminOnly.POST("/filesystem/worktrees", fsHandler.CreateWorktree)
 			protected.GET("/filesystem/list", fsHandler.ListFiles)
 			protected.GET("/filesystem/docs", fsHandler.ListDocs)
 			protected.GET("/filesystem/skills", fsHandler.Skills)
-			protected.POST("/filesystem/skills/upload", fsHandler.UploadSkill)
+			adminOnly.POST("/filesystem/skills/upload", fsHandler.UploadSkill)
 			protected.GET("/filesystem/commands", fsHandler.Commands)
 			protected.GET("/filesystem/rules", fsHandler.Rules)
 			protected.GET("/filesystem/sub-agents", fsHandler.SubAgents)
 			protected.GET("/filesystem/file", fsHandler.ReadFile)
 			protected.GET("/filesystem/file-binary", fsHandler.ReadFileBinary)
-			protected.PUT("/filesystem/file", fsHandler.WriteFile)
-			protected.POST("/filesystem/create", fsHandler.CreateEntry)
-			protected.DELETE("/filesystem/entry", fsHandler.DeleteEntry)
+			// 文件写入/删除不走 agent 权限规则与沙箱，限 admin
+			adminOnly.PUT("/filesystem/file", fsHandler.WriteFile)
+			adminOnly.POST("/filesystem/create", fsHandler.CreateEntry)
+			adminOnly.DELETE("/filesystem/entry", fsHandler.DeleteEntry)
 
 			// Git 只读查询（Git 管理面板：worktree 提交记录与文件 diff）
 			gitH := handlers.NewGitHandler()
@@ -295,16 +310,17 @@ func Setup(authSvc *services.AuthService, jwtSvc *services.JWTService, agentRout
 				protected.GET("/conversation-records", convH.List)
 			}
 
-			// 全局权限规则设置（yolo / 白名单 / 黑名单）
-			permissions := protected.Group("/permissions")
+			// 全局权限规则设置（yolo / 白名单 / 黑名单）：可直接放开全部工具调用，限 admin
+			permissions := adminOnly.Group("/permissions")
 			{
 				permissions.GET("/settings", permSettingsH.GetSettings)
 				permissions.PUT("/settings", permSettingsH.UpdateSettings)
 			}
 
-			// Cloudflare 公网隧道（cloudflared 子进程）：状态查询、启停与配置
+			// Cloudflare 公网隧道（cloudflared 子进程）：状态查询、启停与配置。
+			// cloudflared_path 会被 exec，限 admin。
 			if tunnelH != nil {
-				tunnel := protected.Group("/tunnel")
+				tunnel := adminOnly.Group("/tunnel")
 				{
 					tunnel.GET("", tunnelH.Get)
 					tunnel.PUT("", tunnelH.Update)
@@ -322,8 +338,8 @@ func Setup(authSvc *services.AuthService, jwtSvc *services.JWTService, agentRout
 				subAgentH.RegisterRoutes(protected)
 			}
 
-			// 实时日志流（SSE，供前端日志查看器订阅）
-			protected.GET("/logs/stream", logH.Stream)
+			// 实时日志流（SSE，供前端日志查看器订阅；日志可能含敏感信息，限 admin）
+			adminOnly.GET("/logs/stream", logH.Stream)
 		}
 
 		// 终端 WebSocket（通过 query token 认证，不走 AuthRequired 中间件）

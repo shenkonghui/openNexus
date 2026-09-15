@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 
 	"opennexus/internal/database"
@@ -189,6 +190,24 @@ func TestAuthService_GetUserByID(t *testing.T) {
 	}
 	if got.Username != "bob" {
 		t.Errorf("Username = %q", got.Username)
+	}
+}
+
+func TestAuthService_SeedAdminUser_RandomPassword(t *testing.T) {
+	svc, _ := newAuthSvc(t)
+	svc.SeedAdminUser()
+	// 种子密码为随机值：不能用历史默认密码登录，也不应被检测为默认密码
+	if _, err := svc.Login("admin", "123456", "ua", "127.0.0.1"); err != ErrInvalidCreds {
+		t.Fatalf("默认密码应无法登录，实际 %v", err)
+	}
+	if svc.AdminHasDefaultPassword() {
+		t.Fatal("随机种子密码不应被判定为默认密码")
+	}
+	// 模拟历史遗留库：把 admin 密码改回 123456 后应被检出
+	hash, _ := bcrypt.GenerateFromPassword([]byte("123456"), 10)
+	svc.db.Model(&models.User{}).Where("username = ?", "admin").Update("password_hash", string(hash))
+	if !svc.AdminHasDefaultPassword() {
+		t.Fatal("admin 仍为默认密码时应检出")
 	}
 }
 

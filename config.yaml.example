@@ -14,8 +14,11 @@ jwt:
     access_ttl: 15m
     refresh_ttl: 168h
 auth:
-    # 开启后无需登录，自动使用内置 admin 用户
-    auto_login: true
+    # 开启后无需登录，自动使用内置 admin 用户（公网/隧道场景务必关闭：
+    # auto_login=true 或 admin 仍是默认密码时，公网隧道会拒绝启动）
+    auto_login: false
+    # 是否开放自助注册（默认 false）；设为 true 后任何访问者可创建账号，公网场景慎用
+    registration_enabled: false
     # 静态访问令牌：浏览器打开 http://<host>:<port>/?token=<该值> 一次性授权后，
     # 该设备此后自动登录（长期设备凭证，等同密码）。留空时启动自动生成随机令牌并写回。
     static_token: ""
@@ -243,7 +246,9 @@ sandbox:
 # 也可在「设置 → 系统」或侧边栏左下角开关中启停（配置自动写回本段）。
 # mode: quick=临时隧道（免账号，随机 *.trycloudflare.com 域名）；
 #       token=具名隧道（Cloudflare Zero Trust 面板创建的 tunnel token，域名固定）。
-# 注意：隧道开启后任何拿到地址的人都可访问登录页，请确保强密码且 auth.auto_login 为 false。
+# 安全：auth.auto_login=true 或 admin 仍为默认密码（123456）时隧道拒绝启动；
+# registration_enabled=true 时仅告警（任何访问者可注册账号，但管理面接口仍限 admin）。
+# tunnel.token 经 TUNNEL_TOKEN 环境变量传给 cloudflared，不出现在进程命令行。
 tunnel:
     enabled: false        # 服务启动时自动开启隧道
     mode: quick

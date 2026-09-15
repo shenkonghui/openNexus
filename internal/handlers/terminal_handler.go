@@ -195,6 +195,7 @@ func (h *TerminalHandler) authWSSession(c *gin.Context) (*models.Session, bool) 
 }
 
 // authWSUser 是 WebSocket 端点的 query token 认证（WebSocket 不支持自定义 header）。
+// 所有终端端点都是宿主机原始 shell/进程能力（不走 agent 权限规则与沙箱），限 admin。
 // 失败时已写入错误响应，返回 ok=false。
 func (h *TerminalHandler) authWSUser(c *gin.Context) (uint, bool) {
 	tokenStr := strings.TrimSpace(c.Query("token"))
@@ -205,6 +206,10 @@ func (h *TerminalHandler) authWSUser(c *gin.Context) (uint, bool) {
 	claims, err := h.jwtSvc.Parse(tokenStr)
 	if err != nil || claims.TokenType != services.TokenTypeAccess {
 		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": gin.H{"code": "UNAUTHORIZED", "message": "无效的令牌"}})
+		return 0, false
+	}
+	if claims.Role != models.RoleAdmin {
+		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": gin.H{"code": "FORBIDDEN", "message": "权限不足"}})
 		return 0, false
 	}
 	c.Set(middleware.UserIDKey(), claims.UserID)

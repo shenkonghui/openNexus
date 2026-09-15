@@ -10,6 +10,13 @@ export async function register(username: string, email: string, password: string
   return resp.data
 }
 
+// 查询是否开放自助注册（config.yaml auth.registration_enabled；默认开放）
+export function registrationStatus(): Promise<boolean> {
+  return apiFetch<{ data: { enabled: boolean } }>('/auth/registration-status', {
+    skipAuthRedirect: true,
+  }).then(r => r.data.enabled)
+}
+
 // 登录
 export async function login(account: string, password: string): Promise<AuthResponse> {
   const resp = await apiFetch<{ data: AuthResponse }>('/auth/login', {

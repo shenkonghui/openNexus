@@ -45,6 +45,35 @@ func TestLoad_EnvOverride(t *testing.T) {
 	}
 }
 
+func TestAuthConfig_IsRegistrationEnabled(t *testing.T) {
+	// 未配置 → 默认关闭（安全默认）
+	cfg := &Config{}
+	if cfg.Auth.IsRegistrationEnabled() {
+		t.Error("未配置 registration_enabled 时应默认关闭注册")
+	}
+	// 显式 true
+	cfg.Auth.RegistrationEnabled = &[]bool{true}[0]
+	if !cfg.Auth.IsRegistrationEnabled() {
+		t.Error("registration_enabled=true 时应开放注册")
+	}
+	// 显式 false → 关闭
+	cfg.Auth.RegistrationEnabled = &[]bool{false}[0]
+	if cfg.Auth.IsRegistrationEnabled() {
+		t.Error("registration_enabled=false 时应关闭注册")
+	}
+}
+
+func TestAuthConfig_RegistrationEnabled_EnvOverride(t *testing.T) {
+	t.Setenv("AUTH_REGISTRATION_ENABLED", "false")
+	cfg, err := Load("testdata/config_test.yaml")
+	if err != nil {
+		t.Fatalf("Load 返回错误: %v", err)
+	}
+	if cfg.Auth.IsRegistrationEnabled() {
+		t.Error("AUTH_REGISTRATION_ENABLED=false 应关闭注册")
+	}
+}
+
 func TestValidate_SecretTooShort(t *testing.T) {
 	cfg := &Config{JWT: JWTConfig{Secret: "short"}}
 	if err := cfg.Validate(); err == nil {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -25,7 +26,7 @@ func setupRouter(t *testing.T) (*gin.Engine, *services.AuthService) {
 	db.Exec("DELETE FROM refresh_tokens")
 	jwtSvc := services.NewJWTService("this-is-a-very-long-jwt-secret-key-32+bytes!", 15*time.Minute, time.Hour)
 	authSvc := services.NewAuthService(db, jwtSvc, 10)
-	h := NewAuthHandler(authSvc, false)
+	h := NewAuthHandler(authSvc, false, true)
 
 	r := gin.New()
 	v1 := r.Group("/api/v1")
@@ -35,6 +36,7 @@ func setupRouter(t *testing.T) (*gin.Engine, *services.AuthService) {
 	auth.POST("/token", h.TokenLogin)
 	auth.POST("/refresh", h.Refresh)
 	auth.POST("/logout", h.Logout)
+	auth.GET("/registration-status", h.RegistrationStatus)
 	v1.GET("/me", h.Me) // 未经中间件保护，仅测 handler 内部逻辑
 	return r, authSvc
 }
@@ -78,6 +80,42 @@ func TestHandler_Register_Duplicate(t *testing.T) {
 	w := doJSON(t, r, "POST", "/api/v1/auth/register", gin.H{"username": "carol", "email": "other@example.com", "password": "Password123"})
 	if w.Code != http.StatusConflict {
 		t.Fatalf("状态码 = %d, 期望 409", w.Code)
+	}
+}
+
+func TestHandler_Register_Disabled(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db, err := database.Connect("file::memory:?cache=shared", "")
+	if err != nil {
+		t.Fatalf("连接测试库失败: %v", err)
+	}
+	db.Exec("DELETE FROM users")
+	db.Exec("DELETE FROM refresh_tokens")
+	jwtSvc := services.NewJWTService("this-is-a-very-long-jwt-secret-key-32+bytes!", 15*time.Minute, time.Hour)
+	authSvc := services.NewAuthService(db, jwtSvc, 10)
+	h := NewAuthHandler(authSvc, false, false)
+
+	r := gin.New()
+	auth := r.Group("/api/v1/auth")
+	auth.POST("/register", h.Register)
+	auth.GET("/registration-status", h.RegistrationStatus)
+
+	w := doJSON(t, r, "POST", "/api/v1/auth/register", gin.H{
+		"username": "guest", "email": "guest@example.com", "password": "Password123",
+	})
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("状态码 = %d, 期望 403, body=%s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "REGISTRATION_DISABLED") {
+		t.Fatalf("期望错误码 REGISTRATION_DISABLED, body=%s", w.Body.String())
+	}
+
+	w = doJSON(t, r, "GET", "/api/v1/auth/registration-status", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("状态查询状态码 = %d, 期望 200", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), `"enabled":false`) {
+		t.Fatalf("期望 enabled=false, body=%s", w.Body.String())
 	}
 }
 

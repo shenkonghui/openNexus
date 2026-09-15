@@ -29,7 +29,7 @@ A multi-Agent orchestration and conversation platform based on the [Agent Client
 - **Change Diff**: Side-by-side diff view for file changes made during a session.
 - **Drawio Rendering**: Render drawio diagrams (embed ` ```drawio ` code blocks) in conversations.
 - **Excel Support**: Built-in `excel` Skill (released to `~/.openNexus/builtin-skills` on startup, ready out of the box) guides Agents to read/write/analyze Excel via pandas/openpyxl/xlsxwriter; a new "Excel" panel on the right auto-activates when clicking `.xlsx/.xlsm/.xls/.csv` files, parsing and rendering them in-browser via SheetJS (sheet tabs, row/column headers), with mouse-drag cell-range selection and one-click conversion of the selection into a markdown table inserted into the chat input.
-- **User Authentication**: JWT-based auth with registration, login, password change, and profile management; supports a static access token (`auth.static_token`) — open a link with `?token=` once in the browser and it signs in automatically from then on.
+- **User Authentication**: JWT-based auth with registration, login, password change, and profile management; self-service registration is disabled by default and can be enabled via `auth.registration_enabled: true`; supports a static access token (`auth.static_token`) — open a link with `?token=` once in the browser and it signs in automatically from then on. The built-in admin account gets a random initial password (sign in via auto_login / static token / a self-registered account); admin-surface endpoints (tunnel, system config, terminals, file writes, permission rules) are restricted to the admin role
 - **Theme Toggle**: Light and dark theme support.
 - **Internationalization**: Chinese and English UI. Switch language in the Settings page.
 - **Single-Port Deployment**: Production mode serves the frontend build directly from the backend. Docker support included.
@@ -188,7 +188,8 @@ The configuration file is `config.yaml`. Environment variable overrides:
 | `jwt.secret` | `JWT_SECRET` | JWT signing secret (change in production!) |
 | `jwt.access_ttl` | `JWT_ACCESS_TTL` | Access token TTL (default: `15m`) |
 | `jwt.refresh_ttl` | `JWT_REFRESH_TTL` | Refresh token TTL (default: `168h`) |
-| `auth.auto_login` | `AUTH_AUTO_LOGIN` | Auto-login as admin (default: `true`) |
+| `auth.auto_login` | `AUTH_AUTO_LOGIN` | Auto-login as admin (default: `false`); when enabled, the public tunnel refuses to start |
+| `auth.registration_enabled` | `AUTH_REGISTRATION_ENABLED` | Allow self-service registration (default: `false`); when `true`, anyone who can reach the service can create an account |
 | `auth.static_token` | `AUTH_STATIC_TOKEN` | Static access token: open a link with `?token=<value>` once to authorize the device, which then signs in automatically (long-lived device credential). Left empty, a random token is generated and written back to the config file on startup |
 | `debug.acp.enabled` | `DEBUG_ACP_ENABLED` | Enable ACP debug logging (default: `true`) |
 | `debug.acp.dir` | `DEBUG_ACP_DIR` | ACP debug log directory |
@@ -383,7 +384,14 @@ Usage:
 
 Requires `cloudflared` installed locally (e.g. `brew install cloudflared`), or set the binary path in Settings.
 
-> **Security note**: once the tunnel is up, anyone with the URL can reach the login page. Use a strong password and keep `auth.auto_login` set to `false` (you can configure `auth.static_token` to hand out a token link instead of passwords).
+> **Security note**: once the tunnel is up, anyone with the URL can reach the login page. The server enforces a pre-start security check:
+>
+> - Startup is **refused** when `auth.auto_login=true` or admin still has the default password (123456); the reason is shown in the tunnel status
+> - With `auth.registration_enabled=true` the tunnel starts but logs a warning: anyone can register an account, though admin-surface endpoints (tunnel / system config / terminals / file writes / permission rules) stay admin-only
+> - Login / register / token-login endpoints are rate-limited to 10 requests per minute per IP
+> - `tunnel.token` is passed to cloudflared via the `TUNNEL_TOKEN` environment variable, never on the process command line
+>
+> For long-term access, configure `auth.static_token` and hand out `https://<domain>/?token=<value>` links instead of passwords.
 
 ## Sandbox Effect Test
 

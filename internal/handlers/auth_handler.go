@@ -11,12 +11,13 @@ import (
 )
 
 type AuthHandler struct {
-	svc       *services.AuthService
-	autoLogin bool
+	svc                 *services.AuthService
+	autoLogin           bool
+	registrationEnabled bool
 }
 
-func NewAuthHandler(svc *services.AuthService, autoLogin bool) *AuthHandler {
-	return &AuthHandler{svc: svc, autoLogin: autoLogin}
+func NewAuthHandler(svc *services.AuthService, autoLogin, registrationEnabled bool) *AuthHandler {
+	return &AuthHandler{svc: svc, autoLogin: autoLogin, registrationEnabled: registrationEnabled}
 }
 
 // AutoLogin GET /api/v1/auth/auto-login — 若启用免登录则自动签发 admin token。
@@ -51,6 +52,12 @@ func (h *AuthHandler) TokenLogin(c *gin.Context) {
 	Success(c, http.StatusOK, result)
 }
 
+// RegistrationStatus GET /api/v1/auth/registration-status — 公开返回是否开放自助注册，
+// 供登录页决定是否展示注册入口（config.yaml auth.registration_enabled）。
+func (h *AuthHandler) RegistrationStatus(c *gin.Context) {
+	Success(c, http.StatusOK, gin.H{"enabled": h.registrationEnabled})
+}
+
 type registerRequest struct {
 	Username string `json:"username" binding:"required"`
 	Email    string `json:"email" binding:"required"`
@@ -58,6 +65,10 @@ type registerRequest struct {
 }
 
 func (h *AuthHandler) Register(c *gin.Context) {
+	if !h.registrationEnabled {
+		Fail(c, http.StatusForbidden, "REGISTRATION_DISABLED", "注册已关闭")
+		return
+	}
 	var req registerRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		Fail(c, http.StatusBadRequest, "INVALID_REQUEST", "请求参数无效")

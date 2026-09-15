@@ -2,6 +2,7 @@ import { useState, useEffect, type FormEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { useAuth } from '../hooks/useAuth'
+import { registrationStatus } from '../api/auth'
 import LoadingSpinner from '../components/LoadingSpinner'
 import styles from './LoginPage.module.css'
 
@@ -17,12 +18,27 @@ export default function LoginPage() {
   }, [user, loading, navigate])
 
   const [mode, setMode] = useState<'login' | 'register'>('login')
+  const [canRegister, setCanRegister] = useState(true)
   const [account, setAccount] = useState('')
   const [username, setUsername] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [submitting, setSubmitting] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    registrationStatus()
+      .then(enabled => {
+        if (!cancelled) setCanRegister(enabled)
+      })
+      .catch(() => {
+        // 查询失败按开放处理，交由后端注册接口兜底拦截
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   if (loading || user) {
     return <LoadingSpinner text={t('common.loading')} />
@@ -63,13 +79,15 @@ export default function LoginPage() {
           >
             {t('auth.login')}
           </button>
-          <button
-            className={`${styles.tab} ${mode === 'register' ? styles.tabActive : ''}`}
-            onClick={() => setMode('register')}
-            type="button"
-          >
-            {t('auth.register')}
-          </button>
+          {canRegister && (
+            <button
+              className={`${styles.tab} ${mode === 'register' ? styles.tabActive : ''}`}
+              onClick={() => setMode('register')}
+              type="button"
+            >
+              {t('auth.register')}
+            </button>
+          )}
         </div>
 
         <form className={styles.form} onSubmit={handleSubmit}>

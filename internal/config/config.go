@@ -141,9 +141,18 @@ type LoggingConfig struct {
 
 type AuthConfig struct {
 	AutoLogin bool `yaml:"auto_login"`
+	// RegistrationEnabled 是否开放自助注册；缺省（nil 或未配置）视为 false（安全默认：
+	// 公网隧道/局域网可达场景下开放注册等于把会话与 agent 能力送给任何访问者）。
+	// 显式设为 true 才开放注册；设为 false 后注册接口拒绝请求，登录页隐藏注册入口。
+	RegistrationEnabled *bool `yaml:"registration_enabled"`
 	// StaticToken 静态访问令牌：浏览器通过 ?token=xxx 链接一次性授权后，
 	// 前端长期保存并自动换取 JWT（设备级凭证，等同长期密码）。
 	StaticToken string `yaml:"static_token"`
+}
+
+// IsRegistrationEnabled 返回是否开放自助注册；未配置时默认关闭。
+func (a AuthConfig) IsRegistrationEnabled() bool {
+	return a.RegistrationEnabled != nil && *a.RegistrationEnabled
 }
 
 type ServerConfig struct {
@@ -440,7 +449,10 @@ jwt:
 
 auth:
     # 开启后无需登录，自动使用内置 admin 用户；公网/隧道场景务必关闭
-    auto_login: true
+    # （为 true 时公网隧道会拒绝启动）
+    auto_login: false
+    # 是否开放自助注册（默认 false）；设为 true 后开放注册，任何访问者可创建账号
+    registration_enabled: false
     # 静态访问令牌：浏览器打开带 ?token=<该值> 的链接一次性授权后该设备自动登录。
     # 留空时启动会自动生成随机令牌并写回此处
     static_token: ""
@@ -571,6 +583,11 @@ func (c *Config) applyEnv() {
 	}
 	if v := os.Getenv("AUTH_STATIC_TOKEN"); v != "" {
 		c.Auth.StaticToken = v
+	}
+	if v := os.Getenv("AUTH_REGISTRATION_ENABLED"); v != "" {
+		if b, err := strconv.ParseBool(v); err == nil {
+			c.Auth.RegistrationEnabled = &b
+		}
 	}
 	if v := os.Getenv("WEB_DIST"); v != "" {
 		c.Server.WebDist = v

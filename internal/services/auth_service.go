@@ -1,7 +1,9 @@
 package services
 
 import (
+	"crypto/rand"
 	"crypto/subtle"
+	"encoding/hex"
 	"errors"
 	"regexp"
 	"strings"
@@ -52,13 +54,22 @@ func (s *AuthService) SetStaticToken(token string) {
 	s.staticToken = strings.TrimSpace(token)
 }
 
+// defaultAdminPassword 是历史版本的 admin 初始密码，仅用于检测"仍在用默认密码"的不安全状态。
+const defaultAdminPassword = "123456"
+
 // SeedAdminUser 确保内置 admin 用户存在，不存在时自动创建。
+// 初始密码为随机值（不展示）：admin 的入口是 auto_login 或 static_token，
+// 密码登录请走自助注册账号——避免公网部署时出现"已知默认口令"。
 func (s *AuthService) SeedAdminUser() {
 	_, err := s.users.FindByUsername("admin")
 	if err == nil {
 		return // 已存在
 	}
-	hash, err := bcrypt.GenerateFromPassword([]byte("123456"), s.bcryptCost)
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(hex.EncodeToString(b)), s.bcryptCost)
 	if err != nil {
 		return
 	}
@@ -70,6 +81,16 @@ func (s *AuthService) SeedAdminUser() {
 		Status:       models.StatusActive,
 	}
 	_ = s.users.Create(user)
+}
+
+// AdminHasDefaultPassword 检测 admin 是否仍是历史默认密码（123456）。
+// 公网隧道启动前用它拒绝"改都没改就暴露"的不安全配置。
+func (s *AuthService) AdminHasDefaultPassword() bool {
+	user, err := s.users.FindByUsername("admin")
+	if err != nil || user == nil {
+		return false
+	}
+	return bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(defaultAdminPassword)) == nil
 }
 
 func (s *AuthService) validatePassword(password string) bool {

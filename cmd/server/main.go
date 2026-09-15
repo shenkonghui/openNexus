@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -153,6 +154,9 @@ func main() {
 	logging.Setup(cfg.Logging.Level)
 	if cfg.Auth.AutoLogin {
 		log.Printf("auth.auto_login 已启用：前端将自动以 admin 身份登录")
+	}
+	if !cfg.Auth.IsRegistrationEnabled() {
+		log.Printf("auth.registration_enabled 已关闭：注册接口将拒绝新用户注册")
 	}
 
 	// --data-dir 覆盖数据库路径、会话工作区与工作区管理数据目录
@@ -403,6 +407,21 @@ func main() {
 	// Cloudflare 公网隧道：cloudflared 子进程把本地服务暴露到公网。
 	// 配置持久化在 config.yaml 的 tunnel 段，启停与状态由 TunnelService 管理。
 	tunnelSvc := services.NewTunnelService(cfg.Tunnel, cfg.Server.Port)
+	// 启动前安全检查：公网暴露时认证侧不能处于"零门槛"状态。
+	// auto_login 或 admin 默认密码任一命中即拒绝启动（错误经 tunnel status 透出到前端）；
+	// 注册开放仅告警不阻断（用户有权自行开放，但公网场景应知晓代价）。
+	tunnelSvc.SetGuard(func() error {
+		if cfg.Auth.AutoLogin {
+			return errors.New("已拒绝启动公网隧道：auth.auto_login=true 时任何拿到地址的人都会以 admin 自动登录，请先在 config.yaml 中将 auth.auto_login 设为 false")
+		}
+		if authSvc.AdminHasDefaultPassword() {
+			return errors.New("已拒绝启动公网隧道：admin 仍是默认密码（123456），公网可被直接登录，请先登录后在个人设置中修改 admin 密码")
+		}
+		if cfg.Auth.IsRegistrationEnabled() {
+			log.Printf("安全警告：公网隧道运行期间 auth.registration_enabled=true，任何访问者可自助注册账号（建议设为 false）")
+		}
+		return nil
+	})
 	tunnelH := handlers.NewTunnelHandler(cfgPath, tunnelSvc)
 
 	// MCP 聚合网关：把全局 mcp.json 里的 http/sse 上游汇聚成单一 endpoint。
@@ -439,7 +458,7 @@ func main() {
 	subAgentH := handlers.NewSubAgentHandler(noteSettingsRepo, cfg.Agents.MCP.ConfigPath, publicBase)
 	subAgentH.SyncAllSubagentMCP()
 
-	engine := router.Setup(authSvc, jwtSvc, agentRouter, agentCfgH, registryH, schedTaskH, noteH, taskSettingsH, goalSettingsH, agentPrefsH, configH, mcpH, logH, debugH, subAgentH, tmH, permSettingsH, toolCallH, convH, tmSvc, securityTestH, tunnelH, cfg.Agents.Skills, cfg.Agents.Commands, cfg.Agents.Rules, cfg.Agents.SubAgents, cfg.Agents.Selector, cfg.Server.Mode, cfg.Server.WebDist, cfg.Auth.AutoLogin)
+	engine := router.Setup(authSvc, jwtSvc, agentRouter, agentCfgH, registryH, schedTaskH, noteH, taskSettingsH, goalSettingsH, agentPrefsH, configH, mcpH, logH, debugH, subAgentH, tmH, permSettingsH, toolCallH, convH, tmSvc, securityTestH, tunnelH, cfg.Agents.Skills, cfg.Agents.Commands, cfg.Agents.Rules, cfg.Agents.SubAgents, cfg.Agents.Selector, cfg.Server.Mode, cfg.Server.WebDist, cfg.Auth.AutoLogin, cfg.Auth.IsRegistrationEnabled())
 	engine.Any("/mcp/notes", gin.WrapH(notesmcp.Handler(noteRepo, noteSettingsRepo)))
 	engine.Any("/mcp/notes/*path", gin.WrapH(notesmcp.Handler(noteRepo, noteSettingsRepo)))
 	// taskmanager MCP server：主 agent 通过 MCP 工具管理工作区任务（tasks.json）。

@@ -1,6 +1,7 @@
 package services
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -84,6 +85,26 @@ func TestTunnelService_TokenModeMissingToken(t *testing.T) {
 	if st := svc.Status(); st.State != TunnelStateError {
 		t.Fatalf("状态应为 error，实际 %s", st.State)
 	}
+}
+
+func TestTunnelService_GuardRefusesStart(t *testing.T) {
+	bin := fakeCloudflared(t, "echo 'INF |  https://abc.trycloudflare.com  |' >&2")
+	svc := NewTunnelService(config.TunnelConfig{Mode: config.TunnelModeQuick, CloudflaredPath: bin}, 8008)
+	svc.SetGuard(func() error { return errors.New("auto_login 开启，拒绝启动") })
+	if err := svc.Start(); err == nil {
+		t.Fatal("guard 拒绝时 Start 应失败")
+	}
+	st := svc.Status()
+	if st.State != TunnelStateError || st.Error == "" {
+		t.Fatalf("guard 拒绝后应为 error 状态且带原因，实际 %s %q", st.State, st.Error)
+	}
+	// guard 解除后应能正常启动
+	svc.SetGuard(nil)
+	if err := svc.Start(); err != nil {
+		t.Fatalf("解除 guard 后 Start 失败: %v", err)
+	}
+	defer svc.Stop()
+	waitState(t, svc, TunnelStateRunning)
 }
 
 func TestTunnelService_BinaryNotFound(t *testing.T) {
