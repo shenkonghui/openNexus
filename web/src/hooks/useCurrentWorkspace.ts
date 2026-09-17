@@ -1,13 +1,18 @@
 import { useState, useEffect, useCallback } from 'react'
 import { listWorkspaces, getWorkspace } from '../api/workspaces'
+import { listSessions } from '../api/sessions'
 import type { Workspace, Session } from '../types'
 
 export const WORKSPACE_STORAGE_KEY = 'opennexus.current.workspace'
+
+/** 「全部工作区」哨兵值：全局选择器选中后，任务管理等聚合视图展示所有工作区内容 */
+export const ALL_WORKSPACES_ID = -1
 
 export function resolveWorkspaceId(
   workspaces: (Workspace & { task_count?: number })[],
   stored: string | null,
 ): number {
+  if (stored === String(ALL_WORKSPACES_ID) && workspaces.length > 0) return ALL_WORKSPACES_ID
   if (stored) {
     const id = Number(stored)
     if (workspaces.some((w) => w.id === id)) return id
@@ -32,6 +37,13 @@ export function useCurrentWorkspace(enabled = true) {
 
   const loadSessions = useCallback(async (id: number) => {
     if (!id) { setSessions([]); setSessionsWorkspaceId(id); return }
+    // 全部工作区：聚合所有会话（listSessions 不按工作区过滤）
+    if (id === ALL_WORKSPACES_ID) {
+      const all = await listSessions()
+      setSessions(all.data.sessions || [])
+      setSessionsWorkspaceId(id)
+      return
+    }
     const detail = await getWorkspace(id)
     setSessions(detail.data.sessions || [])
     setSessionsWorkspaceId(id)

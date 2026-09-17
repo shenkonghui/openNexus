@@ -6,7 +6,7 @@ import type { Message } from '../types'
 import type { TaskManagerTask } from '../api/taskmanager'
 import MessageList from './MessageList'
 import { AgentTerminalsProvider } from '../context/AgentTerminalsContext'
-import { GitBranch, ExternalLink, Target } from 'lucide-react'
+import { GitBranch, ExternalLink, Target, Layers } from 'lucide-react'
 import styles from './TaskLiveWindow.module.css'
 
 const ACTIVE_STATUSES = new Set(['queued', 'running'])
@@ -142,6 +142,13 @@ export default function TaskLiveWindow({ task, onOpen, focused, onFocus }: Props
           }}
         >{task.title}</span>
         <span className={styles.headerRight}>
+          {/* 「全部工作区」聚合模式：窗口标注来源工作区 */}
+          {task.workspace_name && (
+            <span className={styles.branch} title={task.workspace_name}>
+              <Layers size={11} />
+              <span className={styles.branchName}>{task.workspace_name}</span>
+            </span>
+          )}
           {task.branch && (
             <span className={styles.branch} title={task.worktree_path || task.branch}>
               <GitBranch size={11} />

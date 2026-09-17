@@ -61,7 +61,8 @@ export default function ScheduledTasksPage() {
   }, [location.state, location.pathname, navigate])
 
   useEffect(() => {
-    if (!workspaceId) { setWorkspaceCwd(''); setWorkspaceName(''); return }
+    // 「全部工作区」模式（哨兵值 -1）：无单一工作区上下文，清空 cwd/名称。
+    if (!workspaceId || workspaceId < 0) { setWorkspaceCwd(''); setWorkspaceName(''); return }
     getWorkspace(workspaceId)
       .then((r) => {
         setWorkspaceCwd(r.data.workspace.cwd || '')
@@ -115,7 +116,7 @@ export default function ScheduledTasksPage() {
   async function loadData() {
     setLoading(true); setError('')
     try {
-      const [agentsResp, tasksResp] = await Promise.all([listAgents(), listScheduledTasks(workspaceId || undefined)])
+      const [agentsResp, tasksResp] = await Promise.all([listAgents(), listScheduledTasks(workspaceId && workspaceId > 0 ? workspaceId : undefined)])
       setAgents(agentsResp.data.agents || [])
       setSelectorFilters(agentsResp.data.selector_filters || [])
       setTasks(tasksResp.data.tasks || [])
@@ -170,7 +171,7 @@ export default function ScheduledTasksPage() {
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault()
-    if (!workspaceId || !form.agent_type || !form.prompt || !form.cron_expr) {
+    if (!workspaceId || workspaceId < 0 || !form.agent_type || !form.prompt || !form.cron_expr) {
       setError(t('scheduledTask.validationError')); return
     }
     setSaving(true); setError('')

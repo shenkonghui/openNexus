@@ -37,6 +37,9 @@ export interface TaskManagerTask {
   no_worktree?: boolean
   /** goal 状态（会话设定 /goal 后同步） */
   goal?: TaskGoalState
+  /** 来源工作区（仅「全部工作区」聚合模式由前端填充，后端不返回） */
+  workspace_id?: number
+  workspace_name?: string
 }
 
 export interface TaskManagerDef {
