@@ -11,7 +11,7 @@ import { getTaskManager, getTaskStatus, startTaskManager, listArchivedTasks, typ
 import { listWorkspaces } from '../api/workspaces'
 import { getTunnel, startTunnel, stopTunnel } from '../api/tunnel'
 import { useTaskEventsChanged } from '../context/TaskEventsContext'
-import { PanelLeftClose, Star, Pencil, X, Check, SquarePlus, FileText, Calendar, Settings, Zap, Loader2, CheckCircle2, XCircle, Clock3, CircleDashed, Network, Layers, History, Trash2, MessagesSquare, Globe, Copy, ExternalLink } from 'lucide-react'
+import { PanelLeftClose, Star, Pencil, X, Check, SquarePlus, FileText, Calendar, Settings, Zap, Loader2, CheckCircle2, XCircle, Clock3, CircleDashed, Network, Layers, History, Trash2, MessagesSquare, Globe, Copy, ExternalLink, Folder, ChevronDown, ChevronRight } from 'lucide-react'
 import styles from './SessionSidebar.module.css'
 import NexusLogoIcon from './NexusLogoIcon'
 import UserMenu from './UserMenu'
@@ -38,6 +38,8 @@ interface SessionSidebarProps {
 
 const STORAGE_KEY = 'opennexus.sidebar.collapsed'
 const FAVS_KEY = 'opennexus.favorites'
+// 「全部工作区」模式下任务分组内各工作区分区的折叠状态
+const WS_COLLAPSED_KEY = 'opennexus.sidebar.wsCollapsed'
 
 function loadCollapsed(): { favorites: boolean; manual: boolean; scheduled: boolean; taskmanager: boolean; more: boolean } {
   try {
@@ -350,10 +352,22 @@ export default function SessionSidebar({ sessions, workspaceId, currentId, onDel
     .filter((t) => t.last_run_at)
     .sort((a, b) => (a.last_run_at! < b.last_run_at! ? 1 : -1))[0]
 
-  // 「全部工作区」模式：任务分组内按工作区分区展示（工作区名小标题 + 各自的会话/任务）。
   const isAll = workspaceId === ALL_WORKSPACES_ID
   const [wsNames, setWsNames] = useState<Record<number, string>>({})
   const [wsOrder, setWsOrder] = useState<number[]>([])
+  // 分区折叠状态（选择持久化，刷新后保持）
+  const [wsCollapsed, setWsCollapsed] = useState<Set<number>>(() => {
+    try { return new Set<number>(JSON.parse(localStorage.getItem(WS_COLLAPSED_KEY) || '[]')) } catch { return new Set() }
+  })
+  function toggleWsSection(wsId: number) {
+    setWsCollapsed((prev) => {
+      const next = new Set(prev)
+      if (next.has(wsId)) next.delete(wsId)
+      else next.add(wsId)
+      try { localStorage.setItem(WS_COLLAPSED_KEY, JSON.stringify([...next])) } catch { /* ignore */ }
+      return next
+    })
+  }
   const wsGroups = useMemo(() => {
     if (!isAll) return null
     const byId = new Map<number, { wsId: number; name: string; tmSession?: Session; tmTasks: TaskManagerTask[]; sessions: Session[] }>()
@@ -643,13 +657,23 @@ export default function SessionSidebar({ sessions, workspaceId, currentId, onDel
                   <p className={styles.empty}>{t('session.noSessions')}</p>
                 ) : wsGroups.map((g) => (
                   <div key={`ws-${g.wsId}`} className={styles.wsSection}>
-                    <div className={styles.wsHeader}>
-                      <Layers size={10} />
-                      <span>{wsDisplayName(g.name)}</span>
-                    </div>
-                    {g.tmSession && renderOrchSession(g.tmSession)}
-                    {g.tmTasks.map(renderTmTask)}
-                    {g.sessions.map(renderManualSession)}
+                    <button
+                      type="button"
+                      className={styles.wsHeader}
+                      onClick={() => toggleWsSection(g.wsId)}
+                      title={wsCollapsed.has(g.wsId) ? t('common.expand') : t('common.collapse')}
+                    >
+                      {wsCollapsed.has(g.wsId) ? <ChevronRight size={12} className={styles.wsChevron} /> : <ChevronDown size={12} className={styles.wsChevron} />}
+                      <Folder size={13} className={styles.wsFolder} />
+                      <span className={styles.wsTitle}>{wsDisplayName(g.name)}</span>
+                    </button>
+                    {!wsCollapsed.has(g.wsId) && (
+                      <>
+                        {g.tmSession && renderOrchSession(g.tmSession)}
+                        {g.tmTasks.map(renderTmTask)}
+                        {g.sessions.map(renderManualSession)}
+                      </>
+                    )}
                   </div>
                 ))
               ) : (

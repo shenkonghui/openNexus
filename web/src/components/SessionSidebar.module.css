@@ -449,7 +449,7 @@
   color: var(--text-muted);
 }
 
-/* 「全部工作区」模式：任务分组内按工作区分区 */
+/* 「全部工作区」模式：任务分组内按工作区分区（文件夹标题，可点击折叠） */
 .wsSection {
   display: flex;
   flex-direction: column;
@@ -459,16 +459,40 @@
 .wsHeader {
   display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 8px 10px 2px;
-  font-size: 10px;
-  font-weight: 600;
-  color: var(--text-muted);
-  letter-spacing: 0.02em;
+  gap: 5px;
+  width: 100%;
+  padding: 7px 10px 3px;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 400;
+  text-align: left;
+  cursor: pointer;
+  min-width: 0;
 }
 
-.wsHeader + * {
-  margin-top: 0;
+.wsHeader:hover {
+  background: var(--bg-hover);
+}
+
+.wsChevron {
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+
+.wsFolder {
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+
+.wsTitle {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .taskStatusIconSuccess {
