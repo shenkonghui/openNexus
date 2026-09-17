@@ -220,6 +220,8 @@ export default function SessionSidebar({ sessions, workspaceId, currentId, onDel
         try {
           const list = (await listWorkspaces()).data.workspaces || []
           if (!alive) return
+          setWsOrder(list.map((w) => w.id))
+          setWsNames(Object.fromEntries(list.map((w) => [w.id, w.name])))
           const results = await Promise.all(list.map(async (ws) => {
             const tasks = await getTaskManager(ws.id).then((r) => r.data.tasks || []).catch(() => [] as TaskManagerTask[])
             const archived = await listArchivedTasks(ws.id)
@@ -348,6 +350,29 @@ export default function SessionSidebar({ sessions, workspaceId, currentId, onDel
     .filter((t) => t.last_run_at)
     .sort((a, b) => (a.last_run_at! < b.last_run_at! ? 1 : -1))[0]
 
+  // 「全部工作区」模式：任务分组内按工作区分区展示（工作区名小标题 + 各自的会话/任务）。
+  const isAll = workspaceId === ALL_WORKSPACES_ID
+  const [wsNames, setWsNames] = useState<Record<number, string>>({})
+  const [wsOrder, setWsOrder] = useState<number[]>([])
+  const wsGroups = useMemo(() => {
+    if (!isAll) return null
+    const byId = new Map<number, { wsId: number; name: string; tmSession?: Session; tmTasks: TaskManagerTask[]; sessions: Session[] }>()
+    const ensure = (wsId: number) => {
+      if (!byId.has(wsId)) byId.set(wsId, { wsId, name: wsNames[wsId] ?? `#${wsId}`, tmTasks: [], sessions: [] })
+      return byId.get(wsId)!
+    }
+    for (const s of tmSessions) {
+      const g = ensure(s.workspace_id ?? 0)
+      if (!g.tmSession) g.tmSession = s
+    }
+    for (const task of startedTMTasks) ensure(task.workspace_id ?? 0).tmTasks.push(task)
+    for (const s of manualSessions) ensure(s.workspace_id ?? 0).sessions.push(s)
+    const extra = [...byId.keys()].filter((id) => !wsOrder.includes(id))
+    return [...wsOrder, ...extra]
+      .map((id) => byId.get(id))
+      .filter((g): g is NonNullable<typeof g> => !!g && ( !!g.tmSession || g.tmTasks.length > 0 || g.sessions.length > 0))
+  }, [isAll, wsNames, wsOrder, tmSessions, startedTMTasks, manualSessions])
+
   function toggleGroup(group: 'favorites' | 'manual' | 'scheduled' | 'taskmanager' | 'more') {
     setCollapsed((prev) => ({ ...prev, [group]: !prev[group] }))
   }
@@ -404,6 +429,132 @@ export default function SessionSidebar({ sessions, workspaceId, currentId, onDel
       setStartingTaskId(null)
     }
   }
+
+  // 工作区名称显示：与选择器一致，默认工作区按语言翻译。
+  const wsDisplayName = (name: string) => (name === '默认工作区' ? t('workspace.default') : name)
+
+  // 「任务」分组条目渲染（单工作区与全部分区渲染复用）。
+  const renderOrchSession = (session: Session) => {
+    const goTM = () => navigate(taskManagerUrl(session.workspace_id ?? workspaceId), { state: { tmSessionId: session.id } })
+    return (
+      <div key={`orchsess-${session.id}`} className={styles.item}>
+        <div
+          className={styles.itemLink}
+          role="button"
+          tabIndex={0}
+          title={t('taskmanager.openConversation')}
+          style={{ cursor: 'pointer' }}
+          onClick={goTM}
+          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); goTM() } }}
+        >
+          <div className={styles.itemRow}>
+            <span className={styles.itemTitle}>
+              <Network size={13} className={styles.taskStatusIcon} style={{ marginRight: 2 }} />
+              {session.title || t('taskmanager.aiTitle')}
+            </span>
+            <span className={styles.itemTime}>{formatTimeAgo(session.created_at, t)}</span>
+          </div>
+        </div>
+        {onDelete && (
+          <div className={styles.itemActions}>
+            <button type="button" className={styles.deleteBtn}
+              title={t('common.delete')} aria-label={t('common.delete')}
+              onClick={(e) => {
+                e.preventDefault(); e.stopPropagation()
+                if (window.confirm(t('session.deleteConfirm'))) onDelete(session.id)
+              }}
+            ><X size={13} /></button>
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  const renderTmTask = (task: TaskManagerTask) => (
+    <div key={`orch-${task.id}`} className={styles.item}>
+      <div
+        className={styles.itemLink}
+        role="button"
+        tabIndex={0}
+        title={t('taskmanager.openTask')}
+        style={{ cursor: 'pointer' }}
+        onClick={() => openTMTask(task)}
+        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openTMTask(task) } }}
+      >
+        <div className={styles.itemRow}>
+          <span className={styles.itemTitle}>
+            <TaskStatusDot status={startingTaskId === task.id ? 'running' : task.status} />
+            {t('taskmanager.taskPrefix')}{task.title}
+            {/* 全部工作区模式：条目标注来源工作区 */}
+            {task.workspace_name && (
+              <span className={styles.itemWs} title={task.workspace_name}>
+                <Layers size={10} style={{ verticalAlign: '-1px', marginRight: 2 }} />
+                {task.workspace_name}
+              </span>
+            )}
+          </span>
+        </div>
+      </div>
+    </div>
+  )
+
+  const renderManualSession = (session: Session) => (
+    <div key={session.id} className={`${styles.item} ${currentId === session.id ? styles.itemActive : ''}`}>
+      {editingId === session.id ? (
+        <div className={styles.editRow}>
+          <input className={styles.editInput} value={editTitle}
+            onChange={(e) => setEditTitle(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') { const t = editTitle.trim(); if (t && onRename) onRename(session.id, t); setEditingId(null) }
+              else if (e.key === 'Escape') setEditingId(null)
+            }} autoFocus />
+          <button type="button" className={styles.editOkBtn}
+            onClick={() => { const t = editTitle.trim(); if (t && onRename) onRename(session.id, t); setEditingId(null) }}
+          ><Check size={13} /></button>
+        </div>
+      ) : (
+        <>
+          <Link to={sessionUrl(session.id, session.workspace_id)} className={styles.itemLink}>
+            <div className={styles.itemRow}>
+              <span className={styles.itemTitle}>
+                <SessionStatusIcon running={runningIds.has(session.id)} status={session.status} />
+                {session.title || session.agent_type}
+              </span>
+              <span className={styles.itemTime}>{formatTimeAgo(session.created_at, t)}</span>
+            </div>
+          </Link>
+          <div className={styles.itemActions}>
+            <button type="button" className={favorites.includes(session.id) ? styles.favBtnActive : styles.favBtn}
+              title={favorites.includes(session.id) ? t('session.favorited') : t('session.unfavorited')}
+              onClick={(e) => toggleFavorite(session.id, e)}
+            >{favorites.includes(session.id) ? <Star size={13} fill="currentColor" strokeWidth={0} /> : <Star size={13} />}</button>
+            {onRename && (
+              <button type="button" className={styles.renameBtn}
+                title={t('common.rename')} aria-label={t('common.rename')}
+                onClick={(e) => { e.preventDefault(); e.stopPropagation(); setEditTitle(session.title || session.agent_type); setEditingId(session.id) }}
+              ><Pencil size={13} /></button>
+            )}
+            {onDelete && (
+              <button type="button" className={styles.deleteBtn}
+                title={t('common.delete')} aria-label={t('common.delete')}
+                onClick={(e) => {
+                  e.preventDefault(); e.stopPropagation()
+                  if (window.confirm(t('session.deleteConfirm'))) {
+                    setFavorites((prev) => {
+                      const next = prev.filter((fid) => fid !== session.id)
+                      saveFavorites(next)
+                      return next
+                    })
+                    onDelete(session.id)
+                  }
+                }}
+              ><X size={13} /></button>
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  )
 
   return (
     <div className={styles.sidebar}>
@@ -486,128 +637,31 @@ export default function SessionSidebar({ sessions, workspaceId, currentId, onDel
           </button>
           {!collapsed.manual && (
             <div className={styles.groupList}>
-              {tmSessions.map((session) => {
-                                const goTM = () => navigate(taskManagerUrl(session.workspace_id ?? workspaceId), { state: { tmSessionId: session.id } })
-                return (
-                  <div key={`orchsess-${session.id}`} className={styles.item}>
-                    <div
-                      className={styles.itemLink}
-                      role="button"
-                      tabIndex={0}
-                      title={t('taskmanager.openConversation')}
-                      style={{ cursor: 'pointer' }}
-                      onClick={goTM}
-                      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); goTM() } }}
-                    >
-                      <div className={styles.itemRow}>
-                        <span className={styles.itemTitle}>
-                          <Network size={13} className={styles.taskStatusIcon} style={{ marginRight: 2 }} />
-                          {session.title || t('taskmanager.aiTitle')}
-                        </span>
-                        <span className={styles.itemTime}>{formatTimeAgo(session.created_at, t)}</span>
-                      </div>
+              {isAll && wsGroups ? (
+                // 全部工作区模式：按工作区分区，每个分区展示各自的编排对话 / 任务管理任务 / 会话。
+                wsGroups.length === 0 ? (
+                  <p className={styles.empty}>{t('session.noSessions')}</p>
+                ) : wsGroups.map((g) => (
+                  <div key={`ws-${g.wsId}`} className={styles.wsSection}>
+                    <div className={styles.wsHeader}>
+                      <Layers size={10} />
+                      <span>{wsDisplayName(g.name)}</span>
                     </div>
-                    {onDelete && (
-                      <div className={styles.itemActions}>
-                        <button type="button" className={styles.deleteBtn}
-                          title={t('common.delete')} aria-label={t('common.delete')}
-                          onClick={(e) => {
-                            e.preventDefault(); e.stopPropagation()
-                            if (window.confirm(t('session.deleteConfirm'))) onDelete(session.id)
-                          }}
-                        ><X size={13} /></button>
-                      </div>
-                    )}
-                  </div>
-                )
-              })}
-              {startedTMTasks.map((task) => (
-                <div key={`orch-${task.id}`} className={styles.item}>
-                  <div
-                    className={styles.itemLink}
-                    role="button"
-                    tabIndex={0}
-                    title={t('taskmanager.openTask')}
-                    style={{ cursor: 'pointer' }}
-                    onClick={() => openTMTask(task)}
-                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openTMTask(task) } }}
-                  >
-                    <div className={styles.itemRow}>
-                      <span className={styles.itemTitle}>
-                        <TaskStatusDot status={startingTaskId === task.id ? 'running' : task.status} />
-                        {t('taskmanager.taskPrefix')}{task.title}
-                        {/* 全部工作区模式：条目标注来源工作区 */}
-                        {task.workspace_name && (
-                          <span className={styles.itemWs} title={task.workspace_name}>
-                            <Layers size={10} style={{ verticalAlign: '-1px', marginRight: 2 }} />
-                            {task.workspace_name}
-                          </span>
-                        )}
-                      </span>
-                    </div>
-                  </div>
-                </div>
-              ))}
-              {startedTMTasks.length === 0 && tmSessions.length === 0 && manualSessions.length === 0 ? (
-                <p className={styles.empty}>{t('session.noSessions')}</p>
-              ) : (
-                manualSessions.map((session) => (
-                  <div key={session.id} className={`${styles.item} ${currentId === session.id ? styles.itemActive : ''}`}>
-                    {editingId === session.id ? (
-                      <div className={styles.editRow}>
-                        <input className={styles.editInput} value={editTitle}
-                          onChange={(e) => setEditTitle(e.target.value)}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter') { const t = editTitle.trim(); if (t && onRename) onRename(session.id, t); setEditingId(null) }
-                            else if (e.key === 'Escape') setEditingId(null)
-                          }} autoFocus />
-                        <button type="button" className={styles.editOkBtn}
-                          onClick={() => { const t = editTitle.trim(); if (t && onRename) onRename(session.id, t); setEditingId(null) }}
-                        ><Check size={13} /></button>
-                      </div>
-                    ) : (
-                      <>
-                        <Link to={sessionUrl(session.id, session.workspace_id)} className={styles.itemLink}>
-                          <div className={styles.itemRow}>
-                            <span className={styles.itemTitle}>
-                              <SessionStatusIcon running={runningIds.has(session.id)} status={session.status} />
-                              {session.title || session.agent_type}
-                            </span>
-                            <span className={styles.itemTime}>{formatTimeAgo(session.created_at, t)}</span>
-                          </div>
-                        </Link>
-                        <div className={styles.itemActions}>
-                          <button type="button" className={favorites.includes(session.id) ? styles.favBtnActive : styles.favBtn}
-                            title={favorites.includes(session.id) ? t('session.favorited') : t('session.unfavorited')}
-                            onClick={(e) => toggleFavorite(session.id, e)}
-                          >{favorites.includes(session.id) ? <Star size={13} fill="currentColor" strokeWidth={0} /> : <Star size={13} />}</button>
-                          {onRename && (
-                            <button type="button" className={styles.renameBtn}
-                              title={t('common.rename')} aria-label={t('common.rename')}
-                              onClick={(e) => { e.preventDefault(); e.stopPropagation(); setEditTitle(session.title || session.agent_type); setEditingId(session.id) }}
-                            ><Pencil size={13} /></button>
-                          )}
-                          {onDelete && (
-                            <button type="button" className={styles.deleteBtn}
-                              title={t('common.delete')} aria-label={t('common.delete')}
-                              onClick={(e) => {
-                                e.preventDefault(); e.stopPropagation()
-                                if (window.confirm(t('session.deleteConfirm'))) {
-                                  setFavorites((prev) => {
-                                    const next = prev.filter((fid) => fid !== session.id)
-                                    saveFavorites(next)
-                                    return next
-                                  })
-                                  onDelete(session.id)
-                                }
-                              }}
-                            ><X size={13} /></button>
-                          )}
-                        </div>
-                      </>
-                    )}
+                    {g.tmSession && renderOrchSession(g.tmSession)}
+                    {g.tmTasks.map(renderTmTask)}
+                    {g.sessions.map(renderManualSession)}
                   </div>
                 ))
+              ) : (
+                <>
+                  {tmSessions.map(renderOrchSession)}
+                  {startedTMTasks.map(renderTmTask)}
+                  {startedTMTasks.length === 0 && tmSessions.length === 0 && manualSessions.length === 0 ? (
+                    <p className={styles.empty}>{t('session.noSessions')}</p>
+                  ) : (
+                    manualSessions.map(renderManualSession)
+                  )}
+                </>
               )}
             </div>
           )}

@@ -449,6 +449,28 @@
   color: var(--text-muted);
 }
 
+/* 「全部工作区」模式：任务分组内按工作区分区 */
+.wsSection {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.wsHeader {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 10px 2px;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-muted);
+  letter-spacing: 0.02em;
+}
+
+.wsHeader + * {
+  margin-top: 0;
+}
+
 .taskStatusIconSuccess {
   color: var(--success);
 }
