@@ -109,7 +109,7 @@ export default function ChatPanel({
     const cfgOpts = ctx.configOptions.length > 0 ? ctx.configOptions : ctx.probeConfigs
     const onApplyCfg = ctx.onSetConfigOption
     // Agent：新建任务页可选（有 agents 列表），会话详情页锁定为当前 agent（仅可切模型）；
-    // agentSwitchable（任务助手）时有会话也可切换 agent（跨 agent 由调用方弃会话重建）。
+    // agentSwitchable（任务管理）时有会话也可切换 agent（跨 agent 由调用方弃会话重建）。
     const hasAgentSelect = ctx.agents.length > 0 && (ctx.session === null || !!ctx.agentSwitchable)
     const modelOpt = cfgOpts.find((o) => o.category === 'model' && o.type === 'select' && o.options.length > 0)
     // 合并下拉数据源：
@@ -280,8 +280,7 @@ export default function ChatPanel({
           <p className={styles.classifyHint}>{t('notes.classifyTaskHint')}</p>
         ) : (
           // 统一 composer：输入框 + 配置栏合并为一个圆角卡片（参考 Cursor 输入区）
-          // data-composer：供多任务网格模式识别“点击落在输入区”，从而保留已选中的任务焦点
-          <div className={styles.composer} data-composer="true">
+          <div className={styles.composer}>
             <PromptInput
               onSend={sendOrQueue}
               onCancel={ctx.onCancel}

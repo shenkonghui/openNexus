@@ -107,6 +107,8 @@ export default function SettingsDialog({ initialTab = 'language', onClose }: Pro
   const [taskTagPrompt, setTaskTagPrompt] = useState('')
   const [taskTitlePrompt, setTaskTitlePrompt] = useState('')
   const [taskArchiveDays, setTaskArchiveDays] = useState(3)
+  // 已完成任务自动归档天数（UI 值：0=关闭；后端 0=未配置取默认 7，负数=关闭）
+  const [taskAutoArchiveDays, setTaskAutoArchiveDays] = useState(7)
   const [taskSettingsSaving, setTaskSettingsSaving] = useState(false)
   const [taskSettingsSaved, setTaskSettingsSaved] = useState(false)
   // goal 设置状态（通用 /goal 循环：评估 agent/模型 + 限制条件）
@@ -268,6 +270,7 @@ export default function SettingsDialog({ initialTab = 'language', onClose }: Pro
       setTaskTagPrompt(ts.tag_prompt || '')
       setTaskTitlePrompt(ts.title_prompt || '')
       setTaskArchiveDays(ts.archive_retention_days || 3)
+      setTaskAutoArchiveDays(ts.auto_archive_days == null || ts.auto_archive_days === 0 ? 7 : (ts.auto_archive_days < 0 ? 0 : ts.auto_archive_days))
       // goal 设置
       setGoalAgent(goalSettingsResp.data.agent_type || '')
       setGoalModel(goalSettingsResp.data.model_value || '')
@@ -410,11 +413,13 @@ export default function SettingsDialog({ initialTab = 'language', onClose }: Pro
         tag_prompt: taskTagPrompt,
         title_prompt: taskTitlePrompt,
         archive_retention_days: taskArchiveDays,
+        auto_archive_days: taskAutoArchiveDays === 0 ? -1 : taskAutoArchiveDays,
       })
       setTaskTags(resp.data.tags || [])
       setTaskTagPrompt(resp.data.tag_prompt || '')
       setTaskTitlePrompt(resp.data.title_prompt || '')
       setTaskArchiveDays(resp.data.archive_retention_days || 3)
+      setTaskAutoArchiveDays(resp.data.auto_archive_days == null || resp.data.auto_archive_days === 0 ? 7 : (resp.data.auto_archive_days < 0 ? 0 : resp.data.auto_archive_days))
       setTaskSettingsSaved(true)
     } catch (err) {
       setError(err instanceof Error ? err.message : t('common.failed'))
@@ -1228,6 +1233,19 @@ export default function SettingsDialog({ initialTab = 'language', onClose }: Pro
                       onChange={(e) => setTaskArchiveDays(Math.max(1, Number(e.target.value) || 3))}
                       style={{ maxWidth: 120 }}
                     />
+
+                    {/* 已完成任务自动归档天数 */}
+                    <label className={styles.label}>{t('settings.autoArchiveDays')}</label>
+                    <p className={styles.sectionHint}>{t('settings.autoArchiveDaysHint')}</p>
+                    <select className={styles.input} style={{ maxWidth: 120 }}
+                      value={taskAutoArchiveDays}
+                      onChange={(e) => setTaskAutoArchiveDays(Number(e.target.value))}
+                    >
+                      <option value={0}>{t('settings.autoArchiveOff')}</option>
+                      {[1, 3, 7, 14, 30].map((n) => (
+                        <option key={n} value={n}>{n === 7 ? t('settings.autoArchiveDefault', { n }) : `${n} ${t('settings.daysUnit')}`}</option>
+                      ))}
+                    </select>
 
                     {/* 高级：自定义提示词 */}
                     <details className={styles.advancedSection}>

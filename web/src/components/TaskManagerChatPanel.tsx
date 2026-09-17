@@ -4,9 +4,10 @@ import {
   createSession, updateSessionTitle, setConfigOption, setSessionMode,
   listSkills, listModes, listCommands, listConfigOptions,
   respondPermission, getSession, listMessages,
-  getLatestSessionByWorkspace, deleteSession,
+  getLatestSessionByWorkspace, deleteSession, cancelSession,
 } from '../api/sessions'
 import { probeAgentConfigs, listAgentCommands, listAgentModes, listAgents } from '../api/agents'
+import { listSkillsByPath } from '../api/filesystem'
 import { streamPrompt, isTimeoutError } from '../api/sse'
 import { parsePermissionRequest } from '../utils/permission'
 import { Eraser } from 'lucide-react'
@@ -28,8 +29,6 @@ interface Props {
   restoreSessionId?: number
   /** 当前任务列表：用于 @task:<id> 引用把消息直发到对应任务会话 */
   tasks?: TaskManagerTask[]
-  /** 多任务模式下鼠标焦点所在的任务：变化时自动把输入框的 @task 引用切到该任务 */
-  focusTaskId?: string | null
   /** Agent 改动 tasks.json 后触发（通常刷新编排页任务列表） */
   onTaskChanged: () => void
 }
@@ -37,9 +36,6 @@ interface Props {
 // @task:<id> 任务引用（输入框 @ 菜单选任务插入）：可出现在消息任意位置，
 // 发送时剔除引用标记、将剩余内容直发到该任务会话；多个引用则逐个直发。
 const TASK_MENTION_RE = /@task:([^\s(]+)(?:\([^)]*\))?/g
-
-// 输入框开头的 @task 引用（含连续多个）：鼠标焦点切换任务窗口时仅替换这部分，保留用户正文
-const LEADING_TASK_MENTION_RE = /^\s*(?:@task:[^\s(]+(?:\([^)]*\))?\s*)+/
 
 // @archive-task:<id> 归档引用（@ 菜单「归档任务」分类插入）：id 为 * 表示归档全部任务
 const ARCHIVE_MENTION_RE = /@archive-task:([^\s(]+)(?:\([^)]*\))?/g
@@ -96,14 +92,14 @@ function buildSystemPrelude(): string {
  * 直接复用任务页的 ChatPanel（含配置栏/状态条/权限弹窗），构造最小 PanelCtx。
  */
 export default function TaskManagerChatPanel({
-  agents, workspaceId, cwd, defaultAgentType, restoreSessionId, tasks, focusTaskId, onTaskChanged,
+  agents, workspaceId, cwd, defaultAgentType, restoreSessionId, tasks, onTaskChanged,
 }: Props) {
   const { t } = useTranslation()
 
   // 会话与消息
   const [session, setSession] = useState<Session | null>(null)
   const [messages, setMessages] = useState<Message[]>([])
-  // 输入框受控值：多任务模式点击任务窗口时自动注入/切换 @task 引用
+  // 输入框受控值（PromptInput 受控模式）
   const [inputText, setInputText] = useState('')
   // 历史消息分页：hasMore 表示还有更早的消息可加载
   const [hasMore, setHasMore] = useState(false)
@@ -147,7 +143,7 @@ export default function TaskManagerChatPanel({
   const [modes, setModes] = useState<SessionMode[]>([])
   const [skills, setSkills] = useState<AgentSkill[]>([])
   // Agent·模型合并下拉的显示过滤正则（config.yaml agents.selector.filters），
-  // 与新建任务页/会话详情页同一套规则，避免任务助手下拉显示内容不一致。
+  // 与新建任务页/会话详情页同一套规则，避免任务管理下拉显示内容不一致。
   const [selectorFilters, setSelectorFilters] = useState<string[]>([])
   // 各 agent 探测到的模型列表：供合并下拉展示全部 agent·模型组合（参考 ChatPage 新建任务页）
   const [agentModelsMap, setAgentModelsMap] = useState<Record<string, ConfigOptionValue[]>>({})
@@ -304,7 +300,9 @@ export default function TaskManagerChatPanel({
     if (!selectedAgent || session) return
     listAgentCommands(selectedAgent).then((r) => setCommands(r.data.commands || [])).catch(() => setCommands([]))
     listAgentModes(selectedAgent).then((r) => setModes(r.data.modes || [])).catch(() => setModes([]))
-  }, [selectedAgent, session])
+    // 无会话时 skills 无会话级接口可用，用工作区目录扫描兜底（与新建任务页同源）
+    listSkillsByPath(cwd || undefined).then((r) => setSkills(r.data.skills || [])).catch(() => setSkills([]))
+  }, [selectedAgent, session, cwd])
 
   // ===== 有会话：拉取会话级 config/modes/commands/skills（否则配置栏只剩只读 Agent）=====
   useEffect(() => {
@@ -351,7 +349,7 @@ export default function TaskManagerChatPanel({
   // 该工作区最近的一条会话（通过 /sessions/latest 精确按 workspace 查询）。
   // 使任务对话在重新进入任务页时可见历史记录，而非每次都新建会话导致旧对话"丢失"。
   // 恢复期间置 conv='connecting' 阻止发送，避免恢复未完成时用户发送触发新建会话，
-  // 从而保证“一个工作区只有一个任务助手管理会话”。
+  // 从而保证“一个工作区只有一个任务管理管理会话”。
   const restoredKeyRef = useRef<string>('')
   useEffect(() => {
     if (!workspaceId) return
@@ -464,28 +462,6 @@ export default function TaskManagerChatPanel({
     [tasks, t],
   )
 
-  // 多任务模式焦点联动：
-  // - focusTaskId 有值（点击了任务窗口）：把输入框开头的 @task 引用切到该任务
-  // - focusTaskId 从有值变 null（点击了助手区域）：移除开头 @task 引用，恢复与助手对话
-  // 保留用户已输入的正文。任务列表通过 ref 读取，避免轮询刷新 tasks 时重复注入。
-  const tasksRef = useRef(tasks)
-  tasksRef.current = tasks
-  const prevFocusRef = useRef<string | null | undefined>(undefined)
-  useEffect(() => {
-    const hadFocus = !!prevFocusRef.current
-    prevFocusRef.current = focusTaskId
-    if (focusTaskId) {
-      const task = (tasksRef.current || []).find((tk) => tk.id === focusTaskId)
-      if (!task) return
-      const note = taskTitleNote(task.title)
-      const mention = `@task:${task.id}${note ? `(${note})` : ''} `
-      setInputText((prev) => mention + prev.replace(LEADING_TASK_MENTION_RE, ''))
-    } else if (hadFocus) {
-      // 从任务窗口焦点切回助手：移除开头 @task 引用
-      setInputText((prev) => prev.replace(LEADING_TASK_MENTION_RE, ''))
-    }
-  }, [focusTaskId])
-
   // 追加一条仅本地展示的消息（负 id、sequence=0，不入库，刷新后消失）
   function appendLocalMessage(role: 'user' | 'assistant', kind: string, content: string) {
     const msg: Message = {
@@ -497,7 +473,7 @@ export default function TaskManagerChatPanel({
   }
 
   // 后台直发到任务会话：不占用助手对话的 conv 状态（输入框保持可用），
-  // 实时输出由「多任务模式」网格窗口 / 任务会话页通过 /stream 订阅呈现。
+  // 实时输出由任务会话页通过 /stream 订阅呈现。
   async function handleSendToTask(taskId: string, body: string) {
     setError('')
     const task = (tasks || []).find((tk) => tk.id === taskId)
@@ -649,7 +625,7 @@ export default function TaskManagerChatPanel({
     // 受控输入框：真正进入发送后才清空（PromptInput 受控模式不自行清空）
     setInputText('')
 
-    // 首条消息：保证“一个工作区只有一个任务助手管理会话”。
+    // 首条消息：保证“一个工作区只有一个任务管理管理会话”。
     // 先通过 /sessions/latest 查询该 workspace 是否已有会话：
     //   - 命中：复用该会话，回读历史消息，跳过系统引导与配置下发（会话已有自己的配置）。
     //   - 未命中：创建新会话(manual)，下发探测配置，注入系统引导。
@@ -738,8 +714,15 @@ export default function TaskManagerChatPanel({
     )
   }
 
-  function handleCancel() {
+  async function handleCancel() {
     abortRef.current?.abort()
+    abortRef.current = null
+    // 仅中止本地 SSE 不会停止后端 prompt：后端仍持有活跃 prompt，
+    // 下次发送会被 ErrSessionBusy 拒绝（“会话正在处理中”）。需同步调用后端取消。
+    if (session) {
+      try { await cancelSession(session.id) } catch { /* 取消失败不阻断前端解锁 */ }
+    }
+    clearPermissions()
     setConv('idle')
   }
 
@@ -752,7 +735,7 @@ export default function TaskManagerChatPanel({
     sending: conv !== 'idle',
     onSend: handleSend,
     onCancel: handleCancel,
-    // 输入框受控：支持多任务模式鼠标焦点自动注入 @task 引用
+    // 受控输入框：真正进入发送后才清空（PromptInput 受控模式不自行清空）
     restoreInput: inputText,
     onRestoreInputChange: setInputText,
     commands,

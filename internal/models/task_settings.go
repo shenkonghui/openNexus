@@ -21,6 +21,9 @@ type TaskSettings struct {
 	DocEditPrompt string `gorm:"type:text" json:"doc_edit_prompt"`
 	// ArchiveRetentionDays 归档任务在回收站的保留天数（<=0 取默认 3 天），过期后彻底删除。
 	ArchiveRetentionDays int `gorm:"not null;default:0" json:"archive_retention_days"`
+	// AutoArchiveDays 已完成（终态）任务自动归档天数：超过该天数无交互自动移入回收站。
+	// 0=未配置（取默认 7 天）；负数=关闭自动归档。
+	AutoArchiveDays int `gorm:"not null;default:0" json:"auto_archive_days"`
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
 }

@@ -249,3 +249,6 @@ func (a *ArchivedTask) UnmarshalJSON(data []byte) error {
 
 // DefaultArchiveRetentionDays 是归档任务在回收站的默认保留天数，过期后彻底删除。
 const DefaultArchiveRetentionDays = 3
+
+// DefaultAutoArchiveDays 是已完成任务的默认自动归档天数：超过该天数无交互自动移入回收站。
+const DefaultAutoArchiveDays = 7

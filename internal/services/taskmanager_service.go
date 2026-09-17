@@ -263,6 +263,41 @@ func (s *TaskManagerService) PurgeExpiredArchived(cwd string, retentionDays int)
 	return len(expired)
 }
 
+// AutoArchiveCompleted 把已完成（终态：done/failed/canceled/interrupt）且超过 days 天
+// 无交互的任务自动归档到回收站，返回归档数量。days<=0 时不做任何事。
+// 「无交互」以任务最近一次结束时间（FinishedAt，缺省 StartedAt）计；
+// 定时任务不参与自动归档（其生命周期由调度器管理）。
+func (s *TaskManagerService) AutoArchiveCompleted(cwd string, days int) int {
+	if days <= 0 {
+		return 0
+	}
+	def, err := s.storeFor(cwd).Load()
+	if err != nil {
+		return 0
+	}
+	cutoff := time.Now().AddDate(0, 0, -days)
+	n := 0
+	for i := range def.Tasks {
+		t := &def.Tasks[i]
+		if t.Schedule != nil || models.IsTaskRunning(t.Status) || t.Status == models.TaskStatusPending {
+			continue
+		}
+		ref := t.FinishedAt
+		if ref == nil {
+			ref = t.StartedAt
+		}
+		if ref == nil || ref.After(cutoff) {
+			continue
+		}
+		if aerr := s.ArchiveTask(cwd, t.ID); aerr != nil {
+			slog.Warn("自动归档任务失败", "task", t.ID, "err", aerr)
+			continue
+		}
+		n++
+	}
+	return n
+}
+
 // cleanupArchived 彻底删除归档条目时清理其 worktree 与关联会话（best-effort，失败仅记日志），
 // 与 deleteTaskLocked 的清理逻辑保持一致。
 func (s *TaskManagerService) cleanupArchived(cwd string, entry *models.ArchivedTask) {

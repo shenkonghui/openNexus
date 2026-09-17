@@ -32,6 +32,8 @@ type taskSettingsItem struct {
 	DocEditPrompt    string   `json:"doc_edit_prompt"`
 	// 归档任务在回收站的保留天数（默认 3 天）
 	ArchiveRetentionDays int `json:"archive_retention_days"`
+	// 已完成任务自动归档天数（0=默认 7 天；负数=关闭）
+	AutoArchiveDays int `json:"auto_archive_days"`
 }
 
 type taskSettingsRequest struct {
@@ -44,6 +46,7 @@ type taskSettingsRequest struct {
 	TitlePrompt      string `json:"title_prompt"`
 	DocEditPrompt    string `json:"doc_edit_prompt"`
 	ArchiveRetentionDays int    `json:"archive_retention_days"`
+	AutoArchiveDays  int        `json:"auto_archive_days"`
 }
 
 // toItem 把存储模型转换为返回给前端的结构（标签 JSON 解析为数组，空提示词填默认）。
@@ -84,6 +87,7 @@ func (h *TaskSettingsHandler) toItem(s *models.TaskSettings) taskSettingsItem {
 		TitlePrompt:      titlePrompt,
 		DocEditPrompt:    docEditPrompt,
 		ArchiveRetentionDays: retention,
+		AutoArchiveDays:  s.AutoArchiveDays,
 	}
 }
 
@@ -126,6 +130,7 @@ func (h *TaskSettingsHandler) UpdateSettings(c *gin.Context) {
 		TitlePrompt:     strings.TrimSpace(req.TitlePrompt),
 		DocEditPrompt:   strings.TrimSpace(req.DocEditPrompt),
 		ArchiveRetentionDays: req.ArchiveRetentionDays,
+		AutoArchiveDays: req.AutoArchiveDays,
 	}
 	if err := h.settingsRepo.Upsert(s); err != nil {
 		Fail(c, http.StatusInternalServerError, "INTERNAL", "保存任务设置失败")

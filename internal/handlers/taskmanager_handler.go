@@ -49,6 +49,24 @@ func (h *TaskManagerHandler) archiveRetentionDays(c *gin.Context) int {
 	return models.DefaultArchiveRetentionDays
 }
 
+// autoArchiveDays 返回当前用户配置的已完成任务自动归档天数：
+// 未配置(0)取默认 7 天；负数=用户关闭，返回 0（不自动归档）。
+func (h *TaskManagerHandler) autoArchiveDays(c *gin.Context) int {
+	if h.settingsRepo != nil {
+		if uid, ok := currentUserID(c); ok {
+			if s, err := h.settingsRepo.FindByUserID(uid); err == nil {
+				if s.AutoArchiveDays > 0 {
+					return s.AutoArchiveDays
+				}
+				if s.AutoArchiveDays < 0 {
+					return 0
+				}
+			}
+		}
+	}
+	return models.DefaultAutoArchiveDays
+}
+
 // resolveCwd 通过 workspace_id 解析 cwd，并校验归属当前用户。
 func (h *TaskManagerHandler) resolveCwd(c *gin.Context) (string, uint, bool) {
 	uid, ok := currentUserID(c)
@@ -88,6 +106,8 @@ func (h *TaskManagerHandler) Get(c *gin.Context) {
 	if !ok {
 		return
 	}
+	// 顺带执行已完成任务的自动归档（超过配置天数无交互）
+	h.svc.AutoArchiveCompleted(cwd, h.autoArchiveDays(c))
 	def, err := h.svc.Load(cwd)
 	if err != nil {
 		Fail(c, http.StatusInternalServerError, "INTERNAL", err.Error())
@@ -263,6 +283,8 @@ func (h *TaskManagerHandler) Status(c *gin.Context) {
 	if !ok {
 		return
 	}
+	// 顺带执行已完成任务的自动归档（超过配置天数无交互）
+	h.svc.AutoArchiveCompleted(cwd, h.autoArchiveDays(c))
 	def, err := h.svc.Load(cwd)
 	if err != nil {
 		Fail(c, http.StatusInternalServerError, "INTERNAL", err.Error())
