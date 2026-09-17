@@ -17,7 +17,7 @@ import LoadingSpinner from './LoadingSpinner'
 import TaskManagerChatPanel from './TaskManagerChatPanel'
 import SplitPane from './SplitPane'
 import styles from './TaskManagerView.module.css'
-import { ChevronRight, ChevronDown, MessagesSquare, GitBranch, Plus, FileJson, MoreHorizontal, Play, PlayCircle, Square, Trash2, Target, Gauge, Archive, ArchiveRestore, Layers } from 'lucide-react'
+import { ChevronRight, ChevronDown, MessagesSquare, GitBranch, Plus, FileJson, MoreHorizontal, Play, PlayCircle, Square, Trash2, Target, Gauge, Archive, ArchiveRestore, Layers, Pencil } from 'lucide-react'
 
 const ACTIVE_STATUSES = new Set(['queued', 'running'])
 
@@ -66,8 +66,9 @@ export default function TaskManagerView({ workspaceId, cwd, agents, restoreSessi
   const [gitRepo, setGitRepo] = useState<boolean | null>(null)
   const [gitInitializing, setGitInitializing] = useState(false)
 
-  // 新建任务内联表单
+  // 新建任务内联表单（editingTask 非空时复用同一表单编辑未开始的任务）
   const [showNewForm, setShowNewForm] = useState(false)
+  const [editingTask, setEditingTask] = useState<TaskManagerTask | null>(null)
   const [newTitle, setNewTitle] = useState('')
   const [newPrompt, setNewPrompt] = useState('')
   const [newPriority, setNewPriority] = useState<TaskPriority>('p1')
@@ -227,20 +228,22 @@ export default function TaskManagerView({ workspaceId, cwd, agents, restoreSessi
     } catch { /* ignore */ }
   }
 
-  // 提交新建任务：prompt 必填（作为 detail），标题缺省取 prompt 首行。
+  // 提交新建/编辑任务：prompt 必填（作为 detail），标题缺省取 prompt 首行。
   // 与 MCP create_task 行为一致：默认开启 goal 模式，完成条件取任务详情。
   // 全部工作区模式下需先选择目标工作区（newWorkspaceId）。
+  // 编辑模式：复用 upsert 按 id 更新，后端保留 status/session 等运行时字段。
   async function handleCreateTask() {
-    const targetWs = isAll ? newWorkspaceId : workspaceId
+    const targetWs = editingTask ? taskWs(editingTask) : (isAll ? newWorkspaceId : workspaceId)
     if (!targetWs || busy) return
     const prompt = newPrompt.trim()
     if (!prompt) { onError(t('taskmanager.promptRequired')); return }
     const title = newTitle.trim() || prompt.split('\n')[0].slice(0, 40)
-    const agentType = (newAgent || agents[0]?.type || '').trim()
+    const agentType = editingTask ? editingTask.agent_type : (newAgent || agents[0]?.type || '').trim()
     setBusy(true)
     try {
-      await upsertTask(targetWs, { id: genTaskId(), title, detail: prompt, agent_type: agentType, priority: newPriority, goal_condition: prompt })
+      await upsertTask(targetWs, { id: editingTask ? editingTask.id : genTaskId(), title, detail: prompt, agent_type: agentType, priority: newPriority, goal_condition: prompt })
       setShowNewForm(false)
+      setEditingTask(null)
       setNewTitle('')
       setNewPrompt('')
       setNewPriority('p1')
@@ -252,8 +255,18 @@ export default function TaskManagerView({ workspaceId, cwd, agents, restoreSessi
     }
   }
 
+  // 编辑未开始的任务：复用新建表单预填当前值，保存走 upsert 更新。
+  function openEditTask(task: TaskManagerTask) {
+    setEditingTask(task)
+    setNewTitle(task.title)
+    setNewPrompt(task.detail)
+    setNewPriority((task.priority as TaskPriority) || 'p1')
+    setShowNewForm(true)
+  }
+
   function cancelNewForm() {
     setShowNewForm(false)
+    setEditingTask(null)
     setNewTitle('')
     setNewPrompt('')
     setNewPriority('p1')
@@ -279,10 +292,11 @@ export default function TaskManagerView({ workspaceId, cwd, agents, restoreSessi
     }
   }
 
-  // 启动全部待执行任务（不传 task_id，由后端启动所有待执行任务）。
+  // 启动全部待执行任务（不传 task_id，由后端启动所有待执行任务）。需确认。
   // 全部工作区模式：逐个工作区启动其全部待执行任务。
   async function handleStartAll() {
     if (busy) return
+    if (!window.confirm(t('taskmanager.confirmStartAll'))) return
     if (isAll) {
       setBusy(true)
       try {
@@ -590,6 +604,18 @@ export default function TaskManagerView({ workspaceId, cwd, agents, restoreSessi
                   <Play size={13} />
                 </button>
               )}
+              {/* 未开始的任务可编辑（复用新建表单，upsert 按 id 更新）；已启动/已结束不可编辑 */}
+              {task.status === 'pending' && (
+                <button
+                  type="button"
+                  className={styles.taskActionBtn}
+                  onClick={() => openEditTask(task)}
+                  disabled={busy}
+                  title={t('taskmanager.edit')}
+                >
+                  <Pencil size={13} />
+                </button>
+              )}
               {COMPLETED_STATUSES.has(task.status) && (
                 <button
                   type="button"
@@ -703,21 +729,24 @@ export default function TaskManagerView({ workspaceId, cwd, agents, restoreSessi
                 <button
                   type="button"
                   className={styles.toolbarBtn}
-                  onClick={() => { setShowNewForm((v) => !v); setNewAgent(agents[0]?.type || '') }}
+                  onClick={() => { setEditingTask(null); setShowNewForm((v) => !v); setNewAgent(agents[0]?.type || '') }}
                   disabled={busy}
                   title={t('taskmanager.newTask')}
                 >
                   <Plus size={14} /> {t('taskmanager.newTask')}
                 </button>
               )}
-              <button
-                type="button"
-                className={styles.toolbarBtn}
-                onClick={toggleChat}
-                title={chatOpen ? t('taskmanager.hideChat') : t('taskmanager.showChat')}
-              >
-                <MessagesSquare size={14} /> {chatOpen ? t('taskmanager.hideChat') : t('taskmanager.showChat')}
-              </button>
+              {/* 助手对话按工作区隔离，聚合视图不展示右栏（见下方 isAll 分支），按钮一并隐藏避免点了没反应 */}
+              {!isAll && (
+                <button
+                  type="button"
+                  className={styles.toolbarBtn}
+                  onClick={toggleChat}
+                  title={chatOpen ? t('taskmanager.hideChat') : t('taskmanager.showChat')}
+                >
+                  <MessagesSquare size={14} /> {chatOpen ? t('taskmanager.hideChat') : t('taskmanager.showChat')}
+                </button>
+              )}
               {!isAll && (
               <div className={styles.moreWrap} ref={moreRef}>
                 <button
@@ -801,8 +830,8 @@ export default function TaskManagerView({ workspaceId, cwd, agents, restoreSessi
                     placeholder={t('taskmanager.promptPlaceholder')}
                     autoFocus
                   />
-                  {/* 全部工作区模式：新建任务需先选择目标工作区 */}
-                  {isAll && (
+                  {/* 全部工作区模式：新建任务需先选择目标工作区（编辑时不可改目标工作区） */}
+                  {isAll && !editingTask && (
                     <select
                       className={styles.formSelect}
                       value={newWorkspaceId}
@@ -831,7 +860,7 @@ export default function TaskManagerView({ workspaceId, cwd, agents, restoreSessi
                       {t('taskmanager.cancel')}
                     </button>
                     <button type="button" className={styles.formConfirm} onClick={handleCreateTask} disabled={busy || !newPrompt.trim()}>
-                      {t('taskmanager.create')}
+                      {editingTask ? t('taskmanager.save') : t('taskmanager.create')}
                     </button>
                   </div>
                 </div>
