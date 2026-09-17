@@ -382,9 +382,10 @@ export default function SessionSidebar({ sessions, workspaceId, currentId, onDel
     for (const task of startedTMTasks) ensure(task.workspace_id ?? 0).tmTasks.push(task)
     for (const s of manualSessions) ensure(s.workspace_id ?? 0).sessions.push(s)
     const extra = [...byId.keys()].filter((id) => !wsOrder.includes(id))
+    // 没有会话的工作区也显示（空分区，仅文件夹标题 + 新建按钮）
     return [...wsOrder, ...extra]
       .map((id) => byId.get(id))
-      .filter((g): g is NonNullable<typeof g> => !!g && ( !!g.tmSession || g.tmTasks.length > 0 || g.sessions.length > 0))
+      .filter((g): g is NonNullable<typeof g> => !!g)
   }, [isAll, wsNames, wsOrder, tmSessions, startedTMTasks, manualSessions])
 
   function toggleGroup(group: 'favorites' | 'manual' | 'scheduled' | 'taskmanager' | 'more') {
@@ -642,12 +643,15 @@ export default function SessionSidebar({ sessions, workspaceId, currentId, onDel
           <button type="button" className={styles.groupHeader} onClick={() => toggleGroup('manual')}>
             <span className={styles.groupTitle}><FileText size={13} style={{ marginRight: 4, verticalAlign: '-2px' }} />{t('session.title')}</span>
 
-            <span
-              className={styles.addBtn} role="button" tabIndex={0}
-              title={t('session.newSession')}
-              onClick={(e) => { e.stopPropagation(); navigate(newTaskUrl(workspaceId)) }}
-              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.stopPropagation(); navigate(newTaskUrl(workspaceId)) } }}
-            ><SquarePlus size={14} /></span>
+            {/* 全部工作区模式：分组级「+」隐藏，由各工作区分区标题右侧的「+」取代 */}
+            {!isAll && (
+              <span
+                className={styles.addBtn} role="button" tabIndex={0}
+                title={t('session.newSession')}
+                onClick={(e) => { e.stopPropagation(); navigate(newTaskUrl(workspaceId)) }}
+                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.stopPropagation(); navigate(newTaskUrl(workspaceId)) } }}
+              ><SquarePlus size={14} /></span>
+            )}
           </button>
           {!collapsed.manual && (
             <div className={styles.groupList}>
@@ -666,6 +670,13 @@ export default function SessionSidebar({ sessions, workspaceId, currentId, onDel
                       {wsCollapsed.has(g.wsId) ? <ChevronRight size={12} className={styles.wsChevron} /> : <ChevronDown size={12} className={styles.wsChevron} />}
                       <Folder size={13} className={styles.wsFolder} />
                       <span className={styles.wsTitle}>{wsDisplayName(g.name)}</span>
+                      {/* 分区级「+」：在该工作区下新建任务 */}
+                      <span
+                        className={styles.addBtn} role="button" tabIndex={0}
+                        title={`${t('session.newSession')} · ${wsDisplayName(g.name)}`}
+                        onClick={(e) => { e.stopPropagation(); navigate(newTaskUrl(g.wsId)) }}
+                        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.stopPropagation(); navigate(newTaskUrl(g.wsId)) } }}
+                      ><SquarePlus size={14} /></span>
                     </button>
                     {!wsCollapsed.has(g.wsId) && (
                       <div className={styles.wsBody}>
