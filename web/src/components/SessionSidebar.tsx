@@ -668,11 +668,11 @@ export default function SessionSidebar({ sessions, workspaceId, currentId, onDel
                       <span className={styles.wsTitle}>{wsDisplayName(g.name)}</span>
                     </button>
                     {!wsCollapsed.has(g.wsId) && (
-                      <>
+                      <div className={styles.wsBody}>
                         {g.tmSession && renderOrchSession(g.tmSession)}
                         {g.tmTasks.map(renderTmTask)}
                         {g.sessions.map(renderManualSession)}
-                      </>
+                      </div>
                     )}
                   </div>
                 ))

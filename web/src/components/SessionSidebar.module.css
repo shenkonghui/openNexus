@@ -495,6 +495,14 @@
   white-space: nowrap;
 }
 
+/* 分区内容：缩进到文件夹标题之下（箭头 12px + 间距 5px），体现层级 */
+.wsBody {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  padding-left: 17px;
+}
+
 .taskStatusIconSuccess {
   color: var(--success);
 }
