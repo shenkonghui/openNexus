@@ -574,8 +574,10 @@ export default function ChatPage() {
 
   // 将 URL 中的 workspace 同步到 hook，使 sidebar 展示该 workspace 的会话列表。
   // 任务列表页（无会话）与 会话详情页 都需要同步，否则切换工作区时侧边栏会显示其它工作区的会话。
+  // 全部工作区模式例外：打开具体会话/任务（URL 带 wid）不回写全局选择，保持「全部工作区」。
   useEffect(() => {
     if (!user || isNaN(urlWorkspaceId)) return
+    if (storedWorkspaceId === ALL_WORKSPACES_ID) return
     if (urlWorkspaceId !== storedWorkspaceId) {
       selectWorkspace(urlWorkspaceId).catch(() => {})
     }
@@ -1123,8 +1125,13 @@ export default function ChatPage() {
     try {
       await deleteSession(id)
       if (id === sessionId) {
-        localStorage.setItem(WORKSPACE_STORAGE_KEY, String(workspaceId))
-        navigate(tasksUrl(workspaceId))
+        // 全部工作区模式（stored 为哨兵值 -1）不回写具体工作区，删除后回到聚合任务管理视图
+        if (workspaceId && workspaceId > 0) {
+          localStorage.setItem(WORKSPACE_STORAGE_KEY, String(workspaceId))
+          navigate(tasksUrl(workspaceId))
+        } else {
+          navigate(taskManagerUrl())
+        }
       }
       // 刷新会话列表，使 sidebar 同步删除
       reloadWorkspace()
@@ -1149,7 +1156,7 @@ export default function ChatPage() {
   // 以路径为准：侧边栏「任务管理」入口直接路由到 /taskmanager。
   if (isTaskManagerPath(location.pathname)) {
     return (
-      <AppLayout sidebarProps={{ sessions, workspaceId, onDelete: handleDeleteSession, onRename: handleRenameSession, onWorkspaceChange: handleWorkspaceChange, onWorkspaceRefresh: handleWorkspaceRefresh }}>
+      <AppLayout sidebarProps={{ sessions, workspaceId: storedWorkspaceId, onDelete: handleDeleteSession, onRename: handleRenameSession, onWorkspaceChange: handleWorkspaceChange, onWorkspaceRefresh: handleWorkspaceRefresh }}>
         <div className={styles.main}>
           <div className={styles.header}>
             <div className={styles.sysBar}>
@@ -1159,7 +1166,7 @@ export default function ChatPage() {
               <div className={styles.actions}>
                 <WorkspaceSelector
                   variant="header"
-                  value={workspaceId ?? 0}
+                  value={storedWorkspaceId}
                   onChange={handleWorkspaceChange}
                   onRefresh={handleWorkspaceRefresh}
                 />
@@ -1240,7 +1247,7 @@ export default function ChatPage() {
         }
 
     return (
-      <AppLayout sidebarProps={{ sessions, workspaceId, currentId: sessionId, onDelete: handleDeleteSession, onRename: handleRenameSession, onWorkspaceChange: handleWorkspaceChange, onWorkspaceRefresh: handleWorkspaceRefresh }}>
+      <AppLayout sidebarProps={{ sessions, workspaceId: storedWorkspaceId, currentId: sessionId, onDelete: handleDeleteSession, onRename: handleRenameSession, onWorkspaceChange: handleWorkspaceChange, onWorkspaceRefresh: handleWorkspaceRefresh }}>
         <div className={styles.main}>
           <div className={styles.header}>
             <div className={styles.sysBar}>
@@ -1253,7 +1260,7 @@ export default function ChatPage() {
               <div className={styles.actions}>
                 <WorkspaceSelector
                   variant="header"
-                  value={workspaceId ?? 0}
+                  value={storedWorkspaceId}
                   onChange={handleWorkspaceChange}
                   onRefresh={handleWorkspaceRefresh}
                 />
@@ -1391,14 +1398,14 @@ export default function ChatPage() {
       // 任务列表页不再展示历史列表：数据就绪后由 effect 自动跳转（最近任务 → 会话详情；无任务 → 新建任务页）。
       // 跳转完成前渲染加载占位，避免闪烁历史列表。
       return (
-        <AppLayout sidebarProps={{ sessions, workspaceId, onDelete: handleDeleteSession, onRename: handleRenameSession, onWorkspaceChange: handleWorkspaceChange, onWorkspaceRefresh: handleWorkspaceRefresh }}>
+        <AppLayout sidebarProps={{ sessions, workspaceId: storedWorkspaceId, onDelete: handleDeleteSession, onRename: handleRenameSession, onWorkspaceChange: handleWorkspaceChange, onWorkspaceRefresh: handleWorkspaceRefresh }}>
           <LoadingSpinner text={t('common.loading')} />
         </AppLayout>
       )
     }
 
     return (
-      <AppLayout sidebarProps={{ sessions, workspaceId, onDelete: handleDeleteSession, onRename: handleRenameSession, onWorkspaceChange: handleWorkspaceChange, onWorkspaceRefresh: handleWorkspaceRefresh }}>
+      <AppLayout sidebarProps={{ sessions, workspaceId: storedWorkspaceId, onDelete: handleDeleteSession, onRename: handleRenameSession, onWorkspaceChange: handleWorkspaceChange, onWorkspaceRefresh: handleWorkspaceRefresh }}>
         <div className={styles.main}>
           <div className={`${styles.header} ${styles.headerSingle}`}>
             <div className={styles.sessionInfo}>
@@ -1407,7 +1414,7 @@ export default function ChatPage() {
             <div className={styles.actions}>
               <WorkspaceSelector
                 variant="header"
-                value={workspaceId ?? 0}
+                value={storedWorkspaceId}
                 onChange={handleWorkspaceChange}
                 onRefresh={handleWorkspaceRefresh}
               />
