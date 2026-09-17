@@ -312,6 +312,10 @@
 
 .taskColumn .taskHeaderRight {
   flex-wrap: wrap;
+  /* 允许收缩到卡片宽度内，徽标/按钮在窄分栏中换行而不是溢出卡片边界 */
+  flex-shrink: 1;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .taskCard {
