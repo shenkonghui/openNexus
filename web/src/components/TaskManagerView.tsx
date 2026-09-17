@@ -504,7 +504,7 @@ export default function TaskManagerView({ workspaceId, cwd, agents, restoreSessi
     const isOpen = expanded.has(task.id)
     const isActive = ACTIVE_STATUSES.has(task.status)
     return (
-      <div key={task.id} className={styles.taskCard}>
+      <div key={task.id} className={`${styles.taskCard} ${task.status === 'done' ? styles.taskCardDone : COMPLETED_STATUSES.has(task.status) ? styles.taskCardAbnormal : ''}`}>
         <div className={styles.taskHeader} onClick={() => toggleExpand(task.id)}>
           <span className={styles.taskHeaderLeft}>
             {isOpen
@@ -562,12 +562,12 @@ export default function TaskManagerView({ workspaceId, cwd, agents, restoreSessi
                   : ''}
               </span>
             )}
-            <span className={`${styles.taskPriority} ${styles[`priority_${task.priority || 'p1'}`] || ''}`}>
-              {t(`taskmanager.priority_${task.priority || 'p1'}`)}
-            </span>
-            <span className={`${styles.taskStatus} ${styles[`status_${task.status}`] || ''}`}>
-              {t(`taskmanager.status_${task.status}`)}
-            </span>
+            {/* 已完成任务不显示状态文字，用颜色区分（绿色=正常完成，红色=异常终止） */}
+            {!COMPLETED_STATUSES.has(task.status) && (
+              <span className={`${styles.taskStatus} ${styles[`status_${task.status}`] || ''}`}>
+                {t(`taskmanager.status_${task.status}`)}
+              </span>
+            )}
             <span className={styles.taskActions} onClick={(e) => e.stopPropagation()}>
               {isActive ? (
                 <button
@@ -870,7 +870,7 @@ export default function TaskManagerView({ workspaceId, cwd, agents, restoreSessi
                         <div className={styles.completedEmpty}>{t('taskmanager.archivedEmpty')}</div>
                       ) : (
                         archived.map((task) => (
-                          <div key={task.id} className={styles.completedCard}>
+                          <div key={task.id} className={`${styles.completedCard} ${task.status === 'done' ? styles.taskCardDone : styles.taskCardAbnormal}`}>
                             <div className={styles.completedCardHeader}>
                               <span
                                 className={styles.completedCardName}
@@ -884,9 +884,6 @@ export default function TaskManagerView({ workspaceId, cwd, agents, restoreSessi
                               >{task.title}</span>
                             </div>
                             <div className={styles.completedCardMeta}>
-                              <span className={`${styles.completedStatus} ${styles[`status_${task.status}`] || ''}`}>
-                                {t(`taskmanager.status_${task.status}`)}
-                              </span>
                               <span className={styles.taskActions}>
                                 <button
                                   type="button"
