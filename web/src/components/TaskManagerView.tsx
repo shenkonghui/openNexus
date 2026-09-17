@@ -520,15 +520,15 @@ export default function TaskManagerView({ workspaceId, cwd, agents, restoreSessi
                 if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); openTask(task) }
               }}
             >{task.title}</span>
-            {/* 全部工作区模式：任务行标注来源工作区 */}
+          </span>
+          <span className={styles.taskHeaderRight}>
+            {/* 全部工作区模式：来源工作区徽标置于第二行 local/worktree 标记左侧 */}
             {isAll && task.workspace_name && (
               <span className={styles.taskWs} title={task.workspace_name}>
                 <Layers size={11} />
                 <span>{task.workspace_name}</span>
               </span>
             )}
-          </span>
-          <span className={styles.taskHeaderRight}>
             {/* 执行模式标记：已创建 worktree 显示 worktree，否则为 local（启动后自动切换） */}
             <span
               className={`${styles.taskMode} ${task.worktree_path || task.branch ? styles.modeWorktree : styles.modeLocal}`}
