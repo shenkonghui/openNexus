@@ -225,7 +225,7 @@ export default function SessionSidebar({ sessions, workspaceId, currentId, onDel
             const archived = await listArchivedTasks(ws.id)
               .then((r) => (r.data.tasks || []).map((t) => t.db_session_id).filter((id): id is number => !!id))
               .catch(() => [] as number[])
-            return { ws, tasks: tasks.map((tk) => ({ ...tk, workspace_id: ws.id })), archived: archived }
+            return { ws, tasks: tasks.map((tk) => ({ ...tk, workspace_id: ws.id, workspace_name: ws.name })), archived: archived }
           }))
           if (!alive) return
           setOrchTasks(results.flatMap((r) => r.tasks))
@@ -536,6 +536,13 @@ export default function SessionSidebar({ sessions, workspaceId, currentId, onDel
                       <span className={styles.itemTitle}>
                         <TaskStatusDot status={startingTaskId === task.id ? 'running' : task.status} />
                         {t('taskmanager.taskPrefix')}{task.title}
+                        {/* 全部工作区模式：条目标注来源工作区 */}
+                        {task.workspace_name && (
+                          <span className={styles.itemWs} title={task.workspace_name}>
+                            <Layers size={10} style={{ verticalAlign: '-1px', marginRight: 2 }} />
+                            {task.workspace_name}
+                          </span>
+                        )}
                       </span>
                     </div>
                   </div>

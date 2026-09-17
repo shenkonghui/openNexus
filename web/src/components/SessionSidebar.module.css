@@ -435,6 +435,20 @@
   color: var(--text-muted);
 }
 
+/* 「全部工作区」模式：任务条目的来源工作区徽标 */
+.itemWs {
+  flex-shrink: 0;
+  max-width: 90px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  background: var(--bg-hover);
+  color: var(--text-muted);
+}
+
 .taskStatusIconSuccess {
   color: var(--success);
 }
