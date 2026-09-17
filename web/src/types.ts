@@ -414,19 +414,24 @@ export interface SandboxSettings {
   mode: 'auto' | 'enforce';
 }
 
-// Cloudflare 公网隧道状态（GET /api/v1/tunnel，cloudflared 子进程）。
+// 公网隧道状态（GET /api/v1/tunnel，cloudflared / ngrok / code 子进程）。
 // state: stopped=未运行；starting=进程拉起等待就绪；running=已建立；error=最近启动/运行失败。
 export interface TunnelStatus {
   state: 'stopped' | 'starting' | 'running' | 'error';
-  mode: 'quick' | 'token';
-  url: string;              // 公网访问地址；token 模式取配置的 hostname（可能为空）
-  error?: string;           // 最近一次错误（含 cloudflared 尾部日志）
-  installed: boolean;       // cloudflared 是否可用
+  mode: 'quick' | 'token' | 'ngrok' | 'vscode';
+  url: string;              // 公网访问地址；token 模式取配置的 hostname（可能为空）；vscode 模式为 vscode.dev 链接
+  error?: string;           // 最近一次错误（含子进程尾部日志）
+  installed: boolean;       // 当前模式对应的隧道二进制是否可用
   bin_path?: string;
   enabled: boolean;         // 服务启动时自动开启（config.yaml tunnel.enabled）
-  hostname?: string;        // token 模式对外域名
-  has_token: boolean;       // 是否已配置 tunnel token（不回传明文）
+  hostname?: string;        // 对外域名（token 模式展示用；ngrok 模式为保留域名；vscode 模式为隧道名称 --name）
+  has_token: boolean;       // 是否已配置 tunnel token / authtoken（不回传明文）
+  provider?: 'github' | 'microsoft'; // vscode 模式登录账号提供商
   cloudflared_path?: string;
+  ngrok_path?: string;
+  vscode_path?: string;
+  login_url?: string;       // vscode 模式等待设备授权时的登录地址
+  device_code?: string;     // vscode 模式等待设备授权时的代码
 }
 
 // ===== 日志查看器 =====

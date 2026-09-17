@@ -22,7 +22,7 @@
 - **规则扫描**：自动发现用户和项目目录下的规则文件（`.mdc` / `.md`）并注入 Agent 会话；支持 `_meta.systemPrompt`（Claude Code 等）与首轮 prompt 前置（通用兜底，所有 Agent 生效）双通道注入
 - **连接健康检查与自动重连**：后台定期检测各 Agent 连接状态，断线自动重连；侧边栏实时展示连接状态
 - **权限系统**：Agent 发起敏感操作时弹出用户审批对话框，审查参数后决定是否放行
-- **公网隧道（Cloudflare）**：一键把本地服务暴露到公网，支持免账号临时隧道（随机 `*.trycloudflare.com` 域名）与具名隧道（Tunnel Token，固定域名）；侧边栏左下角开关一键启停，就绪后自动弹出公网地址供复制
+- **公网隧道（Cloudflare / ngrok / VS Code）**：一键把本地服务暴露到公网，支持 Cloudflare 免账号临时隧道（随机 `*.trycloudflare.com` 域名）、具名隧道（Tunnel Token，固定域名）、ngrok 隧道（Authtoken，支持保留域名）与 VS Code Remote Tunnel（`code tunnel` 子进程，GitHub/Microsoft 设备授权后可在 vscode.dev / 桌面 VS Code 远程访问本机）；侧边栏左下角开关一键启停，就绪后自动弹出公网地址供复制，VS Code 模式等待授权时自动弹出设备登录地址与代码
 - **沙箱效果测试**：在全局沙箱开启且 Agent 进程真正运行在 OS 沙箱内的前提下，向 Agent 发送预设的命令 prompt 让其真正执行，通过工具调用的退出码验证沙箱是否有效隔离了危险操作。沙箱未开启或降级为直通执行时拒绝执行。内置 16 条默认用例覆盖 6 个文件系统边界类别（写工作目录外/内、写系统目录、写敏感路径、写主目录、删除外部文件），支持通过 prompt 自定义命令、设置期望被阻止/放行，可一键并行测试全部 Agent
 - **调试面板**：查看每次会话的原始 ACP JSON-RPC 报文与高层事件
 - **日志面板**：后端日志实时 SSE 推送到前端
@@ -202,10 +202,13 @@ make electron-run     # 启动已安装的应用
 | `agents.connect_timeout` | - | 建立 agent 连接（进程启动+ACP 握手+认证）与 session/new 的内部超时，防挂起的握手钉死连接并拖垮自动重连。默认 `3m` |
 | `agents.permission_timeout` | - | 权限请求等待用户响应的上限，超时自动取消。默认 `10m`；负数表示永不超时 |
 | `tunnel.enabled` | - | 服务启动时自动开启公网隧道，默认 `false` |
-| `tunnel.mode` | - | 隧道模式：`quick`（临时隧道，随机 `*.trycloudflare.com` 域名）/ `token`（具名隧道），默认 `quick` |
-| `tunnel.token` | - | 具名隧道 Token（`mode=token` 必填，由 Cloudflare Zero Trust 面板创建） |
-| `tunnel.hostname` | - | 具名隧道对外域名（可选，用于界面展示与复制） |
+| `tunnel.mode` | - | 隧道模式：`quick`（Cloudflare 临时隧道，随机 `*.trycloudflare.com` 域名）/ `token`（Cloudflare 具名隧道）/ `ngrok`（ngrok 隧道）/ `vscode`（VS Code Remote Tunnel），默认 `quick` |
+| `tunnel.token` | - | `mode=token` 时为具名隧道 Token（必填，由 Cloudflare Zero Trust 面板创建）；`mode=ngrok` 时为 Authtoken（可选，留空使用 ngrok 本地已保存配置） |
+| `tunnel.hostname` | - | 对外域名（可选）：`token` 模式用于界面展示与复制；`ngrok` 模式为保留域名，留空随机分配 `*.ngrok-free.app`；`vscode` 模式为隧道名称（`--name`），留空用机器主机名 |
+| `tunnel.provider` | - | `mode=vscode` 时的登录账号提供商：`github`（默认）/ `microsoft` |
 | `tunnel.cloudflared_path` | - | 自定义 cloudflared 可执行文件路径，空则按 PATH 与常见安装位置查找 |
+| `tunnel.ngrok_path` | - | 自定义 ngrok 可执行文件路径，空则按 PATH 与常见安装位置查找 |
+| `tunnel.vscode_path` | - | 自定义 code CLI 可执行文件路径，空则按 PATH 与常见安装位置查找 |
 
 配置文件查找顺序：`CONFIG_PATH` → `./config.yaml`（项目级，存在时优先）→ `~/.openNexus/config.yaml`。配置文件不存在时，首次启动会自动生成一份含随机 JWT 密钥的默认配置（完整配置项与说明见 `config.yaml.example`）。数据库与会话数据默认均在 `~/.openNexus/`。
 
@@ -370,26 +373,28 @@ MCP 服务自动配置同步——已生成令牌的笔记自动写入全局 `mc
 
 权限按 Agent 分别配置，通过 `PermissionDialog` 组件交互，由 `internal/acp/permission.go` 处理后端审批流程。
 
-## 公网隧道（Cloudflare）
+## 公网隧道（Cloudflare / ngrok / VS Code）
 
-通过 `cloudflared` 子进程把本地服务暴露到公网，外网可通过生成的 https 地址访问 web 界面与 API。配置持久化在 `config.yaml` 的 `tunnel` 段，运行状态由后端 `TunnelService` 管理。
+通过 `cloudflared` 或 `ngrok` 子进程把本地服务暴露到公网，外网可通过生成的 https 地址访问 web 界面与 API；或通过 `code tunnel` 子进程建立 VS Code Remote Tunnel 远程访问本机。配置持久化在 `config.yaml` 的 `tunnel` 段，运行状态由后端 `TunnelService` 管理。
 
 - **临时隧道（quick，默认）**：免 Cloudflare 账号，启动后生成随机 `*.trycloudflare.com` 域名（每次启动不同）
 - **具名隧道（token）**：使用 Cloudflare Zero Trust 面板创建的 Tunnel Token，域名固定适合长期使用；可在 `tunnel.hostname` 配置对外域名便于界面展示与复制
+- **ngrok 隧道（ngrok）**：拉起 `ngrok http` 子进程；`tunnel.token` 填 ngrok Authtoken（留空则使用 `ngrok config add-authtoken` 已保存的本地配置）；`tunnel.hostname` 可选填保留域名（如 `nexus.ngrok-free.app`），留空则随机分配 `*.ngrok-free.app` 地址
+- **VS Code 隧道（vscode）**：拉起 `code tunnel` 子进程（VS Code 桌面版自带 code CLI，无 UI 服务器可下载独立 CLI）；不直接暴露本服务，而是用 GitHub / Microsoft 账号设备授权（`tunnel.provider` 选择）建立 Remote Tunnel，就绪后拿到 `https://vscode.dev/tunnel/<名称>` 链接，可在 vscode.dev 或桌面 VS Code 远程访问本机文件、终端并转发端口（含本服务端口）；`tunnel.hostname` 可选填隧道名称（`--name`），留空用机器主机名。等待授权期间界面自动显示设备登录地址与代码
 
 使用方式：
 
-- **侧边栏左下角 🌐 开关**：点击启动，就绪后自动弹出公网地址（复制 / 打开 / 关闭）；图标高亮表示隧道运行中
-- **设置 → 系统**：配置模式、Token、对外域名、cloudflared 路径与开机自启（写回 `config.yaml` 的 `tunnel` 段）
+- **侧边栏左下角 🌐 开关**：点击启动，就绪后自动弹出公网地址（复制 / 打开 / 关闭）；图标高亮表示隧道运行中；VS Code 模式等待设备授权时自动弹出授权地址与代码
+- **设置 → 公网访问**：配置模式、Token/Authtoken、对外域名/隧道名称、登录账号（vscode）、二进制路径与开机自启（写回 `config.yaml` 的 `tunnel` 段）
 
-需要本机已安装 `cloudflared`（如 `brew install cloudflared`），或在设置中指定可执行文件路径。
+需要本机已安装对应二进制（如 `brew install cloudflared` / `brew install ngrok` / VS Code 或独立 code CLI），或在设置中指定可执行文件路径。
 
-> **安全提示**：隧道开启后任何拿到地址的人都可访问登录页，启动前系统强制安全检查：
+> **安全提示**：quick / token / ngrok 隧道开启后任何拿到地址的人都可访问登录页，启动前系统强制安全检查（vscode 模式由 GitHub / Microsoft 账号端到端鉴权，不暴露本服务登录页，不适用该检查）：
 >
 > - `auth.auto_login=true` 或 admin 仍为默认密码（123456）时**拒绝启动**（错误显示在隧道状态里）
 > - `auth.registration_enabled=true` 时启动但记告警：任何访问者可注册账号，不过隧道 / 系统配置 / 终端 / 文件写 / 权限规则等管理面接口仅限 admin 角色
 > - 登录 / 注册 / 令牌登录接口有每 IP 每分钟 10 次限流
-> - `tunnel.token` 经 `TUNNEL_TOKEN` 环境变量传给 cloudflared，不出现在进程命令行中
+> - `tunnel.token` 经 `TUNNEL_TOKEN` / `NGROK_AUTHTOKEN` 环境变量传给子进程，不出现在进程命令行中
 >
 > 长期访问建议配置 `auth.static_token`，用 `https://<域名>/?token=<值>` 链接免密登录，代替输密码。
 

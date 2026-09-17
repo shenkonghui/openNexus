@@ -120,18 +120,21 @@ export default function SessionSidebar({ sessions, workspaceId, currentId, onDel
     return () => clearInterval(timer)
   }, [tunnel?.state])
 
-  // 从 starting 变为 running 时自动展开 URL 弹层（用户能立即拿到公网地址）
+  // 从 starting 变为 running 时自动展开 URL 弹层（用户能立即拿到公网地址）；
+  // vscode 模式等到设备授权码（login_url）时同样自动展开，引导用户完成授权。
   useEffect(() => {
     const state = tunnel?.state || 'stopped'
     if (tunnelPrevState.current === 'starting' && state === 'running') setTunnelPop(true)
+    if (state === 'starting' && tunnel?.login_url) setTunnelPop(true)
     if (state === 'stopped') setTunnelPop(false)
     tunnelPrevState.current = state
-  }, [tunnel?.state])
+  }, [tunnel?.state, tunnel?.login_url])
 
-  // 左下角开关点击：stopped→启动；running/error→展开弹层（URL/复制/停止/重试）
+  // 左下角开关点击：stopped→启动；running/error→展开弹层（URL/复制/停止/重试）；
+  // vscode starting（等待设备授权）→展开弹层查看授权地址与代码
   async function handleTunnelClick() {
     if (tunnelBusy) return
-    if (tunnel?.state === 'running' || tunnel?.state === 'error') {
+    if (tunnel?.state === 'running' || tunnel?.state === 'error' || (tunnel?.state === 'starting' && !!tunnel.login_url)) {
       setTunnelPop((v) => !v)
       return
     }
@@ -694,8 +697,9 @@ export default function SessionSidebar({ sessions, workspaceId, currentId, onDel
 
       {/* 左下角：用户信息 + YOLO + 公网隧道 + 设置，全部并为一行 */}
       <div className={styles.footer}>
-        {/* 公网隧道弹层：running 显示公网地址与操作；error 显示失败原因 */}
-        {tunnelPop && tunnel && (tunnel.state === 'running' || tunnel.state === 'error') && (
+        {/* 公网隧道弹层：running 显示公网地址与操作；error 显示失败原因；
+            vscode starting（等待设备授权）显示授权地址与代码 */}
+        {tunnelPop && tunnel && (tunnel.state === 'running' || tunnel.state === 'error' || (tunnel.state === 'starting' && !!tunnel.login_url)) && (
           <div className={styles.tunnelPop}>
             <div className={styles.tunnelPopHead}>
               <span className={styles.tunnelPopTitle}>{t('sidebar.tunnelTitle')}</span>
@@ -709,6 +713,19 @@ export default function SessionSidebar({ sessions, workspaceId, currentId, onDel
             {tunnel.state === 'running' && !tunnel.url && (
               <div className={styles.tunnelUrl}>{t('sidebar.tunnelConnected')}</div>
             )}
+            {tunnel.state === 'starting' && tunnel.login_url && (
+              <div className={styles.tunnelUrl}>
+                {t('sidebar.tunnelDeviceAuth')}
+                <br />
+                {tunnel.login_url}
+                {tunnel.device_code && (
+                  <>
+                    <br />
+                    {t('sidebar.tunnelDeviceCode')}：<strong>{tunnel.device_code}</strong>
+                  </>
+                )}
+              </div>
+            )}
             {tunnel.state === 'error' && (
               <div className={styles.tunnelErr}>{tunnel.error || t('sidebar.tunnelStartFailed')}</div>
             )}
@@ -720,6 +737,16 @@ export default function SessionSidebar({ sessions, workspaceId, currentId, onDel
                   </button>
                   <button type="button" className={styles.tunnelPopBtn} onClick={() => window.open(tunnel.url, '_blank')} title={t('sidebar.tunnelOpen')}>
                     <ExternalLink size={12} /> {t('sidebar.tunnelOpen')}
+                  </button>
+                </>
+              )}
+              {tunnel.state === 'starting' && tunnel.login_url && (
+                <>
+                  <button type="button" className={styles.tunnelPopBtn} onClick={() => window.open(tunnel.login_url, '_blank')} title={t('sidebar.tunnelOpen')}>
+                    <ExternalLink size={12} /> {t('sidebar.tunnelOpen')}
+                  </button>
+                  <button type="button" className={styles.tunnelPopBtn} onClick={handleTunnelStop} disabled={tunnelBusy}>
+                    {t('sidebar.tunnelStop')}
                   </button>
                 </>
               )}
@@ -744,7 +771,7 @@ export default function SessionSidebar({ sessions, workspaceId, currentId, onDel
               type="button"
               className={`${styles.footerIcon} ${tunnel?.state === 'running' ? styles.footerIconTunnel : ''}`}
               onClick={handleTunnelClick}
-              disabled={tunnelBusy || tunnel?.state === 'starting'}
+              disabled={tunnelBusy || (tunnel?.state === 'starting' && !tunnel?.login_url)}
               title={tunnel?.state === 'running' && tunnel.url
                 ? `${t('sidebar.tunnelHint')}：${tunnel.url}`
                 : t('sidebar.tunnelHint')}

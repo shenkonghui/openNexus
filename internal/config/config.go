@@ -83,41 +83,62 @@ func (s *SandboxConfig) normalize() {
 
 // 公网隧道模式常量。
 const (
-	TunnelModeQuick = "quick" // 临时隧道：免账号，生成 *.trycloudflare.com 随机域名
-	TunnelModeToken = "token" // 具名隧道：使用 Cloudflare Zero Trust 面板的 tunnel token
+	TunnelModeQuick  = "quick"  // Cloudflare 临时隧道：免账号，生成 *.trycloudflare.com 随机域名
+	TunnelModeToken  = "token"  // Cloudflare 具名隧道：使用 Zero Trust 面板的 tunnel token
+	TunnelModeNgrok  = "ngrok"  // ngrok 隧道：ngrok 子进程，token 填 authtoken（留空用 ngrok 本地已保存配置）
+	TunnelModeVSCode = "vscode" // VS Code 隧道：code 子进程（code tunnel），经 vscode.dev / Remote Tunnels 远程访问本机
 )
 
-// TunnelConfig 配置 Cloudflare 公网隧道（cloudflared 子进程），
-// 把本地服务暴露为公网 https 地址，供外网访问 web 界面与 API。
-// 隧道由本服务按需拉起/停止 cloudflared 子进程实现，退出时子进程被回收。
+// TunnelConfig 配置公网隧道（cloudflared / ngrok / code 子进程），
+// 把本地服务暴露为公网 https 地址，供外网访问 web 界面与 API；
+// vscode 模式建立 VS Code Remote Tunnel，授权后可在 vscode.dev / 桌面 VS Code 远程访问本机（含端口转发）。
+// 隧道由本服务按需拉起/停止子进程实现，退出时子进程被回收。
 type TunnelConfig struct {
 	// Enabled 服务启动时自动开启隧道。
 	Enabled bool `yaml:"enabled"`
-	// Mode 隧道模式：quick（默认）| token。
+	// Mode 隧道模式：quick（默认）| token | ngrok | vscode。
 	Mode string `yaml:"mode"`
-	// Token 具名隧道 token（mode=token 必填）。
+	// Token mode=token 时为具名隧道 token（必填）；mode=ngrok 时为 authtoken
+	// （可选，留空则使用 ngrok 本地配置中已保存的 authtoken）。
 	Token string `yaml:"token"`
-	// Hostname 具名隧道对外域名（可选）：mode=token 时 cloudflared 日志不含域名，
-	// 配置后用于界面展示与复制，如 https://nexus.example.com。
+	// Hostname 对外域名（可选）：mode=token 时 cloudflared 日志不含域名，配置后用于
+	// 界面展示与复制，如 https://nexus.example.com；mode=ngrok 时为保留域名
+	// （如 nexus.ngrok-free.app），留空则每次随机分配；mode=vscode 时为隧道名称
+	// （--name，vscode.dev 中显示），留空用机器主机名。
 	Hostname string `yaml:"hostname"`
+	// Provider mode=vscode 时的登录账号提供商：github（默认）| microsoft。
+	// 仅首次授权（code tunnel user login --provider）时使用；已有凭据时沿用已登录账号。
+	Provider string `yaml:"provider"`
 	// CloudflaredPath 自定义 cloudflared 可执行文件路径，空则按 PATH 与常见安装位置查找。
 	CloudflaredPath string `yaml:"cloudflared_path"`
+	// NgrokPath 自定义 ngrok 可执行文件路径，空则按 PATH 与常见安装位置查找。
+	NgrokPath string `yaml:"ngrok_path"`
+	// VSCodePath 自定义 code CLI 可执行文件路径，空则按 PATH 与常见安装位置查找。
+	VSCodePath string `yaml:"vscode_path"`
 }
 
-// normalize 校正隧道模式（空或非法值兜底为 quick）并展开自定义路径。
+// normalize 校正隧道模式（空或非法值兜底为 quick）、vscode 登录提供商并展开自定义路径。
 func (t *TunnelConfig) normalize() error {
 	mode := strings.TrimSpace(t.Mode)
-	if mode != TunnelModeQuick && mode != TunnelModeToken {
+	if mode != TunnelModeQuick && mode != TunnelModeToken && mode != TunnelModeNgrok && mode != TunnelModeVSCode {
 		mode = TunnelModeQuick
 	}
 	t.Mode = mode
 	t.Hostname = strings.TrimRight(strings.TrimSpace(t.Hostname), "/")
-	if t.CloudflaredPath != "" {
-		abs, err := expandPath(t.CloudflaredPath)
-		if err != nil {
-			return fmt.Errorf("tunnel.cloudflared_path 无效: %w", err)
+	if p := strings.ToLower(strings.TrimSpace(t.Provider)); p == "microsoft" {
+		t.Provider = p
+	} else {
+		t.Provider = "github"
+	}
+	for _, p := range []*string{&t.CloudflaredPath, &t.NgrokPath, &t.VSCodePath} {
+		if *p == "" {
+			continue
 		}
-		t.CloudflaredPath = abs
+		abs, err := expandPath(*p)
+		if err != nil {
+			return fmt.Errorf("tunnel 可执行文件路径无效: %w", err)
+		}
+		*p = abs
 	}
 	return nil
 }

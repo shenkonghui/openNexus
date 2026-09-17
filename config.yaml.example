@@ -242,16 +242,25 @@ permissions:
 sandbox:
     enabled: false
     mode: auto
-# Cloudflare 公网隧道（cloudflared 子进程）：把本地服务暴露到公网，
+# 公网隧道（cloudflared / ngrok / code 子进程）：把本地服务暴露到公网，
 # 也可在「设置 → 系统」或侧边栏左下角开关中启停（配置自动写回本段）。
-# mode: quick=临时隧道（免账号，随机 *.trycloudflare.com 域名）；
-#       token=具名隧道（Cloudflare Zero Trust 面板创建的 tunnel token，域名固定）。
-# 安全：auth.auto_login=true 或 admin 仍为默认密码（123456）时隧道拒绝启动；
+# mode: quick=Cloudflare 临时隧道（免账号，随机 *.trycloudflare.com 域名）；
+#       token=Cloudflare 具名隧道（Zero Trust 面板创建的 tunnel token，域名固定）；
+#       ngrok=ngrok 隧道（token 填 authtoken，留空则用 ngrok 本地已保存配置；
+#             hostname 可选填保留域名，留空随机分配 *.ngrok-free.app）；
+#       vscode=VS Code Remote Tunnel（code tunnel 子进程；设备授权后可在
+#             vscode.dev / 桌面 VS Code 远程访问本机，不直接暴露本服务；
+#             provider 选 github/microsoft，hostname 作 --name 隧道名称）。
+# 安全：auth.auto_login=true 或 admin 仍为默认密码（123456）时隧道拒绝启动
+# （vscode 模式由 GitHub/Microsoft 账号端到端鉴权，不适用该检查）；
 # registration_enabled=true 时仅告警（任何访问者可注册账号，但管理面接口仍限 admin）。
-# tunnel.token 经 TUNNEL_TOKEN 环境变量传给 cloudflared，不出现在进程命令行。
+# tunnel.token 经 TUNNEL_TOKEN / NGROK_AUTHTOKEN 环境变量传给子进程，不出现在进程命令行。
 tunnel:
     enabled: false        # 服务启动时自动开启隧道
     mode: quick
-    token: ""             # mode=token 必填
-    hostname: ""          # 可选：具名隧道对外域名，用于界面展示与复制
+    token: ""             # mode=token 必填；mode=ngrok 时为 authtoken（可选）
+    hostname: ""          # 可选：token=具名隧道对外域名（界面展示用）；ngrok=保留域名；vscode=隧道名称
+    provider: github      # 可选：mode=vscode 首次授权登录账号提供商，github（默认）| microsoft
     cloudflared_path: ""  # 可选：自定义 cloudflared 路径，空则按 PATH/常见位置查找
+    ngrok_path: ""        # 可选：自定义 ngrok 路径，空则按 PATH/常见位置查找
+    vscode_path: ""       # 可选：自定义 code CLI 路径，空则按 PATH/常见位置查找

@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
-import { X, SlidersHorizontal, Bot, Wrench, StickyNote, ListTodo, Shield, ShieldAlert, Monitor, Target, FlaskConical } from 'lucide-react'
+import { X, SlidersHorizontal, Bot, Wrench, StickyNote, ListTodo, Shield, ShieldAlert, Monitor, Target, FlaskConical, Globe } from 'lucide-react'
 import { listAgentConfigs, updateAgentConfig, deleteAgentConfig, refreshRegistry, getRegistryDefault, updateAgentFromRegistry } from '../api/agentConfigs'
 import type { RegistryRefreshResult } from '../api/agentConfigs'
 import { listAgents, getAgentModels, probeAgentConfigs, clearAgentProbeCache } from '../api/agents'
@@ -29,10 +29,10 @@ import LoadingSpinner from './LoadingSpinner'
 import i18n from '../i18n'
 import styles from './SettingsDialog.module.css'
 
-export type SettingsTab = 'language' | 'agent' | 'classify' | 'config' | 'captest' | 'sectest' | 'task' | 'goal' | 'permission' | 'system'
+export type SettingsTab = 'language' | 'agent' | 'classify' | 'config' | 'captest' | 'sectest' | 'task' | 'goal' | 'permission' | 'system' | 'tunnel'
 
 export function parseSettingsTab(raw: string | null): SettingsTab {
-  if (raw === 'agent' || raw === 'classify' || raw === 'config' || raw === 'captest' || raw === 'sectest' || raw === 'task' || raw === 'goal' || raw === 'permission' || raw === 'system') return raw
+  if (raw === 'agent' || raw === 'classify' || raw === 'config' || raw === 'captest' || raw === 'sectest' || raw === 'task' || raw === 'goal' || raw === 'permission' || raw === 'system' || raw === 'tunnel') return raw
   return 'language'
 }
 
@@ -737,6 +737,7 @@ export default function SettingsDialog({ initialTab = 'language', onClose }: Pro
       items: [
         { key: 'language', icon: <SlidersHorizontal size={15} />, label: t('settings.tabLanguage') },
         { key: 'system', icon: <Monitor size={15} />, label: t('settings.tabSystem') },
+        { key: 'tunnel', icon: <Globe size={15} />, label: t('settings.tabTunnel') },
       ],
     },
     {
@@ -1508,11 +1509,14 @@ export default function SettingsDialog({ initialTab = 'language', onClose }: Pro
                       {window.opennexus?.isElectron ? t('system.desktopHint') : t('system.browserHint')}
                     </p>
                   </div>
-                  {/* Cloudflare 公网隧道：启停 + config.yaml tunnel 段配置 */}
-                  <TunnelCard />
                   {/* config.yaml 原生编辑（保存前后端强制校验格式） */}
                   <RawConfigCard />
                 </>
+              )}
+
+              {tab === 'tunnel' && (
+                /* cloudflared / ngrok 公网隧道：启停 + config.yaml tunnel 段配置 */
+                <TunnelCard />
               )}
             </div>
           )}

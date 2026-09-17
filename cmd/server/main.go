@@ -404,12 +404,13 @@ func main() {
 
 	configH := handlers.NewConfigHandler(cfgPath, acpSvc)
 
-	// Cloudflare 公网隧道：cloudflared 子进程把本地服务暴露到公网。
+	// 公网隧道：cloudflared / ngrok / code 子进程把本地服务或本机暴露到公网。
 	// 配置持久化在 config.yaml 的 tunnel 段，启停与状态由 TunnelService 管理。
 	tunnelSvc := services.NewTunnelService(cfg.Tunnel, cfg.Server.Port)
 	// 启动前安全检查：公网暴露时认证侧不能处于"零门槛"状态。
 	// auto_login 或 admin 默认密码任一命中即拒绝启动（错误经 tunnel status 透出到前端）；
 	// 注册开放仅告警不阻断（用户有权自行开放，但公网场景应知晓代价）。
+	// vscode 模式不适用：Remote Tunnel 由 GitHub/Microsoft 账号端到端鉴权，不暴露本服务登录页。
 	tunnelSvc.SetGuard(func() error {
 		if cfg.Auth.AutoLogin {
 			return errors.New("已拒绝启动公网隧道：auth.auto_login=true 时任何拿到地址的人都会以 admin 自动登录，请先在 config.yaml 中将 auth.auto_login 设为 false")

@@ -115,3 +115,68 @@ func TestTunnelHandler_TokenModeRequiresToken(t *testing.T) {
 		t.Fatalf("缺 token 应 400，实际 %d body=%s", w.Code, w.Body.String())
 	}
 }
+
+// ngrok 模式：token（authtoken）可选，ngrok_path 写回配置。
+func TestTunnelHandler_UpdateNgrok(t *testing.T) {
+	r, cfgPath := setupTunnelRouter(t)
+	w := doJSON(t, r, "PUT", "/api/v1/tunnel", gin.H{
+		"mode": "ngrok", "hostname": "nexus.ngrok-free.app", "ngrok_path": "/tmp/ngrok",
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("PUT status=%d body=%s", w.Code, w.Body.String())
+	}
+	data, _ := os.ReadFile(cfgPath)
+	text := string(data)
+	for _, want := range []string{"mode: ngrok", "nexus.ngrok-free.app", "ngrok_path", "/tmp/ngrok"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("config.yaml 缺少 %q:\n%s", want, text)
+		}
+	}
+
+	w = doJSON(t, r, "GET", "/api/v1/tunnel", nil)
+	var resp struct {
+		Data struct {
+			Mode      string `json:"mode"`
+			NgrokPath string `json:"ngrok_path"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Data.Mode != "ngrok" || resp.Data.NgrokPath != "/tmp/ngrok" {
+		t.Fatalf("GET 视图异常: %+v", resp.Data)
+	}
+}
+
+// vscode 模式：provider / vscode_path 写回配置并在 GET 视图中返回。
+func TestTunnelHandler_UpdateVSCode(t *testing.T) {
+	r, cfgPath := setupTunnelRouter(t)
+	w := doJSON(t, r, "PUT", "/api/v1/tunnel", gin.H{
+		"mode": "vscode", "provider": "microsoft", "hostname": "my-box", "vscode_path": "/tmp/code",
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("PUT status=%d body=%s", w.Code, w.Body.String())
+	}
+	data, _ := os.ReadFile(cfgPath)
+	text := string(data)
+	for _, want := range []string{"mode: vscode", "provider: microsoft", "my-box", "vscode_path", "/tmp/code"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("config.yaml 缺少 %q:\n%s", want, text)
+		}
+	}
+
+	w = doJSON(t, r, "GET", "/api/v1/tunnel", nil)
+	var resp struct {
+		Data struct {
+			Mode       string `json:"mode"`
+			Provider   string `json:"provider"`
+			VSCodePath string `json:"vscode_path"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Data.Mode != "vscode" || resp.Data.Provider != "microsoft" || resp.Data.VSCodePath != "/tmp/code" {
+		t.Fatalf("GET 视图异常: %+v", resp.Data)
+	}
+}

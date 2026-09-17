@@ -11,7 +11,7 @@ import (
 	"opennexus/internal/services"
 )
 
-// TunnelHandler 提供 Cloudflare 公网隧道的状态查询、启停与配置读写。
+// TunnelHandler 提供公网隧道（cloudflared / ngrok）的状态查询、启停与配置读写。
 // 配置持久化在 config.yaml 的 tunnel 段；运行状态由 TunnelService 管理。
 type TunnelHandler struct {
 	configPath string
@@ -26,9 +26,12 @@ func NewTunnelHandler(configPath string, svc *services.TunnelService) *TunnelHan
 type tunnelView struct {
 	services.TunnelStatus
 	Enabled         bool   `json:"enabled"`   // 启动时自动开启
-	Hostname        string `json:"hostname"`  // token 模式对外域名（展示用）
+	Hostname        string `json:"hostname"`  // 对外域名（token 模式展示用；ngrok 模式为保留域名；vscode 模式为隧道名称）
 	HasToken        bool   `json:"has_token"` // 是否已配置 token
+	Provider        string `json:"provider"`  // vscode 模式登录账号提供商（github | microsoft）
 	CloudflaredPath string `json:"cloudflared_path"`
+	NgrokPath       string `json:"ngrok_path"`
+	VSCodePath      string `json:"vscode_path"`
 }
 
 // Get GET /api/v1/tunnel
@@ -39,7 +42,10 @@ func (h *TunnelHandler) Get(c *gin.Context) {
 		view.Enabled = cfg.Enabled
 		view.Hostname = cfg.Hostname
 		view.HasToken = cfg.Token != ""
+		view.Provider = cfg.Provider
 		view.CloudflaredPath = cfg.CloudflaredPath
+		view.NgrokPath = cfg.NgrokPath
+		view.VSCodePath = cfg.VSCodePath
 	}
 	Success(c, http.StatusOK, view)
 }
@@ -51,7 +57,10 @@ type tunnelConfigRequest struct {
 	Mode            string  `json:"mode"`
 	Token           *string `json:"token"`
 	Hostname        string  `json:"hostname"`
+	Provider        string  `json:"provider"`
 	CloudflaredPath string  `json:"cloudflared_path"`
+	NgrokPath       string  `json:"ngrok_path"`
+	VSCodePath      string  `json:"vscode_path"`
 }
 
 // Update PUT /api/v1/tunnel
@@ -63,7 +72,7 @@ func (h *TunnelHandler) Update(c *gin.Context) {
 		return
 	}
 	mode := strings.TrimSpace(req.Mode)
-	if mode != config.TunnelModeQuick && mode != config.TunnelModeToken {
+	if mode != config.TunnelModeQuick && mode != config.TunnelModeToken && mode != config.TunnelModeNgrok && mode != config.TunnelModeVSCode {
 		mode = config.TunnelModeQuick
 	}
 
@@ -76,12 +85,18 @@ func (h *TunnelHandler) Update(c *gin.Context) {
 		Enabled:         req.Enabled,
 		Mode:            mode,
 		Hostname:        strings.TrimSpace(req.Hostname),
+		Provider:        strings.TrimSpace(req.Provider),
 		CloudflaredPath: strings.TrimSpace(req.CloudflaredPath),
+		NgrokPath:       strings.TrimSpace(req.NgrokPath),
+		VSCodePath:      strings.TrimSpace(req.VSCodePath),
 	}
 	if req.Token != nil {
 		item.Token = strings.TrimSpace(*req.Token)
 	} else {
 		item.Token = extractTunnelView(root).Token // 未传则保留现值
+	}
+	if strings.ToLower(item.Provider) != "microsoft" {
+		item.Provider = "github"
 	}
 	if mode == config.TunnelModeToken && item.Token == "" {
 		Fail(c, http.StatusBadRequest, "INVALID_CONFIG", "token 模式需要填写 Tunnel Token")
@@ -121,7 +136,7 @@ func (h *TunnelHandler) Stop(c *gin.Context) {
 
 // extractTunnelView 从 yaml.Node 中提取 tunnel 段（缺失时返回默认值）。
 func extractTunnelView(root *yaml.Node) config.TunnelConfig {
-	item := config.TunnelConfig{Mode: config.TunnelModeQuick}
+	item := config.TunnelConfig{Mode: config.TunnelModeQuick, Provider: "github"}
 	if root == nil || root.Kind != yaml.DocumentNode || len(root.Content) == 0 {
 		return item
 	}
@@ -134,7 +149,7 @@ func extractTunnelView(root *yaml.Node) config.TunnelConfig {
 	}
 	if n := findMappingValue(tNode, "mode"); n != nil && n.Kind == yaml.ScalarNode {
 		m := strings.TrimSpace(n.Value)
-		if m == config.TunnelModeQuick || m == config.TunnelModeToken {
+		if m == config.TunnelModeQuick || m == config.TunnelModeToken || m == config.TunnelModeNgrok || m == config.TunnelModeVSCode {
 			item.Mode = m
 		}
 	}
@@ -144,8 +159,19 @@ func extractTunnelView(root *yaml.Node) config.TunnelConfig {
 	if n := findMappingValue(tNode, "hostname"); n != nil && n.Kind == yaml.ScalarNode {
 		item.Hostname = n.Value
 	}
+	if n := findMappingValue(tNode, "provider"); n != nil && n.Kind == yaml.ScalarNode {
+		if p := strings.ToLower(strings.TrimSpace(n.Value)); p == "microsoft" || p == "github" {
+			item.Provider = p
+		}
+	}
 	if n := findMappingValue(tNode, "cloudflared_path"); n != nil && n.Kind == yaml.ScalarNode {
 		item.CloudflaredPath = n.Value
+	}
+	if n := findMappingValue(tNode, "ngrok_path"); n != nil && n.Kind == yaml.ScalarNode {
+		item.NgrokPath = n.Value
+	}
+	if n := findMappingValue(tNode, "vscode_path"); n != nil && n.Kind == yaml.ScalarNode {
+		item.VSCodePath = n.Value
 	}
 	return item
 }
@@ -169,7 +195,10 @@ func upsertTunnelNode(root *yaml.Node, item config.TunnelConfig) error {
 		str("mode"), str(item.Mode),
 		str("token"), str(item.Token),
 		str("hostname"), str(item.Hostname),
+		str("provider"), str(item.Provider),
 		str("cloudflared_path"), str(item.CloudflaredPath),
+		str("ngrok_path"), str(item.NgrokPath),
+		str("vscode_path"), str(item.VSCodePath),
 	}}
 	for i := 0; i+1 < len(mapping.Content); i += 2 {
 		if mapping.Content[i].Value == "tunnel" {
