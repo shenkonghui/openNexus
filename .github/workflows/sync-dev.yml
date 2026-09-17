@@ -1,0 +1,26 @@
+name: Sync dev-server to dev
+
+on:
+  push:
+    branches:
+      - dev-server
+
+permissions:
+  contents: write
+
+jobs:
+  merge:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout dev
+        uses: actions/checkout@v4
+        with:
+          ref: dev
+          fetch-depth: 0
+
+      - name: Merge dev-server and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git merge --no-edit origin/dev-server
+          git push origin dev
