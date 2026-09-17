@@ -25,7 +25,7 @@ interface PromptInputProps {
   // 远程(浏览器)场景拖拽上传所需;本地(Electron)场景不依赖此值(直接取绝对路径)。
   // 不传时,远程拖拽会提示"该页面不支持上传"。
   workspaceId?: number
-  // 任务列表（任务助手面板传入，传入即使为空数组也展示分类）：@ 菜单增加「任务」分类，
+  // 任务列表（任务管理面板传入，传入即使为空数组也展示分类）：@ 菜单增加「任务」分类，
   // 选中后插入 @task:<id>(标题) 引用，整条消息直发到该任务会话。
   tasks?: TaskMentionItem[]
 }
@@ -154,7 +154,7 @@ function buildSlashItems(
     })
   }
 
-  // /task-select 命令：选中后进入任务子菜单选择具体任务（仅任务助手面板传入 tasks 时显示）
+  // /task-select 命令：选中后进入任务子菜单选择具体任务（仅任务管理面板传入 tasks 时显示）
   if (hasTasks && matchesQuery([t('prompt.taskSelectCommand'), 'task-select', t('prompt.slashKindTaskGroup')], query)) {
     items.push({
       kind: 'item',
@@ -210,7 +210,7 @@ function buildSlashItems(
   }
 
   items.sort((a, b) => {
-    // 任务助手：/task* 系列命令（type=task/archive）置顶，优先于 agent 命令与其它一切
+    // 任务管理：/task* 系列命令（type=task/archive）置顶，优先于 agent 命令与其它一切
     const taskGroup = (r: ItemRow) => (r.type === 'task' || r.type === 'archive' ? 0 : 1)
     const taskDiff = taskGroup(a) - taskGroup(b)
     if (taskDiff !== 0) return taskDiff

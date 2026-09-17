@@ -117,7 +117,7 @@ export function getTaskStatus(workspaceId: number): Promise<{ data: TaskManagerD
 }
 
 // 订阅 tasks.json 变更事件（SSE，用 fetch 实现以携带认证头）。
-// 任意来源（左侧 UI、任务助手 MCP 工具、定时调度器）写入都会推送 changed 事件，
+// 任意来源（左侧 UI、任务管理 MCP 工具、定时调度器）写入都会推送 changed 事件，
 // 收到后回调 onChanged；连接断开后指数退避自动重连，直到 signal 中止。
 export async function subscribeTaskEvents(
   workspaceId: number,

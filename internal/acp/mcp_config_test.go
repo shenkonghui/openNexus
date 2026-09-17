@@ -1,8 +1,10 @@
 package acp
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/coder/acp-go-sdk"
@@ -459,4 +461,26 @@ func serverName(s acp.McpServer) string {
 		return s.Acp.Name
 	}
 	return ""
+}
+
+// 无环境变量的 stdio 条目序列化后 env 必须是空数组而非 null：
+// 严格校验的 agent（如 devin）会因 "env": null 拒绝整个 session/new。
+func TestConvertMCPServers_EmptyEnvNotNull(t *testing.T) {
+	servers := ConvertMCPServers([]NamedMCPServerEntry{{
+		Name:  "no-env",
+		Entry: MCPServerEntry{Type: MCPTypeStdio, Command: "cmd", Args: []string{"a"}},
+	}})
+	if len(servers) != 1 {
+		t.Fatalf("len(servers) = %d, want 1", len(servers))
+	}
+	data, err := json.Marshal(servers[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), `"env":null`) {
+		t.Errorf("env 不应序列化为 null，得到: %s", data)
+	}
+	if !strings.Contains(string(data), `"env":[]`) {
+		t.Errorf("env 应为空数组，得到: %s", data)
+	}
 }

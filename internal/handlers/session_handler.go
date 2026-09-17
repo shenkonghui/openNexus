@@ -32,7 +32,7 @@ type SessionStore interface {
 	ListSessions(userID uint) ([]models.Session, error)
 	ListSessionsBySource(userID uint, source string) ([]models.Session, error)
 	// FindSessionsByWorkspaceID 返回指定 workspace 下的会话（按 created_at DESC）。
-	// 任务助手用它实现“一个工作区只复用最近一条管理会话”。
+	// 任务管理用它实现“一个工作区只复用最近一条管理会话”。
 	FindSessionsByWorkspaceID(workspaceID uint) ([]models.Session, error)
 	GetSessionByDBID(id uint) (*models.Session, error)
 	DeleteSession(ctx context.Context, sessionID string) error
@@ -184,7 +184,7 @@ type createSessionRequest struct {
 	AgentType   string `json:"agent_type" binding:"required"`
 	WorkspaceID uint   `json:"workspace_id"`
 	ModelValue  string `json:"model_value"`
-	// Source 会话来源；允许 manual / orchestration（任务助手管理会话），空=manual。
+	// Source 会话来源；允许 manual / orchestration（任务管理管理会话），空=manual。
 	// orchestration 会话不登记 tasks.json（RegisterSessionTask 仅登记 manual），
 	// 侧边栏也不作为普通任务展示，而是作为「编排对话」记录入口。
 	Source string `json:"source"`
@@ -267,7 +267,7 @@ func (h *SessionHandler) Create(c *gin.Context) {
 		return
 	}
 	cwd := strings.TrimSpace(req.Cwd)
-	// 会话来源：仅识别 orchestration（任务助手管理会话），其余一律按 manual 处理
+	// 会话来源：仅识别 orchestration（任务管理管理会话），其余一律按 manual 处理
 	source := models.SessionSourceManual
 	if req.Source == models.SessionSourceOrchestration {
 		source = models.SessionSourceOrchestration
@@ -352,10 +352,10 @@ func (h *SessionHandler) RunningSessions(c *gin.Context) {
 
 // LatestByWorkspace GET /api/v1/sessions/latest?workspace_id=123&source=orchestration
 // 返回指定 workspace 下最近一条会话（按 created_at DESC）。
-// 任务助手（OrchestrationChatPanel）用它实现“一个工作区只复用一条管理会话”：
+// 任务管理（OrchestrationChatPanel）用它实现“一个工作区只复用一条管理会话”：
 // 进入任务页或首次发送前调用本接口，命中则复用，未命中（404）再创建新会话。
 // 仅校验 workspace 归属当前用户；source 非空时仅匹配该来源的会话
-// （任务助手传 orchestration，避免复用普通对话会话）。
+// （任务管理传 orchestration，避免复用普通对话会话）。
 func (h *SessionHandler) LatestByWorkspace(c *gin.Context) {
 	uid, ok := currentUserID(c)
 	if !ok {
@@ -386,7 +386,7 @@ func (h *SessionHandler) LatestByWorkspace(c *gin.Context) {
 		if source != "" && sessions[i].Source != source {
 			continue
 		}
-		// 子会话不参与复用：本接口用于工作区级会话复用（如任务助手管理会话），
+		// 子会话不参与复用：本接口用于工作区级会话复用（如任务管理管理会话），
 		// 而历史版本的编排任务执行会话是 source=orchestration 的子会话且 cwd 指向
 		// 任务 worktree（可能已删除），误复用会导致"工作目录不存在"。
 		// 与侧边栏一致：管理会话 = source=orchestration 且无父会话（顶级）。

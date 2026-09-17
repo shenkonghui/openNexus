@@ -443,7 +443,7 @@ export default function ChatPage() {
     // 切换工作区时重置自定义工作目录，回退到新工作区的默认 cwd。
     setTaskCwd('')
     localStorage.setItem(WORKSPACE_STORAGE_KEY, String(id))
-    // 切换工作区默认进入任务助手页面
+    // 切换工作区默认进入任务管理页面
     navigate(taskManagerUrl(id))
   }
 

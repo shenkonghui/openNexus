@@ -268,16 +268,15 @@ func convertMcpServer(name string, e MCPServerEntry) (acp.McpServer, bool) {
 }
 
 // toEnvVariables 将 map 转换为按 name 排序的 []EnvVariable（顺序稳定）。
+// 空时返回空切片而非 nil：ACP 规范中 stdio 的 env 为必填数组，
+// 序列化成 "env": null 会被严格校验的 agent（如 devin）拒绝整个 session/new。
 func toEnvVariables(env map[string]string) []acp.EnvVariable {
-	if len(env) == 0 {
-		return nil
-	}
+	out := make([]acp.EnvVariable, 0, len(env))
 	keys := make([]string, 0, len(env))
 	for k := range env {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
-	out := make([]acp.EnvVariable, 0, len(keys))
 	for _, k := range keys {
 		out = append(out, acp.EnvVariable{Name: k, Value: env[k]})
 	}
@@ -285,16 +284,14 @@ func toEnvVariables(env map[string]string) []acp.EnvVariable {
 }
 
 // toHttpHeaders 将 map 转换为按 name 排序的 []HttpHeader（顺序稳定）。
+// 空时返回空切片而非 nil（原因同 toEnvVariables）。
 func toHttpHeaders(headers map[string]string) []acp.HttpHeader {
-	if len(headers) == 0 {
-		return nil
-	}
+	out := make([]acp.HttpHeader, 0, len(headers))
 	keys := make([]string, 0, len(headers))
 	for k := range headers {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
-	out := make([]acp.HttpHeader, 0, len(keys))
 	for _, k := range keys {
 		out = append(out, acp.HttpHeader{Name: k, Value: headers[k]})
 	}

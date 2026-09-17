@@ -68,7 +68,7 @@ export interface PanelCtx {
   currentModeId: string
   onSetMode: (modeId: string) => void
 
-  // @task 引用候选任务（任务助手面板传入）：输入框 @ 菜单展示「任务」分类，
+  // @task 引用候选任务（任务管理面板传入）：输入框 @ 菜单展示「任务」分类，
   // 选中后插入 @task:<id>(标题) 引用，发送时由调用方直发到该任务会话。
   taskMentions?: { id: string; title: string }[]
 
@@ -90,7 +90,7 @@ export interface PanelCtx {
   agentModelsMap?: Record<string, ConfigOptionValue[]>
   agentModelFilters?: string[]
   onSelectAgentModel?: (agentType: string, modelValue: string) => void
-  // 有会话时是否仍允许切换 agent（任务助手：管理会话可弃，切 agent 走 onSelectAgentModel 开新会话）。
+  // 有会话时是否仍允许切换 agent（任务管理：管理会话可弃，切 agent 走 onSelectAgentModel 开新会话）。
   // 缺省 false：会话中锁定当前 agent（普通任务会话页行为）。
   agentSwitchable?: boolean
 

@@ -437,7 +437,7 @@ func TestSessionHandler_Get_Success(t *testing.T) {
 
 // LatestByWorkspace 不应返回子会话：历史版本的编排任务执行会话是
 // source=orchestration 的子会话且 cwd 指向已删除的 worktree，
-// 若被任务助手误复用会导致"工作目录不存在"。
+// 若被任务管理误复用会导致"工作目录不存在"。
 // 应跳过子会话，命中更早的顶级管理会话。
 func TestSessionHandler_LatestByWorkspace_SkipsChildSessions(t *testing.T) {
 	store := newFakeSessionStore()
