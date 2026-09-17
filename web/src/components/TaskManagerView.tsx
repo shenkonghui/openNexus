@@ -8,14 +8,16 @@ import {
   restoreArchivedTask, deleteArchivedTask,
   type TaskManagerDef, type TaskManagerTask, type TaskPriority, type ArchivedTask,
 } from '../api/taskmanager'
+import { listWorkspaces } from '../api/workspaces'
 import { useTaskEventsChanged } from '../context/TaskEventsContext'
 import { sessionUrl, newTaskUrl } from '../utils/routes'
-import type { Agent } from '../types'
+import { ALL_WORKSPACES_ID } from '../hooks/useCurrentWorkspace'
+import type { Agent, Workspace } from '../types'
 import LoadingSpinner from './LoadingSpinner'
 import TaskManagerChatPanel from './TaskManagerChatPanel'
 import SplitPane from './SplitPane'
 import styles from './TaskManagerView.module.css'
-import { ChevronRight, ChevronDown, MessagesSquare, GitBranch, Plus, FileJson, MoreHorizontal, Play, PlayCircle, Square, Trash2, Target, Gauge, Archive, ArchiveRestore } from 'lucide-react'
+import { ChevronRight, ChevronDown, MessagesSquare, GitBranch, Plus, FileJson, MoreHorizontal, Play, PlayCircle, Square, Trash2, Target, Gauge, Archive, ArchiveRestore, Layers } from 'lucide-react'
 
 const ACTIVE_STATUSES = new Set(['queued', 'running'])
 
@@ -48,9 +50,16 @@ export default function TaskManagerView({ workspaceId, cwd, agents, restoreSessi
   const { t } = useTranslation()
   const navigate = useNavigate()
 
+  // 「全部工作区」聚合模式：workspaceId 为哨兵值 -1，并行拉取所有工作区的任务合并展示。
+  const isAll = workspaceId === ALL_WORKSPACES_ID
+
   const [def, setDef] = useState<TaskManagerDef>({ max_parallel: 3, tasks: [] })
   const [loading, setLoading] = useState(true)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  // 全部工作区模式下缓存工作区列表（任务卡片显示来源工作区名、新建任务选择目标工作区）
+  const [wsList, setWsList] = useState<Workspace[]>([])
+  // 新建任务目标工作区（仅全部工作区模式使用）
+  const [newWorkspaceId, setNewWorkspaceId] = useState(0)
   // 展开/折叠的任务卡片 id 集合
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set())
   // git 仓库状态：null=未知/加载中；true=是仓库；false=需初始化
@@ -92,18 +101,49 @@ export default function TaskManagerView({ workspaceId, cwd, agents, restoreSessi
     return () => document.removeEventListener('mousedown', handleClick)
   }, [moreOpen])
 
-  // 检查当前工作目录是否为 git 仓库（编排任务需基于 worktree 隔离）
+  // 检查当前工作目录是否为 git 仓库（编排任务需基于 worktree 隔离）。全部工作区模式跳过。
   useEffect(() => {
-    if (!workspaceId) { setGitRepo(null); return }
+    if (!workspaceId || isAll) { setGitRepo(null); return }
     let alive = true
     getTaskGitStatus(workspaceId)
       .then((r) => { if (alive) setGitRepo(!!r.data.is_git_repo) })
       .catch(() => { if (alive) setGitRepo(null) })
     return () => { alive = false }
-  }, [workspaceId])
+  }, [workspaceId, isAll])
+
+  // 全部工作区模式：并行拉取所有工作区任务状态并合并，任务附带 workspace_id/workspace_name 标签。
+  const fetchAllStatuses = useCallback(async (list?: Workspace[]) => {
+    let targets = list
+    if (!targets) {
+      try { targets = (await listWorkspaces()).data.workspaces || [] } catch { return }
+    }
+    if (targets.length === 0) { setDef({ max_parallel: 3, tasks: [] }); return }
+    const results = await Promise.all(targets.map(async (ws) => {
+      try {
+        const r = await getTaskStatus(ws.id)
+        return (r.data.tasks || []).map((tk) => ({ ...tk, workspace_id: ws.id, workspace_name: ws.name }))
+      } catch { return [] as TaskManagerTask[] }
+    }))
+    setDef((prev) => ({ max_parallel: prev.max_parallel, tasks: results.flat() }))
+  }, [])
 
   // 初始加载编排定义
   useEffect(() => {
+    if (isAll) {
+      let alive = true
+      setLoading(true)
+      listWorkspaces()
+        .then(async (r) => {
+          const list = r.data.workspaces || []
+          if (!alive) return
+          setWsList(list)
+          setNewWorkspaceId((prev) => prev || list[0]?.id || 0)
+          await fetchAllStatuses(list)
+        })
+        .catch((e) => alive && onError(String((e as Error)?.message || e)))
+        .finally(() => alive && setLoading(false))
+      return () => { alive = false }
+    }
     if (!workspaceId) { setLoading(false); return }
     let alive = true
     setLoading(true)
@@ -112,7 +152,7 @@ export default function TaskManagerView({ workspaceId, cwd, agents, restoreSessi
       .catch((e) => alive && onError(String((e as Error)?.message || e)))
       .finally(() => alive && setLoading(false))
     return () => { alive = false }
-  }, [workspaceId, onError])
+  }, [workspaceId, onError, isAll, fetchAllStatuses])
 
   // 有活跃任务时轮询状态（左侧列表实时反映运行状态）
   useEffect(() => {
@@ -123,6 +163,7 @@ export default function TaskManagerView({ workspaceId, cwd, agents, restoreSessi
     }
     if (pollRef.current) return
     pollRef.current = setInterval(() => {
+      if (isAll) { fetchAllStatuses(); return }
       getTaskStatus(workspaceId)
         .then((r) => setDef(normalizeDef(r.data)))
         .catch(() => {})
@@ -130,7 +171,7 @@ export default function TaskManagerView({ workspaceId, cwd, agents, restoreSessi
     return () => {
       if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null }
     }
-  }, [def.tasks, workspaceId])
+  }, [def.tasks, workspaceId, isAll, fetchAllStatuses])
 
   // 订阅后端 tasks.json 变更事件：通过 TaskEventsContext 统一消费 SSE（AppLayout 层唯一订阅），
   // 避免与 SessionSidebar 各自建立到 /taskmanager/events 的重复长连接。
@@ -138,7 +179,8 @@ export default function TaskManagerView({ workspaceId, cwd, agents, restoreSessi
   // 收到即防抖刷新列表——保证两侧操作后左栏自动同步。
   const taskEventsCtx = useTaskEventsChanged()
   useEffect(() => {
-    if (!workspaceId || !taskEventsCtx) return
+    // 全部工作区模式：SSE 按工作区订阅，这里退化为轮询（有活跃任务时上方 effect 已覆盖）。
+    if (!workspaceId || isAll || !taskEventsCtx) return
     let timer: ReturnType<typeof setTimeout> | null = null
     const unregister = taskEventsCtx.onChanged(() => {
       if (timer) clearTimeout(timer)
@@ -152,10 +194,11 @@ export default function TaskManagerView({ workspaceId, cwd, agents, restoreSessi
       unregister()
       if (timer) clearTimeout(timer)
     }
-  }, [workspaceId, taskEventsCtx])
+  }, [workspaceId, taskEventsCtx, isAll])
 
   async function reloadStatus() {
     if (!workspaceId) return
+    if (isAll) { await fetchAllStatuses(); return }
     try {
       const r = await getTaskStatus(workspaceId)
       setDef(normalizeDef(r.data))
@@ -164,7 +207,8 @@ export default function TaskManagerView({ workspaceId, cwd, agents, restoreSessi
 
   // 已归档任务列表（回收站）
   async function reloadArchived() {
-    if (!workspaceId) return
+    // 回收站按工作区隔离，全部工作区模式下不加载（分栏亦隐藏）。
+    if (!workspaceId || isAll) return
     try {
       const r = await listArchivedTasks(workspaceId)
       setArchived(r.data.tasks || [])
@@ -176,6 +220,7 @@ export default function TaskManagerView({ workspaceId, cwd, agents, restoreSessi
   // 变更任务（新建/删除/保存）后用完整 def 刷新，保证 JSON 视图与 parent_session_id 准确。
   async function reloadDef() {
     if (!workspaceId) return
+    if (isAll) { await fetchAllStatuses(); return }
     try {
       const r = await getTaskManager(workspaceId)
       setDef(normalizeDef(r.data))
@@ -184,15 +229,17 @@ export default function TaskManagerView({ workspaceId, cwd, agents, restoreSessi
 
   // 提交新建任务：prompt 必填（作为 detail），标题缺省取 prompt 首行。
   // 与 MCP create_task 行为一致：默认开启 goal 模式，完成条件取任务详情。
+  // 全部工作区模式下需先选择目标工作区（newWorkspaceId）。
   async function handleCreateTask() {
-    if (!workspaceId || busy) return
+    const targetWs = isAll ? newWorkspaceId : workspaceId
+    if (!targetWs || busy) return
     const prompt = newPrompt.trim()
     if (!prompt) { onError(t('taskmanager.promptRequired')); return }
     const title = newTitle.trim() || prompt.split('\n')[0].slice(0, 40)
     const agentType = (newAgent || agents[0]?.type || '').trim()
     setBusy(true)
     try {
-      await upsertTask(workspaceId, { id: genTaskId(), title, detail: prompt, agent_type: agentType, priority: newPriority, goal_condition: prompt })
+      await upsertTask(targetWs, { id: genTaskId(), title, detail: prompt, agent_type: agentType, priority: newPriority, goal_condition: prompt })
       setShowNewForm(false)
       setNewTitle('')
       setNewPrompt('')
@@ -212,12 +259,18 @@ export default function TaskManagerView({ workspaceId, cwd, agents, restoreSessi
     setNewPriority('p1')
   }
 
+  // 任务所属工作区：聚合模式下取任务自带 workspace_id，单工作区模式即当前工作区。
+  function taskWs(task: TaskManagerTask): number | undefined {
+    return task.workspace_id ?? workspaceId
+  }
+
   // 手动启动单个任务。
   async function handleStartTask(task: TaskManagerTask) {
-    if (!workspaceId || busy) return
+    const wsId = taskWs(task)
+    if (!wsId || busy) return
     setBusy(true)
     try {
-      await startTaskManager(workspaceId, task.id)
+      await startTaskManager(wsId, task.id)
       await reloadStatus()
     } catch (e) {
       onError(String((e as Error)?.message || e))
@@ -227,7 +280,19 @@ export default function TaskManagerView({ workspaceId, cwd, agents, restoreSessi
   }
 
   // 启动全部待执行任务（不传 task_id，由后端启动所有待执行任务）。
+  // 全部工作区模式：逐个工作区启动其全部待执行任务。
   async function handleStartAll() {
+    if (busy) return
+    if (isAll) {
+      setBusy(true)
+      try {
+        await Promise.all(wsList.map((ws) => startTaskManager(ws.id).catch(() => {})))
+        await fetchAllStatuses()
+      } finally {
+        setBusy(false)
+      }
+      return
+    }
     if (!workspaceId || busy) return
     setBusy(true)
     try {
@@ -242,10 +307,11 @@ export default function TaskManagerView({ workspaceId, cwd, agents, restoreSessi
 
   // 停止单个运行中的任务。
   async function handleStopTask(task: TaskManagerTask) {
-    if (!workspaceId || busy) return
+    const wsId = taskWs(task)
+    if (!wsId || busy) return
     setBusy(true)
     try {
-      await stopTaskManager(workspaceId, task.id)
+      await stopTaskManager(wsId, task.id)
       await reloadStatus()
     } catch (e) {
       onError(String((e as Error)?.message || e))
@@ -269,7 +335,8 @@ export default function TaskManagerView({ workspaceId, cwd, agents, restoreSessi
 
   // 删除单个任务（需确认）。有 worktree 的任务默认保留 worktree，用户可选一并删除。
   async function handleDeleteTask(task: TaskManagerTask) {
-    if (!workspaceId || busy) return
+    const wsId = taskWs(task)
+    if (!wsId || busy) return
     const hasWorktree = !!task.worktree_path
     // 有 worktree 时提示用户选择：确认=仅删任务保留 worktree；取消=不删。
     // 浏览器 confirm 无法做三态，这里用 confirm 表达"删任务保留 worktree"，
@@ -285,7 +352,7 @@ export default function TaskManagerView({ workspaceId, cwd, agents, restoreSessi
     }
     setBusy(true)
     try {
-      await deleteTask(workspaceId, task.id, removeWorktree)
+      await deleteTask(wsId, task.id, removeWorktree)
       await reloadDef()
     } catch (e) {
       onError(String((e as Error)?.message || e))
@@ -294,13 +361,14 @@ export default function TaskManagerView({ workspaceId, cwd, agents, restoreSessi
     }
   }
 
-  // 归档单个任务到回收站（已归档分栏可恢复）。
+  // 归档单个任务到回收站（已归档分栏可恢复）。全部工作区模式下隐藏入口。
   async function handleArchiveTask(task: TaskManagerTask) {
-    if (!workspaceId || busy) return
+    const wsId = taskWs(task)
+    if (!wsId || busy || isAll) return
     if (!window.confirm(t('taskmanager.confirmArchive', { title: task.title }))) return
     setBusy(true)
     try {
-      await archiveTask(workspaceId, task.id)
+      await archiveTask(wsId, task.id)
       await Promise.all([reloadDef(), reloadArchived()])
     } catch (e) {
       onError(String((e as Error)?.message || e))
@@ -379,10 +447,11 @@ export default function TaskManagerView({ workspaceId, cwd, agents, restoreSessi
   // 点击任务名称：打开任务界面（与普通任务界面一致）。
   // 已运行的任务打开其关联会话；尚未运行的任务打开新建任务页并用任务详情预填 prompt。
   function openTask(task: TaskManagerTask) {
+    const wsId = taskWs(task)
     if (task.db_session_id) {
-      navigate(sessionUrl(task.db_session_id, workspaceId))
+      navigate(sessionUrl(task.db_session_id, wsId))
     } else {
-      navigate(newTaskUrl(workspaceId), { state: { draftPrompt: task.detail } })
+      navigate(newTaskUrl(wsId), { state: { draftPrompt: task.detail } })
     }
   }
 
@@ -451,6 +520,13 @@ export default function TaskManagerView({ workspaceId, cwd, agents, restoreSessi
                 if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); openTask(task) }
               }}
             >{task.title}</span>
+            {/* 全部工作区模式：任务行标注来源工作区 */}
+            {isAll && task.workspace_name && (
+              <span className={styles.taskWs} title={task.workspace_name}>
+                <Layers size={11} />
+                <span>{task.workspace_name}</span>
+              </span>
+            )}
           </span>
           <span className={styles.taskHeaderRight}>
             {/* 执行模式标记：已创建 worktree 显示 worktree，否则为 local（启动后自动切换） */}
@@ -606,10 +682,11 @@ export default function TaskManagerView({ workspaceId, cwd, agents, restoreSessi
 
   const taskListCol = (
     // 左栏：任务列表。顶部工具栏可新建任务 / 切换 JSON 视图；每个任务右侧可手动启停/删除。
-    <div className={styles.taskCol}>
+    // 全部工作区模式：隐藏单工作区专属功能（并发设置 / JSON 视图 / 归档分栏）。
+    <div className={isAll ? `${styles.taskCol} ${styles.taskColFull}` : styles.taskCol}>
         {gitRepo !== false && (
           <div className={styles.toolbar}>
-            <span className={styles.toolbarTitle}>{t('taskmanager.groupTitle')}</span>
+            <span className={styles.toolbarTitle}>{isAll ? t('workspace.all') : t('taskmanager.groupTitle')}</span>
             <div className={styles.toolbarActions}>
               {!jsonMode && def.tasks.some((tk) => !ACTIVE_STATUSES.has(tk.status)) && (
                 <button
@@ -641,6 +718,7 @@ export default function TaskManagerView({ workspaceId, cwd, agents, restoreSessi
               >
                 <MessagesSquare size={14} /> {chatOpen ? t('taskmanager.hideChat') : t('taskmanager.showChat')}
               </button>
+              {!isAll && (
               <div className={styles.moreWrap} ref={moreRef}>
                 <button
                   type="button"
@@ -668,6 +746,7 @@ export default function TaskManagerView({ workspaceId, cwd, agents, restoreSessi
                   </div>
                 )}
               </div>
+              )}
             </div>
           </div>
         )}
@@ -687,7 +766,7 @@ export default function TaskManagerView({ workspaceId, cwd, agents, restoreSessi
                 {gitInitializing ? t('taskmanager.gitInitializing') : t('taskmanager.gitInit')}
               </button>
             </div>
-          ) : jsonMode ? (
+          ) : jsonMode && !isAll ? (
             <div className={styles.jsonEditor}>
               <textarea
                 className={styles.jsonTextarea}
@@ -722,6 +801,21 @@ export default function TaskManagerView({ workspaceId, cwd, agents, restoreSessi
                     placeholder={t('taskmanager.promptPlaceholder')}
                     autoFocus
                   />
+                  {/* 全部工作区模式：新建任务需先选择目标工作区 */}
+                  {isAll && (
+                    <select
+                      className={styles.formSelect}
+                      value={newWorkspaceId}
+                      onChange={(e) => setNewWorkspaceId(Number(e.target.value))}
+                      aria-label={t('taskmanager.targetWorkspace')}
+                    >
+                      {wsList.map((ws) => (
+                        <option key={ws.id} value={ws.id}>
+                          {ws.name === '默认工作区' ? t('workspace.default') : ws.name}
+                        </option>
+                      ))}
+                    </select>
+                  )}
                   <select
                     className={styles.formSelect}
                     value={newPriority}
@@ -765,7 +859,7 @@ export default function TaskManagerView({ workspaceId, cwd, agents, restoreSessi
                       </div>
                     </div>
                   ))}
-                  {showArchived && (
+                  {showArchived && !isAll && (
                   <div className={styles.taskColumn}>
                     <div className={styles.taskColumnHeader}>
                       <span className={styles.taskColumnTitle}>{t('taskmanager.colArchived')}</span>
@@ -848,6 +942,8 @@ export default function TaskManagerView({ workspaceId, cwd, agents, restoreSessi
       </div>
   )
 
+  // 全部工作区模式：任务助手对话按工作区隔离，聚合视图不展示右栏，任务列表占满整行。
+  if (isAll) return taskListCol
   if (!chatOpen) return taskListCol
   return (
     <SplitPane dir="row" storageKey="taskmanager" defaultFlexes={[1, 1]}>

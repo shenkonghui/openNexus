@@ -3,10 +3,12 @@ import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { formatTimeAgo } from '../utils/time'
 import { sessionUrl, newTaskUrl, taskManagerUrl } from '../utils/routes'
+import { ALL_WORKSPACES_ID } from '../hooks/useCurrentWorkspace'
 import type { Session, ScheduledTask, TunnelStatus } from '../types'
 import { listScheduledTasks } from '../api/scheduledTasks'
 import { listSessions, listRunningSessions } from '../api/sessions'
 import { getTaskManager, getTaskStatus, startTaskManager, listArchivedTasks, type TaskManagerTask } from '../api/taskmanager'
+import { listWorkspaces } from '../api/workspaces'
 import { getTunnel, startTunnel, stopTunnel } from '../api/tunnel'
 import { useTaskEventsChanged } from '../context/TaskEventsContext'
 import { PanelLeftClose, Star, Pencil, X, Check, SquarePlus, FileText, Calendar, Settings, Zap, Loader2, CheckCircle2, XCircle, Clock3, CircleDashed, Network, Layers, History, Trash2, MessagesSquare, Globe, Copy, ExternalLink } from 'lucide-react'
@@ -201,7 +203,7 @@ export default function SessionSidebar({ sessions, workspaceId, currentId, onDel
 
   useEffect(() => {
     let alive = true
-    listScheduledTasks(workspaceId || undefined)
+    listScheduledTasks(workspaceId && workspaceId > 0 ? workspaceId : undefined)
       .then((r) => { if (alive) setTasks(r.data.tasks || []) })
       .catch(() => { if (alive) setTasks([]) })
     return () => { alive = false }
@@ -209,9 +211,29 @@ export default function SessionSidebar({ sessions, workspaceId, currentId, onDel
 
   // 加载任务管理任务（侧边栏「任务管理」分组展开时显示）。
   // 依赖 sessions：删除/新建会话会同步增删 tasks.json 登记条目，需重新拉取保持一致。
+  // 「全部工作区」模式（workspaceId 为哨兵值 -1）：并行聚合所有工作区的任务与归档列表。
   useEffect(() => {
     if (!workspaceId) { setOrchTasks([]); return }
     let alive = true
+    if (workspaceId === ALL_WORKSPACES_ID) {
+      ;(async () => {
+        try {
+          const list = (await listWorkspaces()).data.workspaces || []
+          if (!alive) return
+          const results = await Promise.all(list.map(async (ws) => {
+            const tasks = await getTaskManager(ws.id).then((r) => r.data.tasks || []).catch(() => [] as TaskManagerTask[])
+            const archived = await listArchivedTasks(ws.id)
+              .then((r) => (r.data.tasks || []).map((t) => t.db_session_id).filter((id): id is number => !!id))
+              .catch(() => [] as number[])
+            return { ws, tasks: tasks.map((tk) => ({ ...tk, workspace_id: ws.id })), archived: archived }
+          }))
+          if (!alive) return
+          setOrchTasks(results.flatMap((r) => r.tasks))
+          setArchivedDbIds(new Set(results.flatMap((r) => r.archived)))
+        } catch { /* ignore */ }
+      })()
+      return () => { alive = false }
+    }
     getTaskManager(workspaceId)
       .then((r) => { if (alive) setOrchTasks(r.data.tasks || []) })
       .catch(() => { if (alive) setOrchTasks([]) })
@@ -231,7 +253,8 @@ export default function SessionSidebar({ sessions, workspaceId, currentId, onDel
   // 重拉会话列表，否则左侧「任务」分组仍展示已删任务的会话条目，与任务列表不同步。
   const taskEventsCtx = useTaskEventsChanged()
   useEffect(() => {
-    if (!workspaceId || !taskEventsCtx) return
+    // 全部工作区模式：SSE 按工作区订阅，聚合视图不订阅（列表随 sessions/路径变化刷新）。
+    if (!workspaceId || workspaceId === ALL_WORKSPACES_ID || !taskEventsCtx) return
     let timer: ReturnType<typeof setTimeout> | null = null
     const unregister = taskEventsCtx.onChanged(() => {
       if (timer) clearTimeout(timer)
@@ -354,22 +377,24 @@ export default function SessionSidebar({ sessions, workspaceId, currentId, onDel
   //   引擎对已在运行的任务是幂等的（跳过），故 pending/queued 均可安全触发。
   async function openTMTask(task: TaskManagerTask) {
     if (task.db_session_id) {
-      navigate(sessionUrl(task.db_session_id, workspaceId))
+      navigate(sessionUrl(task.db_session_id, task.workspace_id ?? workspaceId))
       return
     }
-    if (!workspaceId || startingTaskId) return
+    // 全部工作区模式下任务自带来源工作区 id；单工作区模式即当前工作区。
+    const wsId = task.workspace_id ?? workspaceId
+    if (!wsId || startingTaskId) return
     setStartingTaskId(task.id)
     try {
-      await startTaskManager(workspaceId, task.id)
+      await startTaskManager(wsId, task.id)
       const deadline = Date.now() + 20000
       while (Date.now() < deadline) {
         await new Promise((r) => setTimeout(r, 800))
-        const r = await getTaskStatus(workspaceId)
+        const r = await getTaskStatus(wsId)
         const list = r.data.tasks || []
         setOrchTasks(list) // 顺带刷新侧边栏状态
         const fresh = list.find((x) => x.id === task.id)
         if (fresh?.db_session_id) {
-          navigate(sessionUrl(fresh.db_session_id, workspaceId))
+          navigate(sessionUrl(fresh.db_session_id, wsId))
           return
         }
         if (fresh?.status === 'failed') break // 启动失败：停止轮询，状态点会显示失败

@@ -8,7 +8,7 @@ import { listScheduledTasks, listExecutions } from '../api/scheduledTasks'
 import { listAgents, probeAgentConfigs, preconnectAgent, listAgentCommands, listAgentModes } from '../api/agents'
 import { listSkillsByPath } from '../api/filesystem'
 import { getAgentPrefs, patchAgentPrefs } from '../api/agentPrefs'
-import { WORKSPACE_STORAGE_KEY, useCurrentWorkspace } from '../hooks/useCurrentWorkspace'
+import { WORKSPACE_STORAGE_KEY, ALL_WORKSPACES_ID, useCurrentWorkspace } from '../hooks/useCurrentWorkspace'
 import { applyPrefsToConfigs, configsFromProbe, takeLegacyLocalAgentPrefs } from '../utils/agentPrefs'
 import { streamPrompt, subscribeStream, streamResumeTask, isTimeoutError, isSessionInactiveError } from '../api/sse'
 import { tasksUrl, newTaskUrl, sessionUrl, taskManagerUrl, isNewTaskPath, isTaskManagerPath } from '../utils/routes'
@@ -371,7 +371,7 @@ export default function ChatPage() {
     try {
       const [agentsResp, wsResp, prefsResp] = await Promise.all([
         listAgents(),
-        workspaceId ? getWorkspace(workspaceId) : Promise.resolve(null),
+        workspaceId && workspaceId > 0 ? getWorkspace(workspaceId) : Promise.resolve(null),
         getAgentPrefs().catch(() => ({ data: { last_agent_type: '', prefs: {} } as AgentPrefs })),
       ])
       setAgents(agentsResp.data.agents || [])
@@ -443,7 +443,9 @@ export default function ChatPage() {
     // 切换工作区时重置自定义工作目录，回退到新工作区的默认 cwd。
     setTaskCwd('')
     localStorage.setItem(WORKSPACE_STORAGE_KEY, String(id))
-    // 切换工作区默认进入任务管理页面
+    // 同步 hook 状态并加载对应会话列表（「全部工作区」无 URL 前缀，必须走 hook 同步）。
+    selectWorkspace(id).catch(() => {})
+    // 切换工作区默认进入任务管理页面（全部工作区路由到无前缀 /taskmanager 聚合视图）
     navigate(taskManagerUrl(id))
   }
 
@@ -607,6 +609,11 @@ export default function ChatPage() {
     if (!user || hasSession || isCreateMode) return
     // 任务管理页：按路径短路，否则会被下方「跳最近任务」抢走，表现为点编排进不去。
     if (isTaskManagerPath(location.pathname)) return
+    // 全部工作区模式：任务列表页直接进聚合任务管理视图，不做「跳最近任务」。
+    if (workspaceId === ALL_WORKSPACES_ID) {
+      navigate(taskManagerUrl(), { replace: true })
+      return
+    }
     if (wsLoading || !workspaceId) return
     // 切换工作区时新会话为异步加载：sessions 尚未与当前 workspace 匹配时暂不跳转，
     // 否则会用旧工作区的会话跳回原工作区，表现为“无法切换工作区”。
@@ -835,7 +842,7 @@ export default function ChatPage() {
       const isAutoWt = taskCwd === AUTO_WORKTREE
       const resp = await createSession(
         selectedAgent,
-        workspaceId || 0,
+        workspaceId && workspaceId > 0 ? workspaceId : 0,
         selectedModel || undefined,
         undefined,
         isAutoWt ? undefined : (taskCwd || undefined),

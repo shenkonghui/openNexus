@@ -28,7 +28,8 @@ export default function TrashPage() {
   const [error, setError] = useState('')
 
   const load = useCallback(async () => {
-    if (!workspaceId) return
+    // 回收站按工作区隔离，「全部工作区」模式下不展示（需选择具体工作区）。
+    if (!workspaceId || workspaceId < 0) return
     setLoading(true)
     try {
       const resp = await listArchivedTasks(workspaceId)
@@ -43,7 +44,7 @@ export default function TrashPage() {
   }, [workspaceId])
 
   useEffect(() => {
-    if (!user || !workspaceId) return
+    if (!user || !workspaceId || workspaceId < 0) return
     void load()
   }, [user, workspaceId, load])
 

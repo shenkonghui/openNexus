@@ -2,9 +2,10 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { listWorkspaces, createWorkspace, deleteWorkspace, updateWorkspace, saveWorkspace } from '../api/workspaces'
 import { getTaskManager, startTaskManager, type TaskManagerTask } from '../api/taskmanager'
+import { ALL_WORKSPACES_ID } from '../hooks/useCurrentWorkspace'
 import type { Workspace } from '../types'
 import CreateWorkspaceDialog from './CreateWorkspaceDialog'
-import { ChevronUp, ChevronDown, Folder, Building2, Clock, Plus, MoreHorizontal, Play, Loader2, CheckSquare, Square } from 'lucide-react'
+import { ChevronUp, ChevronDown, Folder, Building2, Clock, Plus, MoreHorizontal, Play, Loader2, CheckSquare, Square, Layers } from 'lucide-react'
 import styles from './WorkspaceSelector.module.css'
 
 // 可启动的任务状态（排阶 running 与 queued）
@@ -153,9 +154,12 @@ export default function WorkspaceSelector({ value, onChange, onRefresh, onError,
   const menuRef = useRef<HTMLDivElement>(null)
 
   const current = workspaces.find((w) => w.id === value)
+  const isAll = value === ALL_WORKSPACES_ID
 
   // 工作区名称显示：后端默认工作区名为中文"默认工作区"，按当前语言显示；其余用原名。
   const displayName = (name: string) => (name === '默认工作区' ? t('workspace.default') : name)
+  // 触发器文案：全部工作区模式显示聚合名称，否则显示当前工作区名。
+  const triggerName = isAll ? t('workspace.all') : displayName(current?.name || t('workspace.default'))
 
   async function loadWorkspaces() {
     const list = (await listWorkspaces()).data.workspaces || []
@@ -242,20 +246,30 @@ export default function WorkspaceSelector({ value, onChange, onRefresh, onError,
           type="button"
           className={`${styles.triggerCompact} ${open ? styles.triggerCompactActive : ''}`}
           onClick={() => setOpen((v) => !v)}
-          title={displayName(current?.name || t('workspace.default'))}
+          title={triggerName}
         >
-          {current?.mode === 'temporary' ? <Clock size={15} /> : <Building2 size={15} />}
+          {isAll ? <Layers size={15} /> : current?.mode === 'temporary' ? <Clock size={15} /> : <Building2 size={15} />}
         </button>
       ) : (
         <button type="button" className={`${styles.trigger} ${variant === 'sidebar' ? styles.triggerSidebar : ''} ${variant === 'topbar' ? styles.triggerTopbar : ''}`} onClick={() => setOpen((v) => !v)} title={t('workspace.title')}>
-          <span className={styles.icon}>{current?.mode === 'temporary' ? <Clock size={14} /> : <Folder size={14} />}</span>
-          <span className={styles.label}>{displayName(current?.name || t('workspace.default'))}</span>
+          <span className={styles.icon}>{isAll ? <Layers size={14} /> : current?.mode === 'temporary' ? <Clock size={14} /> : <Folder size={14} />}</span>
+          <span className={styles.label}>{triggerName}</span>
           <span className={styles.arrow}>{open ? <ChevronUp size={12} /> : <ChevronDown size={12} />}</span>
         </button>
       )}
 
       {open && (
         <div className={`${styles.dropdown} ${(menuUp ?? variant === 'sidebar') ? styles.dropdownUp : ''}`}>
+          {/* 全部工作区：聚合展示所有工作区的任务（任务管理页），置于列表最上方 */}
+          {workspaces.length > 0 && (
+            <div
+              className={`${styles.item} ${isAll ? styles.itemActive : ''}`}
+              onClick={() => handleSelect(ALL_WORKSPACES_ID)}
+            >
+              <span><Layers size={14} /></span>
+              <span className={styles.itemName}>{t('workspace.all')}</span>
+            </div>
+          )}
           {workspaces.length === 0 ? (
             <div className={styles.item}><span className={styles.itemName}>{t('workspace.empty')}</span></div>
           ) : workspaces.map((ws) => (

@@ -412,6 +412,38 @@
   font-family: var(--font-mono, monospace);
 }
 
+/* 「全部工作区」模式：任务行来源工作区徽标（样式与分支徽标一致，区分色） */
+.taskWs {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: var(--bg-hover);
+  color: var(--text-muted);
+  min-width: 0;
+  max-width: 140px;
+}
+
+.taskWs span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 「全部工作区」聚合模式：无右侧助手栏，任务列表占满整行 */
+.taskColFull {
+  flex: 1;
+}
+
+.allRoot {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
 .priority_p0 {
   background: var(--danger-bg);
   color: var(--danger);
