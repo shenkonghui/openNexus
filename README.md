@@ -488,6 +488,18 @@ MCP 服务自动配置同步——已生成令牌的笔记自动写入全局 `mc
 - **tasks.json 内存缓存**：`TaskStore` 缓存最近一次读取/写入的解析结果，活跃任务 2 秒轮询命中缓存后零文件 IO，避免频繁全量读 `tasks.json` + JSON 解析
 - **前端 SSE 订阅去重**：`TaskEventsContext` 在 `AppLayout` 顶层建立唯一一条 `/taskmanager/events` SSE 订阅，`TaskManagerView` 与 `SessionSidebar` 通过 context 共享消费，避免同一工作区重复长连接
 
+## 分支自动合并
+
+[`.github/workflows/sync-dev.yml`](.github/workflows/sync-dev.yml) 会在 push 到 **除 `main`、`dev` 之外的任意分支**时，自动把该分支合并进 `dev`：
+
+- **触发范围**：`branches: ['**', '!main', '!dev']`，`dev-server` 与临时特性分支都在内；`main`、`dev` 自身不触发
+- **合并方式**：在 `dev` 上执行 `git merge <分支>` 后推送；若 `dev` 已包含该分支则不产生任何变更
+- **并发控制**：`concurrency: sync-dev` 串行执行，多分支同时推送时逐个合并，推送被拒最多重试 3 次
+- **冲突处理**：合并冲突时 workflow 失败，但**不会改动 `dev`**；需人工解决后重新推送，或在 Actions 页面用 `workflow_dispatch` 手动补跑
+- **注意事项**：workflow 文件必须存在于被推送的分支上才会触发，因此新配置需先进入 `main`、`dev`，才能覆盖从它们切出的新分支
+
+> 该 workflow 使用 `GITHUB_TOKEN` 推送，GitHub 不会因这类推送再次触发其他 workflow（例如 `Release`）。
+
 ## 发布构建
 
 推送 `v*` 格式 tag（如 `v1.0.0`）后，GitHub Actions 会自动构建并创建 Release，包含：
