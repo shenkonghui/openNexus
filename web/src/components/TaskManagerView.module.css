@@ -312,6 +312,10 @@
 
 .taskColumn .taskHeaderRight {
   flex-wrap: wrap;
+  /* 允许收缩到卡片宽度内，徽标/按钮在窄分栏中换行而不是溢出卡片边界 */
+  flex-shrink: 1;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .taskCard {
@@ -320,6 +324,24 @@
   border-radius: 8px;
   padding: 12px 14px;
   transition: border-color 0.15s;
+}
+
+/* 已完成任务不用状态文字，用颜色区分：绿色=正常完成，红色=异常终止（failed/canceled/interrupt） */
+.taskCardDone {
+  border-left: 3px solid var(--success);
+}
+
+.taskCardDone .taskName,
+.taskCardDone .completedCardName {
+  color: var(--success);
+}
+
+.taskCardAbnormal {
+  border-left: 3px solid var(--danger);
+}
+
+.taskCardAbnormal .taskName {
+  color: var(--danger);
 }
 
 /* 卡片头部：点击展开/收起 */

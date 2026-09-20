@@ -40,6 +40,8 @@ const STORAGE_KEY = 'opennexus.sidebar.collapsed'
 const FAVS_KEY = 'opennexus.favorites'
 // 「全部工作区」模式下任务分组内各工作区分区的折叠状态
 const WS_COLLAPSED_KEY = 'opennexus.sidebar.wsCollapsed'
+// 「全部工作区」模式下各工作区分组的拖拽排序（id 数组，未记录的按后端返回顺序追加在后）
+const WS_ORDER_KEY = 'opennexus.sidebar.wsOrder'
 
 function loadCollapsed(): { favorites: boolean; manual: boolean; scheduled: boolean; taskmanager: boolean; more: boolean } {
   try {
@@ -222,7 +224,11 @@ export default function SessionSidebar({ sessions, workspaceId, currentId, onDel
         try {
           const list = (await listWorkspaces()).data.workspaces || []
           if (!alive) return
-          setWsOrder(list.map((w) => w.id))
+          setWsOrder((prev) => {
+            // 保留用户拖拽过的顺序：已记录的按原顺序在前，新工作区按后端顺序追加在后
+            const saved = prev.filter((id) => list.some((w) => w.id === id))
+            return [...saved, ...list.map((w) => w.id).filter((id) => !saved.includes(id))]
+          })
           setWsNames(Object.fromEntries(list.map((w) => [w.id, w.name])))
           const results = await Promise.all(list.map(async (ws) => {
             const tasks = await getTaskManager(ws.id).then((r) => r.data.tasks || []).catch(() => [] as TaskManagerTask[])
@@ -354,7 +360,10 @@ export default function SessionSidebar({ sessions, workspaceId, currentId, onDel
 
   const isAll = workspaceId === ALL_WORKSPACES_ID
   const [wsNames, setWsNames] = useState<Record<number, string>>({})
-  const [wsOrder, setWsOrder] = useState<number[]>([])
+  // 工作区分组顺序：初始读本地持久化的拖拽排序，加载后与后端列表合并（新工作区追加尾部）
+  const [wsOrder, setWsOrder] = useState<number[]>(() => {
+    try { return JSON.parse(localStorage.getItem(WS_ORDER_KEY) || '[]') as number[] } catch { return [] }
+  })
   // 分区折叠状态（选择持久化，刷新后保持）
   const [wsCollapsed, setWsCollapsed] = useState<Set<number>>(() => {
     try { return new Set<number>(JSON.parse(localStorage.getItem(WS_COLLAPSED_KEY) || '[]')) } catch { return new Set() }
@@ -382,13 +391,37 @@ export default function SessionSidebar({ sessions, workspaceId, currentId, onDel
     for (const task of startedTMTasks) ensure(task.workspace_id ?? 0).tmTasks.push(task)
     for (const s of manualSessions) ensure(s.workspace_id ?? 0).sessions.push(s)
     const extra = [...byId.keys()].filter((id) => !wsOrder.includes(id))
+    // 没有会话的工作区也显示（空分区，仅文件夹标题 + 新建按钮）
     return [...wsOrder, ...extra]
       .map((id) => byId.get(id))
-      .filter((g): g is NonNullable<typeof g> => !!g && ( !!g.tmSession || g.tmTasks.length > 0 || g.sessions.length > 0))
+      .filter((g): g is NonNullable<typeof g> => !!g)
   }, [isAll, wsNames, wsOrder, tmSessions, startedTMTasks, manualSessions])
 
   function toggleGroup(group: 'favorites' | 'manual' | 'scheduled' | 'taskmanager' | 'more') {
     setCollapsed((prev) => ({ ...prev, [group]: !prev[group] }))
+  }
+
+  // 工作区分组拖拽排序（HTML5 DnD）：拖动分区标题到目标分区上完成换位，顺序持久化到 localStorage
+  const wsDragId = useRef<number | null>(null)
+  function onWsDragStart(wsId: number, e: React.DragEvent) {
+    wsDragId.current = wsId
+    e.dataTransfer.effectAllowed = 'move'
+  }
+  function onWsDrop(wsId: number, e: React.DragEvent) {
+    e.preventDefault()
+    const from = wsDragId.current
+    wsDragId.current = null
+    if (from == null || from === wsId) return
+    setWsOrder((prev) => {
+      const i = prev.indexOf(from)
+      const j = prev.indexOf(wsId)
+      if (i < 0 || j < 0) return prev
+      const next = [...prev]
+      next.splice(i, 1)
+      next.splice(j, 0, from)
+      try { localStorage.setItem(WS_ORDER_KEY, JSON.stringify(next)) } catch { /* ignore */ }
+      return next
+    })
   }
 
   function toggleFavorite(id: number, e: React.MouseEvent) {
@@ -642,12 +675,15 @@ export default function SessionSidebar({ sessions, workspaceId, currentId, onDel
           <button type="button" className={styles.groupHeader} onClick={() => toggleGroup('manual')}>
             <span className={styles.groupTitle}><FileText size={13} style={{ marginRight: 4, verticalAlign: '-2px' }} />{t('session.title')}</span>
 
-            <span
-              className={styles.addBtn} role="button" tabIndex={0}
-              title={t('session.newSession')}
-              onClick={(e) => { e.stopPropagation(); navigate(newTaskUrl(workspaceId)) }}
-              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.stopPropagation(); navigate(newTaskUrl(workspaceId)) } }}
-            ><SquarePlus size={14} /></span>
+            {/* 全部工作区模式：分组级「+」隐藏，由各工作区分区标题右侧的「+」取代 */}
+            {!isAll && (
+              <span
+                className={styles.addBtn} role="button" tabIndex={0}
+                title={t('session.newSession')}
+                onClick={(e) => { e.stopPropagation(); navigate(newTaskUrl(workspaceId)) }}
+                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.stopPropagation(); navigate(newTaskUrl(workspaceId)) } }}
+              ><SquarePlus size={14} /></span>
+            )}
           </button>
           {!collapsed.manual && (
             <div className={styles.groupList}>
@@ -656,16 +692,30 @@ export default function SessionSidebar({ sessions, workspaceId, currentId, onDel
                 wsGroups.length === 0 ? (
                   <p className={styles.empty}>{t('session.noSessions')}</p>
                 ) : wsGroups.map((g) => (
-                  <div key={`ws-${g.wsId}`} className={styles.wsSection}>
+                  <div
+                    key={`ws-${g.wsId}`}
+                    className={styles.wsSection}
+                    onDragOver={(e) => e.preventDefault()}
+                    onDrop={(e) => onWsDrop(g.wsId, e)}
+                  >
                     <button
                       type="button"
                       className={styles.wsHeader}
                       onClick={() => toggleWsSection(g.wsId)}
+                      draggable
+                      onDragStart={(e) => onWsDragStart(g.wsId, e)}
                       title={wsCollapsed.has(g.wsId) ? t('common.expand') : t('common.collapse')}
                     >
                       {wsCollapsed.has(g.wsId) ? <ChevronRight size={12} className={styles.wsChevron} /> : <ChevronDown size={12} className={styles.wsChevron} />}
                       <Folder size={13} className={styles.wsFolder} />
                       <span className={styles.wsTitle}>{wsDisplayName(g.name)}</span>
+                      {/* 分区级「+」：在该工作区下新建任务 */}
+                      <span
+                        className={styles.addBtn} role="button" tabIndex={0}
+                        title={`${t('session.newSession')} · ${wsDisplayName(g.name)}`}
+                        onClick={(e) => { e.stopPropagation(); navigate(newTaskUrl(g.wsId)) }}
+                        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.stopPropagation(); navigate(newTaskUrl(g.wsId)) } }}
+                      ><SquarePlus size={14} /></span>
                     </button>
                     {!wsCollapsed.has(g.wsId) && (
                       <div className={styles.wsBody}>

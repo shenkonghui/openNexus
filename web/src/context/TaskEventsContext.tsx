@@ -30,7 +30,8 @@ export function TaskEventsProvider({ workspaceId, children }: { workspaceId: num
   const callbacksRef = useRef<Set<() => void>>(new Set())
 
   useEffect(() => {
-    if (!workspaceId) return
+    // 「全部工作区」哨兵值（-1）无单一订阅目标，聚合视图由各消费者自行轮询
+    if (!workspaceId || workspaceId < 0) return
     const ac = new AbortController()
     subscribeTaskEvents(
       workspaceId,
