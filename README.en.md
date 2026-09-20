@@ -500,6 +500,16 @@ For long sessions and high-concurrency scenarios, openNexus includes targeted op
 
 > The workflow pushes with `GITHUB_TOKEN`, and GitHub does not trigger further workflows (such as `Release`) from such pushes.
 
+### Daily dev → main Merge
+
+[`.github/workflows/sync-main.yml`](.github/workflows/sync-main.yml) merges `dev` into `main` automatically every day at 02:00 Beijing time:
+
+- **Schedule**: `cron: '0 18 * * *'` (18:00 UTC = 02:00 next day Beijing time), plus a manual `workflow_dispatch` trigger
+- **Merge strategy**: `git merge origin/dev` on top of `main`, then push; if `main` already contains `dev`, nothing changes
+- **Concurrency and retries**: `concurrency: sync-main` serializes runs, and a rejected push is retried up to 3 times
+- **Conflicts**: a conflicting merge fails the workflow and leaves `main` untouched; GitHub notifies maintainers of the failure — resolve manually and push `dev` again
+- **Caveats**: scheduled workflows read the workflow file from the **default branch (`main`)**, and GitHub disables schedules after 60 days of repository inactivity
+
 ## Release Builds
 
 Pushing a `v*` tag (e.g. `v1.0.0`) triggers GitHub Actions to build and publish a Release with:

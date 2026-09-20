@@ -1,0 +1,66 @@
+name: Sync dev to main
+
+# 每天 02:00（北京时间，UTC+8）自动把 dev 合并到 main
+on:
+  schedule:
+    # UTC 18:00 == 北京时间次日 02:00
+    - cron: '0 18 * * *'
+  # 冲突人工解决后，可手动补跑一次
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-main
+  cancel-in-progress: false
+
+jobs:
+  merge:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Merge dev into main
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          if ! git fetch --no-tags origin "+refs/heads/dev:refs/remotes/origin/dev"; then
+            echo "::error::无法获取远端 dev 分支"
+            exit 1
+          fi
+
+          for attempt in 1 2 3; do
+            git fetch --no-tags origin "+refs/heads/main:refs/remotes/origin/main"
+            git checkout -B main origin/main
+
+            before="$(git rev-parse main)"
+            if ! git merge --no-edit origin/dev; then
+              git merge --abort || true
+              echo "::error::dev 合并到 main 存在冲突，已中止且未改动 main。请人工解决冲突后重新推送 dev，或手动运行本 workflow。"
+              exit 1
+            fi
+            after="$(git rev-parse main)"
+
+            if [ "$before" = "$after" ]; then
+              echo "main 已包含 dev，无需变更"
+              exit 0
+            fi
+
+            if git push origin main; then
+              echo "已将 dev 合并到 main"
+              exit 0
+            fi
+
+            echo "::warning::推送 main 被拒绝（可能与其他推送并发），第 ${attempt} 次重试"
+            sleep $((attempt * 5))
+          done
+
+          echo "::error::重试 3 次后仍无法推送到 main"
+          exit 1
