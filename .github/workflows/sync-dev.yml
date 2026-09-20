@@ -1,26 +1,81 @@
-name: Sync dev-server to dev
+name: Sync branch to dev
 
+# 除 main、dev 之外，任何分支的 push 都会自动合并到 dev
 on:
   push:
     branches:
-      - dev-server
+      - '**'
+      - '!main'
+      - '!dev'
+  # 合并冲突人工解决后，可手动补跑一次
+  workflow_dispatch:
 
 permissions:
   contents: write
+
+# 多个分支同时推送时串行执行，避免并发推送 dev 互相覆盖
+concurrency:
+  group: sync-dev
+  cancel-in-progress: false
 
 jobs:
   merge:
     runs-on: ubuntu-latest
     steps:
+      - name: 校验触发分支
+        env:
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [ "$BRANCH" = "main" ] || [ "$BRANCH" = "dev" ]; then
+            echo "::error::分支 $BRANCH 不参与自动合并到 dev"
+            exit 1
+          fi
+          echo "待合并分支：$BRANCH"
+
       - name: Checkout dev
         uses: actions/checkout@v4
         with:
           ref: dev
           fetch-depth: 0
 
-      - name: Merge dev-server and push
+      - name: Merge ${{ github.ref_name }} into dev
+        env:
+          BRANCH: ${{ github.ref_name }}
         run: |
+          set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git merge --no-edit origin/dev-server
-          git push origin dev
+
+          if ! git fetch --no-tags origin "+refs/heads/${BRANCH}:refs/remotes/origin/${BRANCH}"; then
+            echo "::error::远端分支 ${BRANCH} 不存在或已被删除，无需合并"
+            exit 1
+          fi
+
+          for attempt in 1 2 3; do
+            git fetch --no-tags origin "+refs/heads/dev:refs/remotes/origin/dev"
+            git checkout -B dev origin/dev
+
+            before="$(git rev-parse dev)"
+            if ! git merge --no-edit "origin/${BRANCH}"; then
+              git merge --abort || true
+              echo "::error::${BRANCH} 合并到 dev 存在冲突，已中止且未改动 dev。请人工解决冲突后重新推送，或手动运行本 workflow。"
+              exit 1
+            fi
+            after="$(git rev-parse dev)"
+
+            if git push origin dev; then
+              if [ "$before" = "$after" ]; then
+                echo "dev 已包含 ${BRANCH}，无需变更"
+              else
+                echo "已将 ${BRANCH} 合并到 dev"
+              fi
+              exit 0
+            fi
+
+            echo "::warning::推送 dev 被拒绝（可能与其他自动合并并发），第 ${attempt} 次重试"
+            sleep $((attempt * 5))
+          done
+
+          echo "::error::重试 3 次后仍无法推送到 dev"
+          exit 1

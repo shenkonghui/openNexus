@@ -488,6 +488,18 @@ For long sessions and high-concurrency scenarios, openNexus includes targeted op
 - **In-memory cache for tasks.json**: `TaskStore` caches the most recent parsed result; the 2-second active-task polling hits the cache with zero file IO, avoiding frequent full reads of `tasks.json` + JSON parsing
 - **Frontend SSE subscription deduplication**: `TaskEventsContext` establishes a single `/taskmanager/events` SSE subscription at the `AppLayout` top level; `TaskManagerView` and `SessionSidebar` consume it via context, eliminating duplicate long-lived connections per workspace
 
+## Branch Auto-Merge
+
+[`.github/workflows/sync-dev.yml`](.github/workflows/sync-dev.yml) merges a branch into `dev` automatically on every push to it, as long as the branch is neither `main` nor `dev`:
+
+- **Trigger scope**: `branches: ['**', '!main', '!dev']` — `dev-server` and ad-hoc feature branches are included; `main` and `dev` themselves never trigger it
+- **Merge strategy**: `git merge <branch>` on top of `dev`, then push; if `dev` already contains the branch, nothing changes
+- **Concurrency**: `concurrency: sync-dev` serializes runs so simultaneous pushes merge one after another; a rejected push is retried up to 3 times
+- **Conflicts**: a conflicting merge fails the workflow and leaves `dev` untouched — resolve manually and push again, or re-run via `workflow_dispatch` from the Actions page
+- **Caveat**: the workflow file must exist on the branch receiving the push, so this configuration has to land on `main` and `dev` before it applies to branches cut from them
+
+> The workflow pushes with `GITHUB_TOKEN`, and GitHub does not trigger further workflows (such as `Release`) from such pushes.
+
 ## Release Builds
 
 Pushing a `v*` tag (e.g. `v1.0.0`) triggers GitHub Actions to build and publish a Release with:
