@@ -500,6 +500,16 @@ MCP 服务自动配置同步——已生成令牌的笔记自动写入全局 `mc
 
 > 该 workflow 使用 `GITHUB_TOKEN` 推送，GitHub 不会因这类推送再次触发其他 workflow（例如 `Release`）。
 
+### dev → main 每日自动合并
+
+[`.github/workflows/sync-main.yml`](.github/workflows/sync-main.yml) 每天 02:00（北京时间）把 `dev` 自动合并进 `main`：
+
+- **触发时间**：`cron: '0 18 * * *'`（UTC 18:00 ＝ 北京时间次日 02:00），并支持 `workflow_dispatch` 手动执行
+- **合并方式**：在 `main` 上执行 `git merge origin/dev` 后推送；`main` 已包含 `dev` 时不产生任何变更
+- **并发与重试**：`concurrency: sync-main` 串行执行，推送被拒最多重试 3 次
+- **冲突处理**：合并冲突时 workflow 失败且**不会改动 `main`**，GitHub 会向维护者发送失败通知；需人工解决后重新推送 `dev`
+- **注意事项**：定时任务读取**默认分支（`main`）**上的 workflow 文件；仓库连续 60 天无活动时定时任务会被自动停用
+
 ## 发布构建
 
 推送 `v*` 格式 tag（如 `v1.0.0`）后，GitHub Actions 会自动构建并创建 Release，包含：
